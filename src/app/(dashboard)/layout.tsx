@@ -1,5 +1,5 @@
 import { DashboardNav } from "@/components/layout/dashboard-nav";
-import { requireUser } from "@/lib/utils";
+import { requireUser } from "@/lib/server/auth";
 
 export default async function DashboardLayout({
   children,

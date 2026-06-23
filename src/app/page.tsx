@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getUser } from "@/lib/utils";
+import { getUser } from "@/lib/server/auth";
 import { redirect } from "next/navigation";
 
 export default async function HomePage() {

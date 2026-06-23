@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Robo Flow",
-  description: "Robotics workflow automation platform",
+  description: "Robotics vision workflow platform",
 };
 
 export default function RootLayout({

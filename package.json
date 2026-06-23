@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:turbo": "next dev --turbopack",
+    "clean": "node scripts/clean.mjs",
+    "rebuild": "npm run clean && npm run build",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

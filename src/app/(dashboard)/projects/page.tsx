@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { requireUser } from "@/lib/utils";
+import { requireUser } from "@/lib/server/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FolderKanban, Plus } from "lucide-react";

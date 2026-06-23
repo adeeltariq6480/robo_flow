@@ -152,7 +152,11 @@ robo_flow/
 | `flow_runs` | Execution instances |
 | `flow_run_logs` | Per-step run logs |
 | `credentials` | Integration secret references (vault IDs) |
-| `flow_templates` | Reusable public flow templates |
+| `projects` | ML/vision projects (classes, datasets, models) |
+| `classes` | Label classes per project |
+| `datasets` | Dataset collections |
+| `dataset_files` | Individual files in a dataset |
+| `models` | Uploaded model artifacts |
 
 All tenant-scoped tables use **Row Level Security** so users only access data within their organizations.
 
@@ -160,9 +164,12 @@ All tenant-scoped tables use **Row Level Security** so users only access data wi
 
 ## Next steps
 
-- [ ] Implement authentication UI (sign up / sign in)
-- [ ] Build organization and robot management screens
-- [ ] Add visual flow editor
+- [x] Authentication UI (sign up / sign in)
+- [x] Project creation
+- [x] Class management
+- [x] Dataset upload
+- [x] Model upload
+- [ ] Visual flow editor
 - [ ] Wire up flow execution engine and robot agents
 - [ ] Add real-time run status via Supabase Realtime
 

@@ -8,59 +8,66 @@ export type Json =
 
 export type ModelFormat = "onnx" | "pytorch" | "tensorflow" | "tflite" | "other";
 
+type TableDef<Row, Insert, Update> = {
+  Row: Row;
+  Insert: Insert;
+  Update: Update;
+  Relationships: [];
+};
+
 export interface Database {
   public: {
     Tables: {
-      profiles: {
-        Row: {
+      profiles: TableDef<
+        {
           id: string;
           email: string;
           full_name: string | null;
           avatar_url: string | null;
           created_at: string;
           updated_at: string;
-        };
-        Insert: {
+        },
+        {
           id: string;
           email: string;
           full_name?: string | null;
           avatar_url?: string | null;
           created_at?: string;
           updated_at?: string;
-        };
-        Update: {
+        },
+        {
           id?: string;
           email?: string;
           full_name?: string | null;
           avatar_url?: string | null;
           updated_at?: string;
-        };
-      };
-      projects: {
-        Row: {
+        }
+      >;
+      projects: TableDef<
+        {
           id: string;
           name: string;
           description: string | null;
           created_by: string;
           created_at: string;
           updated_at: string;
-        };
-        Insert: {
+        },
+        {
           id?: string;
           name: string;
           description?: string | null;
           created_by: string;
           created_at?: string;
           updated_at?: string;
-        };
-        Update: {
+        },
+        {
           name?: string;
           description?: string | null;
           updated_at?: string;
-        };
-      };
-      classes: {
-        Row: {
+        }
+      >;
+      classes: TableDef<
+        {
           id: string;
           project_id: string;
           name: string;
@@ -69,24 +76,24 @@ export interface Database {
           sort_order: number;
           created_at: string;
           updated_at: string;
-        };
-        Insert: {
+        },
+        {
           id?: string;
           project_id: string;
           name: string;
           color?: string;
           description?: string | null;
           sort_order?: number;
-        };
-        Update: {
+        },
+        {
           name?: string;
           color?: string;
           description?: string | null;
           sort_order?: number;
-        };
-      };
-      datasets: {
-        Row: {
+        }
+      >;
+      datasets: TableDef<
+        {
           id: string;
           project_id: string;
           name: string;
@@ -96,8 +103,8 @@ export interface Database {
           created_by: string;
           created_at: string;
           updated_at: string;
-        };
-        Insert: {
+        },
+        {
           id?: string;
           project_id: string;
           name: string;
@@ -105,16 +112,16 @@ export interface Database {
           file_count?: number;
           total_size_bytes?: number;
           created_by: string;
-        };
-        Update: {
+        },
+        {
           name?: string;
           description?: string | null;
           file_count?: number;
           total_size_bytes?: number;
-        };
-      };
-      dataset_files: {
-        Row: {
+        }
+      >;
+      dataset_files: TableDef<
+        {
           id: string;
           dataset_id: string;
           project_id: string;
@@ -124,8 +131,8 @@ export interface Database {
           file_size: number;
           mime_type: string | null;
           created_at: string;
-        };
-        Insert: {
+        },
+        {
           id?: string;
           dataset_id: string;
           project_id: string;
@@ -134,13 +141,13 @@ export interface Database {
           file_path: string;
           file_size?: number;
           mime_type?: string | null;
-        };
-        Update: {
+        },
+        {
           class_id?: string | null;
-        };
-      };
-      models: {
-        Row: {
+        }
+      >;
+      models: TableDef<
+        {
           id: string;
           project_id: string;
           name: string;
@@ -152,8 +159,8 @@ export interface Database {
           created_by: string;
           created_at: string;
           updated_at: string;
-        };
-        Insert: {
+        },
+        {
           id?: string;
           project_id: string;
           name: string;
@@ -163,16 +170,25 @@ export interface Database {
           format?: ModelFormat;
           version?: string;
           created_by: string;
-        };
-        Update: {
+        },
+        {
           name?: string;
           description?: string | null;
           version?: string;
-        };
-      };
+        }
+      >;
+    };
+    Views: {
+      [_ in never]: never;
+    };
+    Functions: {
+      [_ in never]: never;
     };
     Enums: {
       model_format: ModelFormat;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
     };
   };
 }

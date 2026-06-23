@@ -12,6 +12,8 @@ build/
 # Environment
 .env
 .env.local
+.env.example
+.env.local.example
 .env.*.local
 
 # Debug

@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState } from "react";
 import Link from "next/link";
-import { signIn, signUp } from "@/lib/actions/auth";
+import {
+  signInAction,
+  signUpAction,
+  type AuthState,
+} from "@/lib/actions/auth";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -13,21 +17,11 @@ interface AuthFormProps {
 }
 
 export function AuthForm({ mode }: AuthFormProps) {
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(formData: FormData) {
-    setLoading(true);
-    setError(null);
-
-    const result =
-      mode === "login" ? await signIn(formData) : await signUp(formData);
-
-    if (result?.error) {
-      setError(result.error);
-      setLoading(false);
-    }
-  }
+  const action = mode === "login" ? signInAction : signUpAction;
+  const [state, formAction, pending] = useActionState<AuthState, FormData>(
+    action,
+    null
+  );
 
   const isLogin = mode === "login";
 
@@ -44,13 +38,13 @@ export function AuthForm({ mode }: AuthFormProps) {
         </p>
       </div>
 
-      {error && (
+      {state?.error && (
         <div className="mb-4">
-          <Alert variant="error">{error}</Alert>
+          <Alert variant="error">{state.error}</Alert>
         </div>
       )}
 
-      <form action={handleSubmit} className="space-y-4">
+      <form action={formAction} className="space-y-4">
         {!isLogin && (
           <Input
             label="Full name"
@@ -77,8 +71,8 @@ export function AuthForm({ mode }: AuthFormProps) {
           minLength={6}
           autoComplete={isLogin ? "current-password" : "new-password"}
         />
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Please wait…" : isLogin ? "Sign in" : "Create account"}
+        <Button type="submit" className="w-full" disabled={pending}>
+          {pending ? "Please wait…" : isLogin ? "Sign in" : "Create account"}
         </Button>
       </form>
 

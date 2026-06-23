@@ -2,9 +2,13 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 
-export async function signUp(formData: FormData) {
+export type AuthState = { error?: string } | null;
+
+export async function signUpAction(
+  _prevState: AuthState,
+  formData: FormData
+): Promise<AuthState> {
   const supabase = await createClient();
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
@@ -22,7 +26,10 @@ export async function signUp(formData: FormData) {
   redirect("/projects");
 }
 
-export async function signIn(formData: FormData) {
+export async function signInAction(
+  _prevState: AuthState,
+  formData: FormData
+): Promise<AuthState> {
   const supabase = await createClient();
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
