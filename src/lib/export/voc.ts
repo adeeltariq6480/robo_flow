@@ -15,7 +15,7 @@ export function buildVocExport(data: ExportDataset): ZipEntry[] {
       content: [
         `Dataset: ${data.datasetName}`,
         `Pascal VOC XML — approved labels only`,
-        `Place images in an 'images/' folder alongside these XML files.`,
+        `images/ and annotations/ are included in this zip.`,
       ].join("\n"),
     },
   ];

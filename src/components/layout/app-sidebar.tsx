@@ -38,7 +38,7 @@ function resolveProjectId(pathname: string): string | undefined {
 }
 
 export function AppSidebar() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
 
   const projectId = resolveProjectId(pathname);
   const isNewProject = pathname === "/projects/new";

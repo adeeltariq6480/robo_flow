@@ -9,27 +9,27 @@ export const EXPORT_FORMAT_LABELS: Record<
 > = {
   yolo: {
     label: "YOLO TXT",
-    description: "labels/*.txt, classes.txt, data.yaml (zip)",
+    description: "images/, labels/*.txt, classes.txt, data.yaml (zip)",
     extension: "zip",
     mime: "application/zip",
   },
   coco: {
     label: "COCO JSON",
-    description: "Single annotations.json with categories & bboxes",
-    extension: "json",
-    mime: "application/json",
+    description: "annotations.json + images/ folder (zip)",
+    extension: "zip",
+    mime: "application/zip",
   },
   voc: {
     label: "Pascal VOC XML",
-    description: "annotations/*.xml per image (zip)",
+    description: "images/, annotations/*.xml (zip)",
     extension: "zip",
     mime: "application/zip",
   },
   csv: {
     label: "CSV",
-    description: "Flat spreadsheet — one row per bounding box",
-    extension: "csv",
-    mime: "text/csv",
+    description: "labels.csv + images/ folder (zip)",
+    extension: "zip",
+    mime: "application/zip",
   },
 };
 
@@ -59,5 +59,5 @@ export interface ExportArtifact {
 
 export interface ZipEntry {
   path: string;
-  content: string;
+  content: string | Buffer | Uint8Array;
 }

@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseAnnotations } from "@/lib/annotations/coords";
 import { fetchImageDimensions } from "@/lib/export/image-dimensions";
-import type { ExportDataset, ExportFormat } from "@/lib/export/types";
+import type { ExportDataset, ExportFormat, ExportImageFile } from "@/lib/export/types";
 import type { Class } from "@/lib/types/database";
 import JSZip from "jszip";
 import { buildCocoExport } from "@/lib/export/coco";
@@ -104,39 +104,65 @@ export async function buildExportArtifact(
 ): Promise<{ fileName: string; mimeType: string; body: Buffer }> {
   const slug = sanitizeFilename(data.datasetName);
   const meta = EXPORT_FORMAT_LABELS[format];
+  const zip = new JSZip();
 
   if (format === "coco") {
-    return {
-      fileName: `${slug}-coco.json`,
-      mimeType: meta.mime,
-      body: Buffer.from(buildCocoExport(data), "utf-8"),
-    };
+    zip.file("annotations.json", buildCocoExport(data));
+    await addImagesToZip(zip, data.files);
+    return zipArtifact(slug, "coco", meta.mime, zip);
   }
 
   if (format === "csv") {
-    return {
-      fileName: `${slug}-labels.csv`,
-      mimeType: meta.mime,
-      body: Buffer.from(buildCsvExport(data), "utf-8"),
-    };
+    zip.file("labels.csv", buildCsvExport(data));
+    await addImagesToZip(zip, data.files);
+    return zipArtifact(slug, "csv", meta.mime, zip);
   }
 
-  const zip = new JSZip();
   const entries = format === "yolo" ? buildYoloExport(data) : buildVocExport(data);
   for (const entry of entries) {
     zip.file(entry.path, entry.content);
   }
+  await addImagesToZip(zip, data.files);
 
+  return zipArtifact(slug, format, meta.mime, zip);
+}
+
+async function zipArtifact(
+  slug: string,
+  suffix: string,
+  mime: string,
+  zip: JSZip
+) {
   const zipBuffer = await zip.generateAsync({
     type: "nodebuffer",
     compression: "DEFLATE",
   });
 
   return {
-    fileName: `${slug}-${format}.zip`,
-    mimeType: meta.mime,
+    fileName: `${slug}-${suffix}.zip`,
+    mimeType: mime,
     body: zipBuffer,
   };
+}
+
+async function addImagesToZip(zip: JSZip, files: ExportImageFile[]) {
+  const supabase = createAdminClient();
+
+  await Promise.all(
+    files.map(async (file) => {
+      const { data, error } = await supabase.storage
+        .from("datasets")
+        .download(file.filePath);
+
+      if (error || !data) {
+        console.warn(`Export: skipped image ${file.fileName}`, error?.message);
+        return;
+      }
+
+      const buffer = Buffer.from(await data.arrayBuffer());
+      zip.file(`images/${file.fileName}`, buffer);
+    })
+  );
 }
 
 function sanitizeFilename(name: string) {

@@ -4,7 +4,8 @@ import { getProject } from "@/lib/server/auth";
 import { AutoLabelPanel } from "@/components/inference/auto-label-panel";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import type { Dataset, Model } from "@/lib/types/database";
+import type { Dataset } from "@/lib/types/database";
+import { toClientModels } from "@/lib/serialize/model";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
 
@@ -33,7 +34,7 @@ export default async function DatasetLabelPage({
 
   if (!dataset) notFound();
 
-  const modelList = (models ?? []) as Model[];
+  const modelList = toClientModels(models);
   const reviewHref = `/projects/${projectId}/datasets/${datasetId}/review?filter=needs_review`;
 
   return (

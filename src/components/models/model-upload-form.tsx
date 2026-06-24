@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { registerModel } from "@/lib/actions/models";
-import { uploadModelFile } from "@/lib/actions/uploads";
+import { uploadWithProgress } from "@/lib/upload/xhr";
 import type { ModelFormat } from "@/lib/types/database";
 import { MODEL_FORMATS, formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { CircularProgress } from "@/components/ui/circular-progress";
 import { Upload, Box, CheckCircle, X } from "lucide-react";
 
 interface ModelUploadFormProps {
@@ -25,6 +26,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
   const [format, setFormat] = useState<ModelFormat>("onnx");
   const [version, setVersion] = useState("1.0.0");
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
@@ -53,36 +55,48 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
 
     setUploading(true);
     setError(null);
+    setProgress(0);
 
     const fd = new FormData();
     fd.append("file", file);
 
-    const uploadResult = await uploadModelFile(projectId, fd);
+    try {
+      const uploadResult = await uploadWithProgress<{
+        error?: string;
+        filePath?: string;
+        fileSize?: number;
+      }>(`/api/projects/${projectId}/models/upload`, fd, setProgress);
 
-    if (uploadResult?.error) {
-      setError(uploadResult.error);
+      if (!uploadResult.ok || uploadResult.data?.error) {
+        setError(uploadResult.data?.error ?? `Upload failed (${uploadResult.status})`);
+        setUploading(false);
+        return;
+      }
+
+      setProgress(100);
+
+      const result = await registerModel(projectId, {
+        name: name.trim(),
+        description: description.trim() || null,
+        filePath: uploadResult.data.filePath!,
+        fileSize: uploadResult.data.fileSize!,
+        format,
+        version: version.trim() || "1.0.0",
+      });
+
+      if (result?.error) {
+        setError(result.error);
+        setUploading(false);
+        return;
+      }
+
+      setDone(true);
       setUploading(false);
-      return;
-    }
-
-    const result = await registerModel(projectId, {
-      name: name.trim(),
-      description: description.trim() || null,
-      filePath: uploadResult.filePath!,
-      fileSize: uploadResult.fileSize!,
-      format,
-      version: version.trim() || "1.0.0",
-    });
-
-    if (result?.error) {
-      setError(result.error);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
       setUploading(false);
-      return;
     }
-
-    setDone(true);
-    setUploading(false);
-    router.refresh();
   }
 
   if (done) {
@@ -180,6 +194,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
                 value={format}
                 onChange={(e) => setFormat(e.target.value as ModelFormat)}
                 className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                disabled={uploading}
               >
                 {MODEL_FORMATS.map((f) => (
                   <option key={f.value} value={f.value}>
@@ -193,8 +208,19 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
               value={version}
               onChange={(e) => setVersion(e.target.value)}
               placeholder="1.0.0"
+              disabled={uploading}
             />
           </div>
+
+          {uploading && (
+            <div className="flex justify-center py-4">
+              <CircularProgress
+                value={progress}
+                label="Uploading model…"
+                sublabel={`${progress}% complete`}
+              />
+            </div>
+          )}
 
           <Button type="submit" disabled={uploading || !file}>
             {uploading ? "Uploading…" : "Upload model"}

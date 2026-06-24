@@ -101,11 +101,12 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
           title="Models"
           description="Uploaded model artifacts for inference and deployment."
           action={
-            <Link href={`/projects/${projectId}/models/upload`}>
-              <Button>
-                <Plus className="h-4 w-4" />
-                Upload model
-              </Button>
+            <Link
+              href={`/projects/${projectId}/models/upload`}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700"
+            >
+              <Plus className="h-4 w-4" />
+              Upload model
             </Link>
           }
         />
@@ -129,12 +130,10 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
             </p>
             <Link
               href={`/projects/${projectId}/models/upload`}
-              className="mt-4 inline-block"
+              className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
             >
-              <Button variant="secondary">
-                <Upload className="h-4 w-4" />
-                Upload your first model
-              </Button>
+              <Upload className="h-4 w-4" />
+              Upload your first model
             </Link>
           </div>
         ) : (
@@ -163,7 +162,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
                       </span>
                     </p>
                     <p className="text-sm text-slate-500">
-                      {FORMAT_LABELS[model.format] ?? model.format} ·{" "}
+                      {FORMAT_LABELS[model.format] ?? model.format ?? "Other"} ·{" "}
                       {formatBytes(model.file_size)}
                     </p>
                     {model.description && (

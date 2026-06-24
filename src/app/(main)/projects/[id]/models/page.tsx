@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
 import { ModelsPageClient } from "@/components/models/models-page-client";
-import type { Model } from "@/lib/types/database";
+import { toClientModels } from "@/lib/serialize/model";
 
 export default async function ModelsPage({
   params,
@@ -18,5 +18,7 @@ export default async function ModelsPage({
     .eq("project_id", id)
     .order("created_at", { ascending: false });
 
-  return <ModelsPageClient projectId={id} models={(models ?? []) as Model[]} />;
+  return (
+    <ModelsPageClient projectId={id} models={toClientModels(models)} />
+  );
 }

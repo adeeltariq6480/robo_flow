@@ -30,11 +30,10 @@ export function buildYoloExport(data: ExportDataset): ZipEntry[] {
         `Images: ${data.files.length}`,
         "",
         "Structure:",
+        "  images/                      — approved image files",
         "  labels/<image_basename>.txt  — YOLO format (class cx cy w h, normalized)",
         "  classes.txt                  — class names, one per line",
         "  data.yaml                    — YOLO dataset config",
-        "",
-        "Pair label files with your image files using the same basename.",
       ].join("\n"),
     },
   ];

@@ -7,6 +7,7 @@ import { EXPORT_FORMAT_LABELS } from "@/lib/export/types";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { CircularProgress } from "@/components/ui/circular-progress";
 import { ArrowLeft, Download, FileArchive, FileJson, FileSpreadsheet } from "lucide-react";
 
 interface DatasetExportPanelProps {
@@ -33,16 +34,23 @@ export function DatasetExportPanel({
 }: DatasetExportPanelProps) {
   const [format, setFormat] = useState<ExportFormat>("yolo");
   const [loading, setLoading] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   async function handleDownload() {
     setLoading(true);
     setError(null);
+    setExportProgress(8);
 
     const url = `/api/projects/${projectId}/datasets/${datasetId}/export?format=${format}`;
+    const tick = window.setInterval(() => {
+      setExportProgress((p) => (p >= 90 ? p : p + 4));
+    }, 400);
 
     try {
       const res = await fetch(url);
+      setExportProgress(95);
+
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(
@@ -51,6 +59,7 @@ export function DatasetExportPanel({
       }
 
       const blob = await res.blob();
+      setExportProgress(100);
       const disposition = res.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="([^"]+)"/);
       const fileName =
@@ -65,7 +74,9 @@ export function DatasetExportPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     } finally {
+      window.clearInterval(tick);
       setLoading(false);
+      window.setTimeout(() => setExportProgress(0), 600);
     }
   }
 
@@ -158,7 +169,7 @@ export function DatasetExportPanel({
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Button onClick={handleDownload} disabled={loading}>
                 <Download className="h-4 w-4" />
-                {loading ? "Generating…" : `Download ${EXPORT_FORMAT_LABELS[format].label}`}
+                {loading ? "Preparing zip…" : `Download ${EXPORT_FORMAT_LABELS[format].label}`}
               </Button>
               <Link
                 href={`/projects/${projectId}/datasets/${datasetId}/review?filter=approved`}
@@ -167,10 +178,20 @@ export function DatasetExportPanel({
               </Link>
             </div>
 
+            {loading && (
+              <div className="mt-6 flex justify-center py-2">
+                <CircularProgress
+                  value={exportProgress}
+                  label="Building export zip…"
+                  sublabel="Labels + images in one file"
+                />
+              </div>
+            )}
+
             <p className="mt-4 text-xs text-slate-500">
               Only images with review status <strong>approved</strong> are
-              included. Image files are not bundled — export contains label files
-              only (pair with your uploaded images by filename).
+              included. The zip contains <strong>images/</strong> plus label
+              files (YOLO TXT, VOC XML, COCO JSON, or CSV depending on format).
             </p>
           </>
         )}

@@ -1,7 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
 import { InferencePageClient } from "@/components/inference/inference-page-client";
-import type { Model, Dataset } from "@/lib/types/database";
+import type { Dataset } from "@/lib/types/database";
+import { toClientModels } from "@/lib/serialize/model";
 import type { DatasetFileOption } from "@/components/inference/test-run-panel";
 
 export default async function InferencePage({
@@ -23,7 +24,7 @@ export default async function InferencePage({
       .order("created_at", { ascending: false }),
   ]);
 
-  const models = (modelsRes.data ?? []) as Model[];
+  const models = toClientModels(modelsRes.data);
   const datasets = (datasetsRes.data ?? []) as Dataset[];
 
   const imageFiles: DatasetFileOption[] = (filesRes.data ?? [])

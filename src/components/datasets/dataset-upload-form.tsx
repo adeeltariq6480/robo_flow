@@ -3,13 +3,14 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { registerDatasetFiles } from "@/lib/actions/datasets";
-import { uploadDatasetFile } from "@/lib/actions/uploads";
+import { uploadWithProgress } from "@/lib/upload/xhr";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
 import { ClassSelect } from "@/components/ui/class-select";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { CircularProgress } from "@/components/ui/circular-progress";
 import { Upload, FileImage, X, CheckCircle } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 
@@ -89,20 +90,36 @@ export function DatasetUploadForm({
       const fd = new FormData();
       fd.append("file", file);
 
-      const result = await uploadDatasetFile(projectId, datasetId, fd);
+      const uploadUrl = `/api/projects/${projectId}/datasets/${datasetId}/upload`;
+      const fileBase = (i / queue.length) * 100;
 
-      if (result?.error) {
-        setError(`Failed to upload ${file.name}: ${result.error}`);
+      const result = await uploadWithProgress<{
+        error?: string;
+        file?: {
+          fileName: string;
+          filePath: string;
+          fileSize: number;
+          mimeType: string;
+        };
+      }>(uploadUrl, fd, (filePercent) => {
+        const overall = Math.round(fileBase + filePercent / queue.length);
+        setProgress(Math.min(99, overall));
+      });
+
+      if (!result.ok || result.data?.error) {
+        setError(
+          `Failed to upload ${file.name}: ${result.data?.error ?? `HTTP ${result.status}`}`
+        );
         setUploading(false);
         return;
       }
 
-      if (result.file) {
+      if (result.data.file) {
         uploaded.push({
-          fileName: result.file.fileName,
-          filePath: result.file.filePath,
-          fileSize: result.file.fileSize,
-          mimeType: result.file.mimeType,
+          fileName: result.data.file.fileName,
+          filePath: result.data.file.filePath,
+          fileSize: result.data.file.fileSize,
+          mimeType: result.data.file.mimeType,
           classId: classId && classId !== ALL_CLASS_ID ? classId : null,
         });
       }
@@ -238,16 +255,12 @@ export function DatasetUploadForm({
             </ul>
 
             {uploading && (
-              <div className="mt-4">
-                <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className="h-full bg-brand-600 transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-                <p className="mt-1 text-center text-xs text-slate-500">
-                  Uploading… {progress}%
-                </p>
+              <div className="mt-6 flex justify-center py-4">
+                <CircularProgress
+                  value={progress}
+                  label="Uploading files…"
+                  sublabel={`${progress}% complete`}
+                />
               </div>
             )}
 
