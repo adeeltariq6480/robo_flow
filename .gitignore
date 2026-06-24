@@ -46,3 +46,4 @@ coverage/
 worker/.venv/
 worker/.worker-tmp/
 .worker-tmp/
+.vercel

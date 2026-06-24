@@ -21,11 +21,26 @@ const projectLinks = [
   { suffix: "/inference", label: "Inference", icon: Zap },
 ];
 
+const RESERVED_PROJECT_SEGMENTS = new Set(["new"]);
+
+function resolveProjectId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/projects\/([^/]+)/);
+  const segment = match?.[1];
+  if (!segment || RESERVED_PROJECT_SEGMENTS.has(segment)) return undefined;
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      segment
+    )
+  ) {
+    return undefined;
+  }
+  return segment;
+}
+
 export function AppSidebar() {
   const pathname = usePathname();
 
-  const projectMatch = pathname.match(/^\/projects\/([^/]+)/);
-  const projectId = projectMatch?.[1];
+  const projectId = resolveProjectId(pathname);
   const isNewProject = pathname === "/projects/new";
 
   const linkClass = (active: boolean) =>

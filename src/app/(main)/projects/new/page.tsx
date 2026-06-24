@@ -30,6 +30,10 @@ export default function NewProjectPage() {
           ← Back to projects
         </Link>
         <h1 className="mt-2 text-2xl font-bold text-slate-900">New project</h1>
+        <p className="mt-2 text-sm text-slate-500">
+          Create the project first — then open Classes, Datasets, and Models from
+          the sidebar.
+        </p>
       </div>
 
       <Card>

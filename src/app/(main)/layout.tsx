@@ -1,5 +1,7 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
 
+export const dynamic = "force-dynamic";
+
 export default function MainLayout({
   children,
 }: {
