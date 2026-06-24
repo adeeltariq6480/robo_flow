@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { registerModel } from "@/lib/actions/models";
 import { prepareModelUpload } from "@/lib/actions/uploads";
 import { uploadFileToStorage } from "@/lib/upload/direct-storage";
+import { useProjectDrop } from "@/components/project/project-drop-provider";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import type { ModelFormat } from "@/lib/types/database";
 import { MODEL_FORMATS, formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -13,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { CircularProgress } from "@/components/ui/circular-progress";
-import { Upload, Box, CheckCircle, X } from "lucide-react";
+import { Box, CheckCircle, X } from "lucide-react";
 
 interface ModelUploadFormProps {
   projectId: string;
@@ -21,6 +23,7 @@ interface ModelUploadFormProps {
 
 export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
   const router = useRouter();
+  const projectDrop = useProjectDrop();
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -31,21 +34,28 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  function onFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0];
-    if (!selected) return;
+  const applyModelFile = useCallback((selected: File) => {
     setFile(selected);
-    if (!name) {
-      const baseName = selected.name.replace(/\.[^.]+$/, "");
-      setName(baseName);
-    }
+    setName((prev) => {
+      if (prev) return prev;
+      return selected.name.replace(/\.[^.]+$/, "");
+    });
     const ext = selected.name.split(".").pop()?.toLowerCase();
     if (ext === "onnx") setFormat("onnx");
     else if (ext === "pt" || ext === "pth") setFormat("pytorch");
     else if (ext === "tflite") setFormat("tflite");
     else if (ext === "pb" || ext === "h5") setFormat("tensorflow");
-    e.target.value = "";
-  }
+  }, []);
+
+  useEffect(() => {
+    if (!projectDrop) return;
+    const unregister = projectDrop.registerHandler("model", (files) => {
+      if (files[0]) applyModelFile(files[0]);
+    });
+    const pending = projectDrop.consumePending("model");
+    if (pending?.[0]) applyModelFile(pending[0]);
+    return unregister;
+  }, [projectDrop, applyModelFile]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -145,21 +155,14 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {!file ? (
-            <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-12 transition-colors hover:border-brand-500 hover:bg-brand-50/50">
-              <Upload className="h-10 w-10 text-slate-400" />
-              <span className="mt-3 text-sm font-medium text-slate-700">
-                Select model file
-              </span>
-              <span className="mt-1 text-xs text-slate-500">
-                Up to 500 MB — uploads go directly to storage
-              </span>
-              <input
-                type="file"
-                accept=".onnx,.pt,.pth,.pb,.h5,.tflite,.zip"
-                className="sr-only"
-                onChange={onFileSelected}
-              />
-            </label>
+            <FileDropZone
+              onFiles={(files) => files[0] && applyModelFile(files[0])}
+              multiple={false}
+              disabled={uploading}
+              accept=".onnx,.pt,.pth,.pb,.h5,.tflite,.zip"
+              hint="Click or drag & drop model file"
+              subhint="Up to 500 MB — .pt, .onnx, .tflite, etc."
+            />
           ) : (
             <div className="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <Box className="h-10 w-10 text-brand-600" />

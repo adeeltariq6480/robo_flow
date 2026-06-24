@@ -82,7 +82,7 @@ export function buildCocoExport(data: ExportDataset): string {
 
   const coco = {
     info: {
-      description: `Robo Flow export — ${data.datasetName}`,
+      description: `Label AI export — ${data.datasetName}`,
       version: "1.0",
       year: new Date().getFullYear(),
       contributor: data.projectName,

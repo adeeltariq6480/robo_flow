@@ -1,18 +1,20 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { registerDatasetFiles } from "@/lib/actions/datasets";
 import { prepareDatasetFileUpload } from "@/lib/actions/uploads";
 import { uploadFileToStorage } from "@/lib/upload/direct-storage";
+import { useProjectDrop } from "@/components/project/project-drop-provider";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
 import { ClassSelect } from "@/components/ui/class-select";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { CircularProgress } from "@/components/ui/circular-progress";
-import { Upload, FileImage, X, CheckCircle } from "lucide-react";
+import { FileImage, X, CheckCircle } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 
 interface DatasetUploadFormProps {
@@ -35,6 +37,7 @@ export function DatasetUploadForm({
   classes,
 }: DatasetUploadFormProps) {
   const router = useRouter();
+  const projectDrop = useProjectDrop();
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [defaultClassId, setDefaultClassId] = useState(ALL_CLASS_ID);
   const [uploading, setUploading] = useState(false);
@@ -42,9 +45,8 @@ export function DatasetUploadForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  const onFilesSelected = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
+  const addFilesToQueue = useCallback(
+    (files: File[]) => {
       const newItems: QueuedFile[] = files.map((file) => ({
         file,
         classId: defaultClassId || ALL_CLASS_ID,
@@ -53,10 +55,17 @@ export function DatasetUploadForm({
           : undefined,
       }));
       setQueue((prev) => [...prev, ...newItems]);
-      e.target.value = "";
     },
     [defaultClassId]
   );
+
+  useEffect(() => {
+    if (!projectDrop) return;
+    const unregister = projectDrop.registerHandler("images", addFilesToQueue);
+    const pending = projectDrop.consumePending("images");
+    if (pending?.length) addFilesToQueue(pending);
+    return unregister;
+  }, [projectDrop, addFilesToQueue]);
 
   function removeFromQueue(index: number) {
     setQueue((prev) => {
@@ -184,23 +193,14 @@ export function DatasetUploadForm({
           </div>
         )}
 
-        <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-12 transition-colors hover:border-brand-500 hover:bg-brand-50/50">
-          <Upload className="h-10 w-10 text-slate-400" />
-          <span className="mt-3 text-sm font-medium text-slate-700">
-            Click to select files
-          </span>
-          <span className="mt-1 text-xs text-slate-500">
-            Images, CSV, JSON — up to 50 MB each
-          </span>
-          <input
-            type="file"
-            multiple
-            accept="image/*,.csv,.json,.txt,.zip"
-            className="sr-only"
-            onChange={onFilesSelected}
-            disabled={uploading}
-          />
-        </label>
+        <FileDropZone
+          onFiles={addFilesToQueue}
+          disabled={uploading}
+          multiple
+          accept="image/*,.csv,.json,.txt,.zip"
+          hint="Click or drag & drop files here"
+          subhint="Multiple images at once · up to 50 MB each"
+        />
 
         {queue.length > 0 && (
           <div className="mt-6">

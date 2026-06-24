@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { Class } from "@/lib/types/database";
 import {
@@ -11,6 +11,9 @@ import {
   deleteClasses,
   deleteAllClasses,
 } from "@/lib/actions/classes";
+import { useProjectDrop } from "@/components/project/project-drop-provider";
+import { readFileAsText } from "@/lib/upload/classify-files";
+import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { CLASS_COLORS } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,6 +30,7 @@ interface ClassManagerProps {
 
 export function ClassManager({ projectId, classes }: ClassManagerProps) {
   const router = useRouter();
+  const projectDrop = useProjectDrop();
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
@@ -49,6 +53,30 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
     if (allSelected) setSelected(new Set());
     else setSelected(new Set(classes.map((c) => c.id)));
   }
+
+  const importClassFiles = useCallback(
+    async (files: File[]) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const parts = await Promise.all(files.map((f) => readFileAsText(f)));
+        const fd = new FormData();
+        fd.set("names", parts.join("\n"));
+        const result = await createClassesBulk(projectId, fd);
+        if (result?.error) setError(result.error);
+        else router.refresh();
+      } catch {
+        setError("Could not read class list file");
+      }
+      setLoading(false);
+    },
+    [projectId, router]
+  );
+
+  useEffect(() => {
+    if (!projectDrop) return;
+    return projectDrop.registerHandler("classes", importClassFiles);
+  }, [projectDrop, importClassFiles]);
 
   async function handleCreate(formData: FormData) {
     setLoading(true);
@@ -153,6 +181,16 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
               </div>
             )
           }
+        />
+
+        <FileDropZone
+          onFiles={importClassFiles}
+          disabled={loading}
+          multiple
+          accept=".txt,.json,.csv"
+          className="mb-6"
+          hint="Drag & drop class list file"
+          subhint=".txt, .json, or .csv — one name per line"
         />
 
         {showBulkForm && (

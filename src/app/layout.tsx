@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Robo Flow",
-  description: "Robotics vision workflow platform",
+  title: "Label AI",
+  description: "AI-powered image labeling and dataset platform",
 };
 
 export default function RootLayout({

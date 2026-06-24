@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LabelAILogo } from "@/components/layout/label-ai-logo";
 import {
-  Bot,
   FolderKanban,
   Plus,
   Tags,
@@ -52,10 +52,9 @@ export function AppSidebar() {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="flex h-16 items-center gap-2 border-b border-slate-200 px-4">
-        <Bot className="h-7 w-7 text-brand-600" />
-        <span className="text-lg font-semibold text-slate-900">Robo Flow</span>
-      </div>
+      <Link href="/" className="flex h-16 items-center border-b border-slate-200 px-4">
+        <LabelAILogo />
+      </Link>
 
       <nav className="flex-1 space-y-1 p-4">
         <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">

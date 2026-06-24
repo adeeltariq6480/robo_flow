@@ -62,8 +62,8 @@ function buildVocXml(
   <filename>${escapeXml(file.fileName)}</filename>
   <path>${escapeXml(file.fileName)}</path>
   <source>
-    <database>Robo Flow</database>
-    <annotation>Robo Flow</annotation>
+    <database>Label AI</database>
+    <annotation>Label AI</annotation>
     <project>${escapeXml(data.projectName)}</project>
     <dataset>${escapeXml(data.datasetName)}</dataset>
   </source>
