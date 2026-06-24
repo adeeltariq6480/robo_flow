@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { registerModel } from "@/lib/actions/models";
-import { uploadWithProgress } from "@/lib/upload/xhr";
+import { prepareModelUpload } from "@/lib/actions/uploads";
+import { uploadFileToStorage } from "@/lib/upload/direct-storage";
 import type { ModelFormat } from "@/lib/types/database";
 import { MODEL_FORMATS, formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -57,18 +58,23 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     setError(null);
     setProgress(0);
 
-    const fd = new FormData();
-    fd.append("file", file);
-
     try {
-      const uploadResult = await uploadWithProgress<{
-        error?: string;
-        filePath?: string;
-        fileSize?: number;
-      }>(`/api/projects/${projectId}/models/upload`, fd, setProgress);
+      const prepared = await prepareModelUpload(projectId, file.name);
+      if (!prepared?.filePath) {
+        setError("Could not prepare upload");
+        setUploading(false);
+        return;
+      }
 
-      if (!uploadResult.ok || uploadResult.data?.error) {
-        setError(uploadResult.data?.error ?? `Upload failed (${uploadResult.status})`);
+      const uploadResult = await uploadFileToStorage(
+        "models",
+        prepared.filePath,
+        file,
+        setProgress
+      );
+
+      if (uploadResult.error) {
+        setError(uploadResult.error);
         setUploading(false);
         return;
       }
@@ -78,8 +84,8 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
       const result = await registerModel(projectId, {
         name: name.trim(),
         description: description.trim() || null,
-        filePath: uploadResult.data.filePath!,
-        fileSize: uploadResult.data.fileSize!,
+        filePath: prepared.filePath,
+        fileSize: file.size,
         format,
         version: version.trim() || "1.0.0",
       });
@@ -144,7 +150,9 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
               <span className="mt-3 text-sm font-medium text-slate-700">
                 Select model file
               </span>
-              <span className="mt-1 text-xs text-slate-500">Up to 500 MB</span>
+              <span className="mt-1 text-xs text-slate-500">
+                Up to 500 MB — uploads go directly to storage
+              </span>
               <input
                 type="file"
                 accept=".onnx,.pt,.pth,.pb,.h5,.tflite,.zip"

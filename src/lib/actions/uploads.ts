@@ -2,6 +2,33 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 
+function buildStoragePath(...segments: string[]) {
+  return segments.join("/");
+}
+
+export async function prepareModelUpload(projectId: string, fileName: string) {
+  const safeName = fileName.replace(/[^\w.\-()+ ]/g, "_") || "model.bin";
+  const filePath = buildStoragePath(
+    projectId,
+    `${crypto.randomUUID()}-${safeName}`
+  );
+  return { filePath };
+}
+
+export async function prepareDatasetFileUpload(
+  projectId: string,
+  datasetId: string,
+  fileName: string
+) {
+  const safeName = fileName.replace(/[^\w.\-()+ ]/g, "_") || "file";
+  const filePath = buildStoragePath(
+    projectId,
+    datasetId,
+    `${crypto.randomUUID()}-${safeName}`
+  );
+  return { filePath };
+}
+
 export async function uploadDatasetFile(
   projectId: string,
   datasetId: string,

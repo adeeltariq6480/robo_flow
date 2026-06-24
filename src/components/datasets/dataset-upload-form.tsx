@@ -3,7 +3,8 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { registerDatasetFiles } from "@/lib/actions/datasets";
-import { uploadWithProgress } from "@/lib/upload/xhr";
+import { prepareDatasetFileUpload } from "@/lib/actions/uploads";
+import { uploadFileToStorage } from "@/lib/upload/direct-storage";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
 import { ClassSelect } from "@/components/ui/class-select";
@@ -87,42 +88,37 @@ export function DatasetUploadForm({
 
     for (let i = 0; i < queue.length; i++) {
       const { file, classId } = queue[i];
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const uploadUrl = `/api/projects/${projectId}/datasets/${datasetId}/upload`;
       const fileBase = (i / queue.length) * 100;
 
-      const result = await uploadWithProgress<{
-        error?: string;
-        file?: {
-          fileName: string;
-          filePath: string;
-          fileSize: number;
-          mimeType: string;
-        };
-      }>(uploadUrl, fd, (filePercent) => {
-        const overall = Math.round(fileBase + filePercent / queue.length);
-        setProgress(Math.min(99, overall));
-      });
+      const prepared = await prepareDatasetFileUpload(
+        projectId,
+        datasetId,
+        file.name
+      );
 
-      if (!result.ok || result.data?.error) {
-        setError(
-          `Failed to upload ${file.name}: ${result.data?.error ?? `HTTP ${result.status}`}`
-        );
+      const result = await uploadFileToStorage(
+        "datasets",
+        prepared.filePath,
+        file,
+        (filePercent) => {
+          const overall = Math.round(fileBase + filePercent / queue.length);
+          setProgress(Math.min(99, overall));
+        }
+      );
+
+      if (result.error) {
+        setError(`Failed to upload ${file.name}: ${result.error}`);
         setUploading(false);
         return;
       }
 
-      if (result.data.file) {
-        uploaded.push({
-          fileName: result.data.file.fileName,
-          filePath: result.data.file.filePath,
-          fileSize: result.data.file.fileSize,
-          mimeType: result.data.file.mimeType,
-          classId: classId && classId !== ALL_CLASS_ID ? classId : null,
-        });
-      }
+      uploaded.push({
+        fileName: file.name,
+        filePath: prepared.filePath,
+        fileSize: file.size,
+        mimeType: file.type,
+        classId: classId && classId !== ALL_CLASS_ID ? classId : null,
+      });
 
       setProgress(Math.round(((i + 1) / queue.length) * 100));
     }
