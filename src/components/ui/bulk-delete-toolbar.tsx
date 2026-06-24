@@ -50,26 +50,30 @@ export function BulkDeleteToolbar({
         </span>
       </div>
       <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={onDeleteSelected}
-          disabled={disabled || selectedCount === 0}
-          className="!border-red-200 !text-red-700 hover:!bg-red-50"
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={onDeleteAll}
-          disabled={disabled}
-          className="!border-red-300 !text-red-800 hover:!bg-red-100"
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete all
-        </Button>
+        {selectedCount > 0 && (
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onDeleteSelected}
+              disabled={disabled}
+              className="!border-red-200 !text-red-700 hover:!bg-red-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onDeleteAll}
+              disabled={disabled}
+              className="!border-red-300 !text-red-800 hover:!bg-red-100"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete all
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

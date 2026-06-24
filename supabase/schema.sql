@@ -508,9 +508,7 @@ create table public.classes (
   description text,
   sort_order  integer not null default 0,
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now(),
-
-  unique (project_id, name)
+  updated_at  timestamptz not null default now()
 );
 
 create table public.datasets (

@@ -38,7 +38,10 @@ export async function createClassesBulk(projectId: string, formData: FormData) {
   const names = parseClassNamesInput(raw);
 
   if (names.length === 0) {
-    return { error: "Enter at least one class name (one per line, comma-separated, or JSON array)" };
+    return {
+      error:
+        "Enter at least one class name (one per line, comma-separated, or JSON array)",
+    };
   }
 
   const { count } = await supabase
