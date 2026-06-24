@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { registerModel } from "@/lib/actions/models";
+import { uploadModelFile } from "@/lib/actions/uploads";
 import type { ModelFormat } from "@/lib/types/database";
 import { MODEL_FORMATS, formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -54,15 +54,13 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     setUploading(true);
     setError(null);
 
-    const supabase = createClient();
-    const filePath = `${projectId}/${crypto.randomUUID()}-${file.name}`;
+    const fd = new FormData();
+    fd.append("file", file);
 
-    const { error: uploadError } = await supabase.storage
-      .from("models")
-      .upload(filePath, file, { upsert: false });
+    const uploadResult = await uploadModelFile(projectId, fd);
 
-    if (uploadError) {
-      setError(uploadError.message);
+    if (uploadResult?.error) {
+      setError(uploadResult.error);
       setUploading(false);
       return;
     }
@@ -70,8 +68,8 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     const result = await registerModel(projectId, {
       name: name.trim(),
       description: description.trim() || null,
-      filePath,
-      fileSize: file.size,
+      filePath: uploadResult.filePath!,
+      fileSize: uploadResult.fileSize!,
       format,
       version: version.trim() || "1.0.0",
     });

@@ -8,6 +8,11 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: projectRoot,
   experimental: {
     optimizePackageImports: ["lucide-react"],
+    // Middleware buffers POST bodies; default 10MB breaks model uploads
+    middlewareClientMaxBodySize: "500mb",
+    serverActions: {
+      bodySizeLimit: "500mb",
+    },
   },
 };
 

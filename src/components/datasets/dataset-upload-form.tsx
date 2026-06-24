@@ -2,9 +2,11 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { registerDatasetFiles } from "@/lib/actions/datasets";
+import { uploadDatasetFile } from "@/lib/actions/uploads";
 import type { Class } from "@/lib/types/database";
+import { ALL_CLASS_ID } from "@/lib/classes/constants";
+import { ClassSelect } from "@/components/ui/class-select";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -32,7 +34,7 @@ export function DatasetUploadForm({
 }: DatasetUploadFormProps) {
   const router = useRouter();
   const [queue, setQueue] = useState<QueuedFile[]>([]);
-  const [defaultClassId, setDefaultClassId] = useState(classes[0]?.id ?? "");
+  const [defaultClassId, setDefaultClassId] = useState(ALL_CLASS_ID);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export function DatasetUploadForm({
       const files = Array.from(e.target.files ?? []);
       const newItems: QueuedFile[] = files.map((file) => ({
         file,
-        classId: defaultClassId,
+        classId: defaultClassId || ALL_CLASS_ID,
         preview: file.type.startsWith("image/")
           ? URL.createObjectURL(file)
           : undefined,
@@ -74,7 +76,6 @@ export function DatasetUploadForm({
     setError(null);
     setProgress(0);
 
-    const supabase = createClient();
     const uploaded: {
       fileName: string;
       filePath: string;
@@ -85,25 +86,26 @@ export function DatasetUploadForm({
 
     for (let i = 0; i < queue.length; i++) {
       const { file, classId } = queue[i];
-      const filePath = `${projectId}/${datasetId}/${crypto.randomUUID()}-${file.name}`;
+      const fd = new FormData();
+      fd.append("file", file);
 
-      const { error: uploadError } = await supabase.storage
-        .from("datasets")
-        .upload(filePath, file, { upsert: false });
+      const result = await uploadDatasetFile(projectId, datasetId, fd);
 
-      if (uploadError) {
-        setError(`Failed to upload ${file.name}: ${uploadError.message}`);
+      if (result?.error) {
+        setError(`Failed to upload ${file.name}: ${result.error}`);
         setUploading(false);
         return;
       }
 
-      uploaded.push({
-        fileName: file.name,
-        filePath,
-        fileSize: file.size,
-        mimeType: file.type,
-        classId: classId || null,
-      });
+      if (result.file) {
+        uploaded.push({
+          fileName: result.file.fileName,
+          filePath: result.file.filePath,
+          fileSize: result.file.fileSize,
+          mimeType: result.file.mimeType,
+          classId: classId && classId !== ALL_CLASS_ID ? classId : null,
+        });
+      }
 
       setProgress(Math.round(((i + 1) / queue.length) * 100));
     }
@@ -158,21 +160,14 @@ export function DatasetUploadForm({
         />
 
         {classes.length > 0 && (
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700">
-              Default class for new files
-            </label>
-            <select
+          <div className="mb-4 max-w-xs">
+            <ClassSelect
+              label="Default class for new files"
+              classes={classes}
               value={defaultClassId}
-              onChange={(e) => setDefaultClassId(e.target.value)}
-              className="mt-1 block w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            >
-              {classes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={setDefaultClassId}
+              disabled={uploading}
+            />
           </div>
         )}
 
@@ -221,18 +216,14 @@ export function DatasetUploadForm({
                     </p>
                   </div>
                   {classes.length > 0 && (
-                    <select
-                      value={item.classId}
-                      onChange={(e) => updateClass(index, e.target.value)}
-                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                    <ClassSelect
+                      classes={classes}
+                      value={item.classId || ALL_CLASS_ID}
+                      onChange={(value) => updateClass(index, value)}
+                      includeAll
                       disabled={uploading}
-                    >
-                      {classes.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
                   )}
                   <button
                     type="button"

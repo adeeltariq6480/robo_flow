@@ -130,6 +130,10 @@ export interface Database {
           file_path: string;
           file_size: number;
           mime_type: string | null;
+          annotations: Json;
+          auto_labeled_at: string | null;
+          review_status: "pending" | "approved" | "rejected" | null;
+          reviewed_at: string | null;
           created_at: string;
         },
         {
@@ -141,9 +145,17 @@ export interface Database {
           file_path: string;
           file_size?: number;
           mime_type?: string | null;
+          annotations?: Json;
+          auto_labeled_at?: string | null;
+          review_status?: "pending" | "approved" | "rejected" | null;
+          reviewed_at?: string | null;
         },
         {
           class_id?: string | null;
+          annotations?: Json;
+          auto_labeled_at?: string | null;
+          review_status?: "pending" | "approved" | "rejected" | null;
+          reviewed_at?: string | null;
         }
       >;
       models: TableDef<

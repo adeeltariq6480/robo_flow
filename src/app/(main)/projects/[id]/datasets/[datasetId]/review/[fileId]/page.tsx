@@ -1,0 +1,111 @@
+import Link from "next/link";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  getDatasetFileForReview,
+  getDatasetReviewQueue,
+} from "@/lib/actions/annotations";
+import { getProject } from "@/lib/server/auth";
+import { AnnotationEditorClient } from "@/components/annotations/annotation-editor-client";
+import type { ReviewFilter } from "@/lib/types/annotations";
+import type { Class } from "@/lib/types/database";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft } from "lucide-react";
+import { notFound } from "next/navigation";
+
+const VALID_FILTERS: ReviewFilter[] = [
+  "all",
+  "needs_review",
+  "unannotated",
+  "annotated",
+  "approved",
+  "rejected",
+];
+
+function parseFilter(raw: string | undefined): ReviewFilter {
+  if (raw && VALID_FILTERS.includes(raw as ReviewFilter)) {
+    return raw as ReviewFilter;
+  }
+  return "all";
+}
+
+export default async function DatasetFileReviewPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string; datasetId: string; fileId: string }>;
+  searchParams: Promise<{ filter?: string }>;
+}) {
+  const { id: projectId, datasetId, fileId } = await params;
+  const { filter: filterParam } = await searchParams;
+  await getProject(projectId);
+
+  const filter = parseFilter(filterParam);
+
+  const supabase = createAdminClient();
+  const { data: dataset } = await supabase
+    .from("datasets")
+    .select("name")
+    .eq("id", datasetId)
+    .eq("project_id", projectId)
+    .single();
+
+  if (!dataset) notFound();
+
+  const { data: classes } = await supabase
+    .from("classes")
+    .select("*")
+    .eq("project_id", projectId)
+    .order("sort_order", { ascending: true });
+
+  const fileResult = await getDatasetFileForReview(
+    projectId,
+    datasetId,
+    fileId
+  );
+
+  if (fileResult.error || !fileResult.file || !fileResult.imageUrl) {
+    return (
+      <div className="space-y-4">
+        <Link href={`/projects/${projectId}/datasets/${datasetId}/review`}>
+          <Button variant="secondary">
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Button>
+        </Link>
+        <p className="text-sm text-red-600">
+          {fileResult.error ?? "Could not load file"}
+        </p>
+      </div>
+    );
+  }
+
+  const queueResult = await getDatasetReviewQueue(
+    projectId,
+    datasetId,
+    filter
+  );
+  const queueFiles = queueResult.files ?? [];
+  const currentIndex = queueFiles.findIndex((f) => f.id === fileId);
+  const prevFileId =
+    currentIndex > 0 ? queueFiles[currentIndex - 1]?.id ?? null : null;
+  const nextFileId =
+    currentIndex >= 0 && currentIndex < queueFiles.length - 1
+      ? queueFiles[currentIndex + 1]?.id ?? null
+      : null;
+
+  return (
+    <AnnotationEditorClient
+      projectId={projectId}
+      datasetId={datasetId}
+      datasetName={dataset.name}
+      fileId={fileId}
+      fileName={fileResult.file.file_name}
+      imageUrl={fileResult.imageUrl}
+      initialBoxes={fileResult.file.annotations}
+      classes={(classes ?? []) as Class[]}
+      filter={filter}
+      prevFileId={prevFileId}
+      nextFileId={nextFileId}
+    />
+  );
+}

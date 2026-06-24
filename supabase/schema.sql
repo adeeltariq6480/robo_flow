@@ -41,7 +41,7 @@ create table public.organizations (
   id          uuid primary key default uuid_generate_v4(),
   name        text not null,
   slug        text not null unique,
-  created_by  uuid not null references public.profiles (id) on delete restrict,
+  created_by  uuid references public.profiles (id) on delete set null,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
 
@@ -495,7 +495,7 @@ create table public.projects (
   id          uuid primary key default uuid_generate_v4(),
   name        text not null,
   description text,
-  created_by  uuid not null references public.profiles (id) on delete restrict,
+  created_by  uuid references public.profiles (id) on delete set null,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -520,7 +520,7 @@ create table public.datasets (
   description       text,
   file_count        integer not null default 0,
   total_size_bytes  bigint not null default 0,
-  created_by        uuid not null references public.profiles (id) on delete restrict,
+  created_by        uuid,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
 
@@ -548,7 +548,7 @@ create table public.models (
   file_size   bigint not null default 0,
   format      public.model_format not null default 'other',
   version     text not null default '1.0.0',
-  created_by  uuid not null references public.profiles (id) on delete restrict,
+  created_by  uuid references public.profiles (id) on delete set null,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
 
@@ -604,53 +604,25 @@ alter table public.datasets enable row level security;
 alter table public.dataset_files enable row level security;
 alter table public.models enable row level security;
 
-create policy "Users can view own projects"
-  on public.projects for select
-  using (created_by = auth.uid());
+create policy "Public projects access"
+  on public.projects for all
+  using (true) with check (true);
 
-create policy "Users can create projects"
-  on public.projects for insert
-  with check (auth.uid() = created_by);
-
-create policy "Users can update own projects"
-  on public.projects for update
-  using (created_by = auth.uid());
-
-create policy "Users can delete own projects"
-  on public.projects for delete
-  using (created_by = auth.uid());
-
-create policy "Owners can view project classes"
-  on public.classes for select
-  using (public.is_project_owner(project_id));
-
-create policy "Owners can manage project classes"
+create policy "Public classes access"
   on public.classes for all
-  using (public.is_project_owner(project_id));
+  using (true) with check (true);
 
-create policy "Owners can view project datasets"
-  on public.datasets for select
-  using (public.is_project_owner(project_id));
-
-create policy "Owners can manage project datasets"
+create policy "Public datasets access"
   on public.datasets for all
-  using (public.is_project_owner(project_id));
+  using (true) with check (true);
 
-create policy "Owners can view dataset files"
-  on public.dataset_files for select
-  using (public.is_project_owner(project_id));
-
-create policy "Owners can manage dataset files"
+create policy "Public dataset files access"
   on public.dataset_files for all
-  using (public.is_project_owner(project_id));
+  using (true) with check (true);
 
-create policy "Owners can view project models"
-  on public.models for select
-  using (public.is_project_owner(project_id));
-
-create policy "Owners can manage project models"
+create policy "Public models access"
   on public.models for all
-  using (public.is_project_owner(project_id));
+  using (true) with check (true);
 
 -- =============================================================================
 -- Storage buckets
@@ -670,44 +642,10 @@ as $$
   select nullif(split_part(object_name, '/', 1), '')::uuid;
 $$;
 
-create policy "Owners can upload dataset files"
-  on storage.objects for insert
-  with check (
-    bucket_id = 'datasets'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
+create policy "Public datasets storage"
+  on storage.objects for all
+  using (bucket_id = 'datasets') with check (bucket_id = 'datasets');
 
-create policy "Owners can view dataset files"
-  on storage.objects for select
-  using (
-    bucket_id = 'datasets'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
-
-create policy "Owners can delete dataset files"
-  on storage.objects for delete
-  using (
-    bucket_id = 'datasets'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
-
-create policy "Owners can upload model files"
-  on storage.objects for insert
-  with check (
-    bucket_id = 'models'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
-
-create policy "Owners can view model files"
-  on storage.objects for select
-  using (
-    bucket_id = 'models'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
-
-create policy "Owners can delete model files"
-  on storage.objects for delete
-  using (
-    bucket_id = 'models'
-    and public.is_project_owner(public.storage_project_id(name))
-  );
+create policy "Public models storage"
+  on storage.objects for all
+  using (bucket_id = 'models') with check (bucket_id = 'models');

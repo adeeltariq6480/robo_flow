@@ -1,17 +1,11 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function createDataset(projectId: string, formData: FormData) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { error: "Not authenticated" };
-
+  const supabase = createAdminClient();
   const name = (formData.get("name") as string)?.trim();
   const description = (formData.get("description") as string)?.trim() || null;
 
@@ -23,7 +17,7 @@ export async function createDataset(projectId: string, formData: FormData) {
       project_id: projectId,
       name,
       description,
-      created_by: user.id,
+      created_by: null,
     })
     .select("id")
     .single();
@@ -35,7 +29,7 @@ export async function createDataset(projectId: string, formData: FormData) {
 }
 
 export async function deleteDataset(projectId: string, datasetId: string) {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const { data: files } = await supabase
     .from("dataset_files")
@@ -43,9 +37,7 @@ export async function deleteDataset(projectId: string, datasetId: string) {
     .eq("dataset_id", datasetId);
 
   if (files?.length) {
-    await supabase.storage
-      .from("datasets")
-      .remove(files.map((f) => f.file_path));
+    await supabase.storage.from("datasets").remove(files.map((f) => f.file_path));
   }
 
   const { error } = await supabase
@@ -60,6 +52,110 @@ export async function deleteDataset(projectId: string, datasetId: string) {
   return { success: true };
 }
 
+export async function deleteDatasets(projectId: string, datasetIds: string[]) {
+  if (datasetIds.length === 0) return { error: "No datasets selected" };
+
+  const supabase = createAdminClient();
+
+  for (const datasetId of datasetIds) {
+    const { data: files } = await supabase
+      .from("dataset_files")
+      .select("file_path")
+      .eq("dataset_id", datasetId);
+
+    if (files?.length) {
+      await supabase.storage.from("datasets").remove(files.map((f) => f.file_path));
+    }
+
+    const { error } = await supabase
+      .from("datasets")
+      .delete()
+      .eq("id", datasetId)
+      .eq("project_id", projectId);
+
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath(`/projects/${projectId}/datasets`);
+  return { success: true, count: datasetIds.length };
+}
+
+export async function deleteAllDatasets(projectId: string) {
+  const supabase = createAdminClient();
+
+  const { data: datasets } = await supabase
+    .from("datasets")
+    .select("id")
+    .eq("project_id", projectId);
+
+  if (!datasets?.length) return { success: true, count: 0 };
+
+  return deleteDatasets(
+    projectId,
+    datasets.map((d) => d.id)
+  );
+}
+
+export async function deleteDatasetFiles(
+  projectId: string,
+  datasetId: string,
+  fileIds: string[]
+) {
+  if (fileIds.length === 0) return { error: "No files selected" };
+
+  const supabase = createAdminClient();
+
+  const { data: files } = await supabase
+    .from("dataset_files")
+    .select("id, file_path, file_size")
+    .eq("project_id", projectId)
+    .eq("dataset_id", datasetId)
+    .in("id", fileIds);
+
+  if (!files?.length) return { error: "Files not found" };
+
+  await supabase.storage.from("datasets").remove(files.map((f) => f.file_path));
+
+  const removedSize = files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
+
+  const { error } = await supabase
+    .from("dataset_files")
+    .delete()
+    .in("id", fileIds)
+    .eq("project_id", projectId)
+    .eq("dataset_id", datasetId);
+
+  if (error) return { error: error.message };
+
+  const { data: dataset } = await supabase
+    .from("datasets")
+    .select("file_count, total_size_bytes")
+    .eq("id", datasetId)
+    .single();
+
+  if (dataset) {
+    await supabase
+      .from("datasets")
+      .update({
+        file_count: Math.max(0, dataset.file_count - files.length),
+        total_size_bytes: Math.max(0, dataset.total_size_bytes - removedSize),
+      })
+      .eq("id", datasetId);
+  }
+
+  revalidatePath(`/projects/${projectId}/datasets`);
+  revalidatePath(`/projects/${projectId}/datasets/${datasetId}/review`);
+  return { success: true, count: files.length };
+}
+
+export async function deleteAllDatasetFiles(
+  projectId: string,
+  datasetId: string,
+  fileIds: string[]
+) {
+  return deleteDatasetFiles(projectId, datasetId, fileIds);
+}
+
 export async function registerDatasetFiles(
   projectId: string,
   datasetId: string,
@@ -71,7 +167,7 @@ export async function registerDatasetFiles(
     classId?: string | null;
   }[]
 ) {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const rows = files.map((f) => ({
     dataset_id: datasetId,
@@ -83,14 +179,10 @@ export async function registerDatasetFiles(
     mime_type: f.mimeType,
   }));
 
-  const { error: insertError } = await supabase
-    .from("dataset_files")
-    .insert(rows);
-
+  const { error: insertError } = await supabase.from("dataset_files").insert(rows);
   if (insertError) return { error: insertError.message };
 
   const addedSize = files.reduce((sum, f) => sum + f.fileSize, 0);
-
   const { data: dataset } = await supabase
     .from("datasets")
     .select("file_count, total_size_bytes")

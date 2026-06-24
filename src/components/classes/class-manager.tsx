@@ -3,14 +3,22 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Class } from "@/lib/types/database";
-import { createClass, updateClass, deleteClass } from "@/lib/actions/classes";
+import {
+  createClass,
+  createClassesBulk,
+  updateClass,
+  deleteClass,
+  deleteClasses,
+  deleteAllClasses,
+} from "@/lib/actions/classes";
 import { CLASS_COLORS } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { Pencil, Trash2, Plus, X, Check } from "lucide-react";
+import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
+import { Pencil, Trash2, Plus, X, Check, ListPlus } from "lucide-react";
 
 interface ClassManagerProps {
   projectId: string;
@@ -21,8 +29,26 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [showBulkForm, setShowBulkForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const allSelected = classes.length > 0 && selected.size === classes.length;
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(classes.map((c) => c.id)));
+  }
 
   async function handleCreate(formData: FormData) {
     setLoading(true);
@@ -32,6 +58,19 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
       setError(result.error);
     } else {
       setShowForm(false);
+      router.refresh();
+    }
+    setLoading(false);
+  }
+
+  async function handleBulkCreate(formData: FormData) {
+    setLoading(true);
+    setError(null);
+    const result = await createClassesBulk(projectId, formData);
+    if (result?.error) {
+      setError(result.error);
+    } else {
+      setShowBulkForm(false);
       router.refresh();
     }
     setLoading(false);
@@ -50,12 +89,44 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
     setLoading(false);
   }
 
-  async function handleDelete(classId: string) {
+  async function handleDeleteSelected() {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} selected class(es)?`)) return;
+    setLoading(true);
+    const result = await deleteClasses(projectId, Array.from(selected));
+    if (result?.error) setError(result.error);
+    else {
+      setSelected(new Set());
+      router.refresh();
+    }
+    setLoading(false);
+  }
+
+  async function handleDeleteAll() {
+    if (!confirm("Delete ALL classes in this project?")) return;
+    setLoading(true);
+    const result = await deleteAllClasses(projectId);
+    if (result?.error) setError(result.error);
+    else {
+      setSelected(new Set());
+      router.refresh();
+    }
+    setLoading(false);
+  }
+
+  async function handleDeleteOne(classId: string) {
     if (!confirm("Delete this class?")) return;
     setLoading(true);
     const result = await deleteClass(projectId, classId);
     if (result?.error) setError(result.error);
-    else router.refresh();
+    else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(classId);
+        return next;
+      });
+      router.refresh();
+    }
     setLoading(false);
   }
 
@@ -66,19 +137,59 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
       <Card>
         <CardHeader
           title="Label classes"
-          description="Define the object classes your model will detect or classify."
+          description="Define object classes. Add one at a time or paste an array of names."
           action={
-            !showForm && (
-              <Button onClick={() => setShowForm(true)}>
-                <Plus className="h-4 w-4" />
-                Add class
-              </Button>
+            !showForm &&
+            !showBulkForm && (
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => setShowBulkForm(true)}>
+                  <ListPlus className="h-4 w-4" />
+                  Add array
+                </Button>
+                <Button onClick={() => setShowForm(true)}>
+                  <Plus className="h-4 w-4" />
+                  Add class
+                </Button>
+              </div>
             )
           }
         />
 
+        {showBulkForm && (
+          <form
+            action={handleBulkCreate}
+            className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+          >
+            <Textarea
+              label="Class names (array)"
+              name="names"
+              rows={6}
+              placeholder={`One per line:\ndefect\nperson\nbolt\n\nOr comma-separated: defect, person, bolt\n\nOr JSON: ["defect", "person", "bolt"]`}
+              required
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <Button type="submit" disabled={loading}>
+                <Check className="h-4 w-4" />
+                Add all
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShowBulkForm(false)}
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+
         {showForm && (
-          <form action={handleCreate} className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <form
+            action={handleCreate}
+            className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
+          >
             <ClassFormFields />
             <div className="flex gap-2">
               <Button type="submit" disabled={loading}>
@@ -96,6 +207,17 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
             </div>
           </form>
         )}
+
+        <BulkDeleteToolbar
+          itemLabel="classes"
+          totalCount={classes.length}
+          selectedCount={selected.size}
+          onDeleteSelected={handleDeleteSelected}
+          onDeleteAll={handleDeleteAll}
+          disabled={loading}
+          allSelected={allSelected}
+          onToggleSelectAll={toggleSelectAll}
+        />
 
         {classes.length === 0 ? (
           <p className="text-sm text-slate-500">
@@ -130,7 +252,14 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
                   </form>
                 ) : (
                   <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(cls.id)}
+                        onChange={() => toggleSelect(cls.id)}
+                        disabled={loading}
+                        className="rounded border-slate-300"
+                      />
                       <span
                         className="h-4 w-4 shrink-0 rounded-full"
                         style={{ backgroundColor: cls.color }}
@@ -152,7 +281,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
                       </Button>
                       <Button
                         variant="ghost"
-                        onClick={() => handleDelete(cls.id)}
+                        onClick={() => handleDeleteOne(cls.id)}
                         disabled={loading}
                         className="text-red-600 hover:bg-red-50 hover:text-red-700"
                       >
