@@ -1,12 +1,12 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   getDatasetReviewQueue,
   getReviewCounts,
 } from "@/lib/actions/annotations";
 import { getProject } from "@/lib/server/auth";
-import type { Class } from "@/lib/types/database";
+import * as datasetService from "@/lib/services/datasetService";
+import * as classService from "@/lib/services/classService";
 import { AnnotationReviewQueue } from "@/components/annotations/annotation-review-queue";
 import { Button } from "@/components/ui/button";
 import type { ReviewFilter } from "@/lib/types/annotations";
@@ -38,24 +38,13 @@ async function ReviewContent({
   datasetId: string;
   filter: ReviewFilter;
 }) {
-  const supabase = createAdminClient();
-  const { data: dataset } = await supabase
-    .from("datasets")
-    .select("name")
-    .eq("id", datasetId)
-    .eq("project_id", projectId)
-    .single();
-
+  const dataset = await datasetService.getDataset(projectId, datasetId);
   if (!dataset) notFound();
 
-  const [queueResult, countsResult, classesResult] = await Promise.all([
+  const [queueResult, countsResult, classes] = await Promise.all([
     getDatasetReviewQueue(projectId, datasetId, filter),
     getReviewCounts(projectId, datasetId),
-    supabase
-      .from("classes")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("sort_order", { ascending: true }),
+    classService.listClasses(projectId),
   ]);
 
   if (queueResult.error) {
@@ -80,7 +69,7 @@ async function ReviewContent({
       projectId={projectId}
       datasetId={datasetId}
       datasetName={dataset.name}
-      classes={(classesResult.data ?? []) as Class[]}
+      classes={classes}
       files={queueResult.files ?? []}
       counts={counts}
       activeFilter={filter}

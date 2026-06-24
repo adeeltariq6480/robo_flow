@@ -17,6 +17,7 @@ async def run_model_compare(
     project_id: UUID,
     data: dict,
     config: JobConfig,
+    project_id_str: str,
 ) -> dict:
     model_ids = [UUID(m) for m in (data.get("model_ids") or [])]
     if len(model_ids) < 2:
@@ -25,7 +26,7 @@ async def run_model_compare(
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
-    image_path, file_id = await _resolve_image(project_id, data)
+    image_path, file_id = await _resolve_image(project_id, project_id_str, data)
 
     results: dict[str, InferenceResult] = {}
     step = int(80 / len(model_ids))
@@ -36,6 +37,7 @@ async def run_model_compare(
             job_id,
             progress=pct,
             progress_message=f"Running model {i + 1}/{len(model_ids)}…",
+            project_id=project_id_str,
         )
 
         model_path = await asyncio.to_thread(download_model, model_id, project_id)
@@ -65,7 +67,6 @@ async def run_model_compare(
 
 
 def _pick_winner(results: dict[str, InferenceResult]) -> dict:
-    """Pick winner by: most detections, then highest avg confidence."""
     if not results:
         return {"winner_id": None, "reason": "No results"}
 

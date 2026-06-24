@@ -1,7 +1,6 @@
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
+import * as modelService from "@/lib/services/modelService";
 import { ModelsPageClient } from "@/components/models/models-page-client";
-import { toClientModels } from "@/lib/serialize/model";
 
 export default async function ModelsPage({
   params,
@@ -10,15 +9,7 @@ export default async function ModelsPage({
 }) {
   const { id } = await params;
   await getProject(id);
+  const models = await modelService.listModels(id);
 
-  const supabase = createAdminClient();
-  const { data: models } = await supabase
-    .from("models")
-    .select("*")
-    .eq("project_id", id)
-    .order("created_at", { ascending: false });
-
-  return (
-    <ModelsPageClient projectId={id} models={toClientModels(models)} />
-  );
+  return <ModelsPageClient projectId={id} models={models} />;
 }

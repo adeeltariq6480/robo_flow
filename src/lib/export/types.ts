@@ -37,6 +37,7 @@ export interface ExportImageFile {
   id: string;
   fileName: string;
   filePath: string;
+  imageUrl?: string;
   width: number;
   height: number;
   annotations: AnnotationBox[];

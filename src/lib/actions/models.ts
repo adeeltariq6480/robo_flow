@@ -1,8 +1,10 @@
 "use server";
 
-import { createAdminClient } from "@/lib/supabase/admin";
+import * as modelService from "@/lib/services/modelService";
 import { revalidatePath } from "next/cache";
 import type { ModelFormat } from "@/lib/types/database";
+
+import type { ActionResult } from "@/lib/actions/types";
 
 export async function registerModel(
   projectId: string,
@@ -13,92 +15,63 @@ export async function registerModel(
     fileSize: number;
     format: ModelFormat;
     version: string;
+    downloadUrl?: string;
   }
-) {
-  const supabase = createAdminClient();
+): Promise<ActionResult> {
+  try {
+    await modelService.registerModel(projectId, {
+      name: data.name,
+      description: data.description,
+      storagePath: data.filePath,
+      downloadUrl: data.downloadUrl ?? "",
+      fileSize: data.fileSize,
+      format: data.format,
+      version: data.version,
+    });
 
-  const { error } = await supabase.from("models").insert({
-    project_id: projectId,
-    name: data.name,
-    description: data.description ?? null,
-    file_path: data.filePath,
-    file_size: data.fileSize,
-    format: data.format,
-    version: data.version,
-    created_by: null,
-  });
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/models`);
-  return { success: true };
+    revalidatePath(`/projects/${projectId}/models`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to register model" };
+  }
 }
 
-export async function deleteModel(projectId: string, modelId: string) {
-  const supabase = createAdminClient();
-
-  const { data: model } = await supabase
-    .from("models")
-    .select("file_path")
-    .eq("id", modelId)
-    .single();
-
-  if (model?.file_path) {
-    await supabase.storage.from("models").remove([model.file_path]);
+export async function deleteModel(
+  projectId: string,
+  modelId: string
+): Promise<ActionResult> {
+  try {
+    await modelService.deleteModel(projectId, modelId);
+    revalidatePath(`/projects/${projectId}/models`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete model" };
   }
-
-  const { error } = await supabase
-    .from("models")
-    .delete()
-    .eq("id", modelId)
-    .eq("project_id", projectId);
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/models`);
-  return { success: true };
 }
 
-export async function deleteModels(projectId: string, modelIds: string[]) {
-  if (modelIds.length === 0) return { error: "No models selected" };
-
-  const supabase = createAdminClient();
-
-  for (const modelId of modelIds) {
-    const { data: model } = await supabase
-      .from("models")
-      .select("file_path")
-      .eq("id", modelId)
-      .single();
-
-    if (model?.file_path) {
-      await supabase.storage.from("models").remove([model.file_path]);
-    }
-
-    const { error } = await supabase
-      .from("models")
-      .delete()
-      .eq("id", modelId)
-      .eq("project_id", projectId);
-
-    if (error) return { error: error.message };
+export async function deleteModels(
+  projectId: string,
+  modelIds: string[]
+): Promise<ActionResult> {
+  try {
+    if (modelIds.length === 0) return { error: "No models selected" };
+    await modelService.deleteModels(projectId, modelIds);
+    revalidatePath(`/projects/${projectId}/models`);
+    return { success: true, count: modelIds.length };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete models" };
   }
-
-  revalidatePath(`/projects/${projectId}/models`);
-  return { success: true, count: modelIds.length };
 }
 
-export async function deleteAllModels(projectId: string) {
-  const supabase = createAdminClient();
-  const { data: models } = await supabase
-    .from("models")
-    .select("id")
-    .eq("project_id", projectId);
-
-  if (!models?.length) return { success: true, count: 0 };
-
-  return deleteModels(
-    projectId,
-    models.map((m) => m.id)
-  );
+export async function deleteAllModels(projectId: string): Promise<ActionResult> {
+  try {
+    const models = await modelService.listModels(projectId);
+    if (!models.length) return { success: true, count: 0 };
+    return deleteModels(
+      projectId,
+      models.map((m) => m.id)
+    );
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete models" };
+  }
 }

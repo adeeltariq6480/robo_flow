@@ -1,13 +1,13 @@
-import Link from "next/link";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   getDatasetFileForReview,
   getDatasetReviewQueue,
 } from "@/lib/actions/annotations";
 import { getProject } from "@/lib/server/auth";
+import * as datasetService from "@/lib/services/datasetService";
+import * as classService from "@/lib/services/classService";
 import { AnnotationEditorClient } from "@/components/annotations/annotation-editor-client";
 import type { ReviewFilter } from "@/lib/types/annotations";
-import type { Class } from "@/lib/types/database";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
@@ -41,21 +41,10 @@ export default async function DatasetFileReviewPage({
 
   const filter = parseFilter(filterParam);
 
-  const supabase = createAdminClient();
-  const { data: dataset } = await supabase
-    .from("datasets")
-    .select("name")
-    .eq("id", datasetId)
-    .eq("project_id", projectId)
-    .single();
-
+  const dataset = await datasetService.getDataset(projectId, datasetId);
   if (!dataset) notFound();
 
-  const { data: classes } = await supabase
-    .from("classes")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("sort_order", { ascending: true });
+  const classes = await classService.listClasses(projectId);
 
   const fileResult = await getDatasetFileForReview(
     projectId,
@@ -102,7 +91,7 @@ export default async function DatasetFileReviewPage({
       fileName={fileResult.file.file_name}
       imageUrl={fileResult.imageUrl}
       initialBoxes={fileResult.file.annotations}
-      classes={(classes ?? []) as Class[]}
+      classes={classes}
       filter={filter}
       prevFileId={prevFileId}
       nextFileId={nextFileId}

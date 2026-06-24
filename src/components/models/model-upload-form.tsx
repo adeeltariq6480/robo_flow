@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { registerModel } from "@/lib/actions/models";
 import { prepareModelUpload } from "@/lib/actions/uploads";
-import { uploadFileToStorage } from "@/lib/upload/direct-storage";
+import { uploadFileToStorage } from "@/lib/upload/firebase-storage";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import type { ModelFormat } from "@/lib/types/database";
@@ -98,6 +98,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
         fileSize: file.size,
         format,
         version: version.trim() || "1.0.0",
+        downloadUrl: uploadResult.downloadUrl,
       });
 
       if (result?.error) {

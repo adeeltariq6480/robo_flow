@@ -13,11 +13,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:types": "supabase gen types typescript --local > src/lib/types/database.ts"
+    "emulators": "firebase emulators:start --only auth,firestore,storage --project label-ai-local",
+    "dev:emulator": "node scripts/dev-with-emulator.mjs",
+    "check:firebase": "node scripts/check-firebase.mjs"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.6.1",
-    "@supabase/supabase-js": "^2.49.1",
+    "firebase": "^12.15.0",
+    "firebase-admin": "^14.0.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.475.0",
     "next": "^15.2.0",
@@ -31,7 +33,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.20.0",
     "eslint-config-next": "^15.2.0",
-    "supabase": "^2.12.0",
+    "firebase-tools": "^14.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0"
   }

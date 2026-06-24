@@ -13,9 +13,11 @@ from app.models.schemas import (
     ModelCompareRequest,
     TestRunRequest,
 )
-from app.services.supabase_client import get_supabase
+from app.services.firestore_repo import count_dataset_images, get_labelling_job
+from app.services.firebase_client import get_db
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+jobs_router = APIRouter(prefix="/jobs", tags=["jobs"])
+api_router = APIRouter(prefix="/api", tags=["api"])
 
 
 async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
@@ -23,7 +25,36 @@ async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="Invalid worker API key")
 
 
-@router.post("/test-run", response_model=JobCreateResponse)
+def _resolve_project_for_job(job_id: str) -> str | None:
+    doc = get_db().collection("jobRegistry").document(job_id).get()
+    if not doc.exists:
+        return None
+    return doc.to_dict().get("projectId")
+
+
+def _job_to_response(project_id: str, job_id: str, d: dict) -> JobResponse:
+    queue_map = {
+        "test_run": "interactive",
+        "auto_label": "batch",
+        "model_compare": "compare",
+    }
+    return JobResponse(
+        id=UUID(job_id),
+        project_id=UUID(project_id),
+        job_type=d.get("jobType", "auto_label"),
+        queue_name=queue_map.get(d.get("jobType", ""), "batch"),
+        status=d.get("status", "queued"),
+        progress=d.get("progress", 0),
+        progress_message=d.get("progressMessage"),
+        total_items=d.get("totalItems", 0),
+        processed_items=d.get("processedItems", 0),
+        result=d.get("result"),
+        error_message=d.get("errorMessage"),
+    )
+
+
+@jobs_router.post("/test-run", response_model=JobCreateResponse)
+@api_router.post("/test-run", response_model=JobCreateResponse)
 async def create_test_run(
     body: TestRunRequest,
     _: None = Depends(verify_api_key),
@@ -53,20 +84,13 @@ async def create_test_run(
     )
 
 
-@router.post("/auto-label", response_model=JobCreateResponse)
+@jobs_router.post("/auto-label", response_model=JobCreateResponse)
+@api_router.post("/auto-label", response_model=JobCreateResponse)
 async def create_auto_label(
     body: AutoLabelRequest,
     _: None = Depends(verify_api_key),
 ):
-    sb = get_supabase()
-    files = (
-        sb.table("dataset_files")
-        .select("id", count="exact")
-        .eq("dataset_id", str(body.dataset_id))
-        .execute()
-    )
-    total = files.count or 0
-
+    total = count_dataset_images(str(body.project_id), str(body.dataset_id))
     model_ids = body.resolved_model_ids()
 
     job_id, queue, position = await submit_job(
@@ -88,7 +112,7 @@ async def create_auto_label(
     )
 
 
-@router.post("/model-compare", response_model=JobCreateResponse)
+@jobs_router.post("/model-compare", response_model=JobCreateResponse)
 async def create_model_compare(
     body: ModelCompareRequest,
     _: None = Depends(verify_api_key),
@@ -118,48 +142,20 @@ async def create_model_compare(
     )
 
 
-@router.get("/queues/stats")
+@jobs_router.get("/queues/stats")
 async def queue_stats(_: None = Depends(verify_api_key)):
     return queue_manager.queue_stats()
 
 
-@router.get("/{job_id}", response_model=JobResponse)
+@jobs_router.get("/{job_id}", response_model=JobResponse)
+@api_router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: UUID, _: None = Depends(verify_api_key)):
-    sb = get_supabase()
-    row = (
-        sb.table("inference_jobs")
-        .select("*")
-        .eq("id", str(job_id))
-        .single()
-        .execute()
-    )
-    if not row.data:
+    project_id = _resolve_project_for_job(str(job_id))
+    if not project_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    d = row.data
-    return JobResponse(
-        id=UUID(d["id"]),
-        project_id=UUID(d["project_id"]),
-        job_type=d["job_type"],
-        queue_name=d["queue_name"],
-        status=d["status"],
-        progress=d["progress"],
-        progress_message=d.get("progress_message"),
-        total_items=d.get("total_items", 0),
-        processed_items=d.get("processed_items", 0),
-        result=d.get("result"),
-        error_message=d.get("error_message"),
-    )
+    d = get_labelling_job(project_id, str(job_id))
+    if not d:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-
-@router.get("/{job_id}/items")
-async def get_job_items(job_id: UUID, _: None = Depends(verify_api_key)):
-    sb = get_supabase()
-    rows = (
-        sb.table("inference_job_items")
-        .select("*")
-        .eq("job_id", str(job_id))
-        .order("created_at")
-        .execute()
-    )
-    return {"items": rows.data or []}
+    return _job_to_response(project_id, str(job_id), d)

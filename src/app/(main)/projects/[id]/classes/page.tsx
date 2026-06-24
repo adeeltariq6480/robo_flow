@@ -1,7 +1,6 @@
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
+import * as classService from "@/lib/services/classService";
 import { ClassManager } from "@/components/classes/class-manager";
-import type { Class } from "@/lib/types/database";
 
 export default async function ClassesPage({
   params,
@@ -10,13 +9,7 @@ export default async function ClassesPage({
 }) {
   const { id } = await params;
   await getProject(id);
+  const classes = await classService.listClasses(id);
 
-  const supabase = createAdminClient();
-  const { data: classes } = await supabase
-    .from("classes")
-    .select("*")
-    .eq("project_id", id)
-    .order("sort_order", { ascending: true });
-
-  return <ClassManager projectId={id} classes={(classes ?? []) as Class[]} />;
+  return <ClassManager projectId={id} classes={classes} />;
 }

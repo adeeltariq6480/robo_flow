@@ -1,4 +1,7 @@
-const WORKER_URL = process.env.WORKER_URL ?? "http://localhost:8000";
+const WORKER_URL =
+  process.env.NEXT_PUBLIC_WORKER_API_URL ??
+  process.env.WORKER_URL ??
+  "http://localhost:8000";
 const WORKER_API_KEY = process.env.WORKER_API_KEY ?? "dev-worker-key";
 
 type JobType = "test_run" | "auto_label" | "model_compare";

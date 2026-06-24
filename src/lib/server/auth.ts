@@ -1,28 +1,13 @@
-import { createAdminClient } from "@/lib/supabase/admin";
-import type { Project } from "@/lib/types/database";
-import { notFound } from "next/navigation";
+import { getProjectById } from "@/lib/services/projectService";
+import { getSessionUser } from "@/lib/services/authService";
+import { redirect } from "next/navigation";
 
-export async function getProject(projectId: string): Promise<Project> {
-  if (
-    projectId === "new" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      projectId
-    )
-  ) {
-    notFound();
-  }
+export async function getProject(projectId: string) {
+  const project = await getProjectById(projectId);
+  if (!project) redirect("/");
+  return project;
+}
 
-  const supabase = createAdminClient();
-  const { data, error } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("getProject:", error.message);
-    notFound();
-  }
-  if (!data) notFound();
-  return data as Project;
+export async function getCurrentUser() {
+  return getSessionUser();
 }

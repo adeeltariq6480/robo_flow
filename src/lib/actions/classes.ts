@@ -1,134 +1,121 @@
 "use server";
 
-import { createAdminClient } from "@/lib/supabase/admin";
+import * as classService from "@/lib/services/classService";
 import { parseClassNamesInput } from "@/lib/classes/constants";
 import { revalidatePath } from "next/cache";
 import { CLASS_COLORS } from "@/lib/utils";
 
-export async function createClass(projectId: string, formData: FormData) {
-  const supabase = createAdminClient();
-  const name = (formData.get("name") as string)?.trim();
-  const description = (formData.get("description") as string)?.trim() || null;
-  const color = (formData.get("color") as string) || CLASS_COLORS[0];
+import type { ActionResult } from "@/lib/actions/types";
 
-  if (!name) return { error: "Class name is required" };
+export async function createClass(
+  projectId: string,
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const name = (formData.get("name") as string)?.trim();
+    const description = (formData.get("description") as string)?.trim() || null;
+    const color = (formData.get("color") as string) || CLASS_COLORS[0];
 
-  const { count } = await supabase
-    .from("classes")
-    .select("*", { count: "exact", head: true })
-    .eq("project_id", projectId);
+    if (!name) return { error: "Class name is required" };
 
-  const { error } = await supabase.from("classes").insert({
-    project_id: projectId,
-    name,
-    description,
-    color,
-    sort_order: count ?? 0,
-  });
+    const count = await classService.getClassCount(projectId);
+    await classService.createClass(projectId, {
+      name,
+      description,
+      color,
+      sortOrder: count,
+    });
 
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true };
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to create class" };
+  }
 }
 
-export async function createClassesBulk(projectId: string, formData: FormData) {
-  const supabase = createAdminClient();
-  const raw = (formData.get("names") as string) ?? "";
-  const names = parseClassNamesInput(raw);
+export async function createClassesBulk(
+  projectId: string,
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const raw = (formData.get("names") as string) ?? "";
+    const names = parseClassNamesInput(raw);
 
-  if (names.length === 0) {
-    return {
-      error:
-        "Enter at least one class name (one per line, comma-separated, or JSON array)",
-    };
+    if (names.length === 0) {
+      return {
+        error:
+          "Enter at least one class name (one per line, comma-separated, or JSON array)",
+      };
+    }
+
+    const startOrder = await classService.getClassCount(projectId);
+    const rows = names.map((name, i) => ({
+      name,
+      color: CLASS_COLORS[(startOrder + i) % CLASS_COLORS.length],
+      sortOrder: startOrder + i,
+    }));
+
+    await classService.createClassesBulk(projectId, rows);
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true, count: names.length };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to import classes" };
   }
-
-  const { count } = await supabase
-    .from("classes")
-    .select("*", { count: "exact", head: true })
-    .eq("project_id", projectId);
-
-  const startOrder = count ?? 0;
-  const rows = names.map((name, i) => ({
-    project_id: projectId,
-    name,
-    description: null,
-    color: CLASS_COLORS[(startOrder + i) % CLASS_COLORS.length],
-    sort_order: startOrder + i,
-  }));
-
-  const { error } = await supabase.from("classes").insert(rows);
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true, count: names.length };
 }
 
 export async function updateClass(
   projectId: string,
   classId: string,
   formData: FormData
-) {
-  const supabase = createAdminClient();
-  const name = (formData.get("name") as string)?.trim();
-  const description = (formData.get("description") as string)?.trim() || null;
-  const color = formData.get("color") as string;
+): Promise<ActionResult> {
+  try {
+    const name = (formData.get("name") as string)?.trim();
+    const description = (formData.get("description") as string)?.trim() || null;
+    const color = formData.get("color") as string;
 
-  if (!name) return { error: "Class name is required" };
+    if (!name) return { error: "Class name is required" };
 
-  const { error } = await supabase
-    .from("classes")
-    .update({ name, description, color })
-    .eq("id", classId)
-    .eq("project_id", projectId);
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true };
+    await classService.updateClass(projectId, classId, { name, description, color });
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to update class" };
+  }
 }
 
-export async function deleteClass(projectId: string, classId: string) {
-  const supabase = createAdminClient();
-
-  const { error } = await supabase
-    .from("classes")
-    .delete()
-    .eq("id", classId)
-    .eq("project_id", projectId);
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true };
+export async function deleteClass(
+  projectId: string,
+  classId: string
+): Promise<ActionResult> {
+  try {
+    await classService.deleteClass(projectId, classId);
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete class" };
+  }
 }
 
-export async function deleteClasses(projectId: string, classIds: string[]) {
-  if (classIds.length === 0) return { error: "No classes selected" };
-
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from("classes")
-    .delete()
-    .eq("project_id", projectId)
-    .in("id", classIds);
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true, count: classIds.length };
+export async function deleteClasses(
+  projectId: string,
+  classIds: string[]
+): Promise<ActionResult> {
+  try {
+    if (classIds.length === 0) return { error: "No classes selected" };
+    await classService.deleteClasses(projectId, classIds);
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true, count: classIds.length };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete classes" };
+  }
 }
 
-export async function deleteAllClasses(projectId: string) {
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from("classes")
-    .delete()
-    .eq("project_id", projectId);
-
-  if (error) return { error: error.message };
-
-  revalidatePath(`/projects/${projectId}/classes`);
-  return { success: true };
+export async function deleteAllClasses(projectId: string): Promise<ActionResult> {
+  try {
+    await classService.deleteAllClasses(projectId);
+    revalidatePath(`/projects/${projectId}/classes`);
+    return { success: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to delete classes" };
+  }
 }

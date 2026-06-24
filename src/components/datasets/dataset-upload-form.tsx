@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { registerDatasetFiles } from "@/lib/actions/datasets";
 import { prepareDatasetFileUpload } from "@/lib/actions/uploads";
-import { uploadFileToStorage } from "@/lib/upload/direct-storage";
+import { uploadFileToStorage } from "@/lib/upload/firebase-storage";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
@@ -93,6 +93,7 @@ export function DatasetUploadForm({
       fileSize: number;
       mimeType: string;
       classId?: string | null;
+      downloadUrl?: string;
     }[] = [];
 
     for (let i = 0; i < queue.length; i++) {
@@ -127,6 +128,7 @@ export function DatasetUploadForm({
         fileSize: file.size,
         mimeType: file.type,
         classId: classId && classId !== ALL_CLASS_ID ? classId : null,
+        downloadUrl: result.downloadUrl,
       });
 
       setProgress(Math.round(((i + 1) / queue.length) * 100));

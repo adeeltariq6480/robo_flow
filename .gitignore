@@ -47,3 +47,7 @@ worker/.venv/
 worker/.worker-tmp/
 .worker-tmp/
 .vercel
+
+# Firebase credentials — never commit
+*firebase-adminsdk*.json
+service-account.json

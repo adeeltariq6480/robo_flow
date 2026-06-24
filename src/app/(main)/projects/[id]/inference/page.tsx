@@ -1,7 +1,7 @@
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
+import * as modelService from "@/lib/services/modelService";
+import * as datasetService from "@/lib/services/datasetService";
 import { InferencePageClient } from "@/components/inference/inference-page-client";
-import type { Dataset } from "@/lib/types/database";
 import { toClientModels } from "@/lib/serialize/model";
 import type { DatasetFileOption } from "@/components/inference/test-run-panel";
 
@@ -12,45 +12,37 @@ export default async function InferencePage({
 }) {
   const { id } = await params;
   await getProject(id);
-  const supabase = createAdminClient();
 
-  const [modelsRes, datasetsRes, filesRes] = await Promise.all([
-    supabase.from("models").select("*").eq("project_id", id).order("created_at", { ascending: false }),
-    supabase.from("datasets").select("*").eq("project_id", id).order("name"),
-    supabase
-      .from("dataset_files")
-      .select("id, file_name, dataset_id, mime_type, datasets(name)")
-      .eq("project_id", id)
-      .order("created_at", { ascending: false }),
+  const [models, datasets] = await Promise.all([
+    modelService.listModels(id),
+    datasetService.listDatasets(id),
   ]);
 
-  const models = toClientModels(modelsRes.data);
-  const datasets = (datasetsRes.data ?? []) as Dataset[];
-
-  const imageFiles: DatasetFileOption[] = (filesRes.data ?? [])
-    .filter((f) => {
-      const mime = f.mime_type ?? "";
-      const name = f.file_name?.toLowerCase() ?? "";
-      return (
-        mime.startsWith("image/") ||
-        /\.(jpg|jpeg|png|webp|bmp|gif)$/.test(name)
-      );
-    })
-    .map((f) => {
-      const ds = f.datasets as { name: string } | { name: string }[] | null;
-      const datasetName = Array.isArray(ds) ? ds[0]?.name : ds?.name;
-      return {
-        id: f.id,
-        file_name: f.file_name,
-        dataset_id: f.dataset_id,
-        dataset_name: datasetName ?? "Dataset",
-      };
-    });
+  const imageFiles: DatasetFileOption[] = [];
+  for (const dataset of datasets) {
+    const images = await datasetService.listImagesByDataset(id, dataset.id);
+    for (const img of images) {
+      const mime = img.mimeType ?? "";
+      const name = img.fileName?.toLowerCase() ?? "";
+      if (
+        !mime.startsWith("image/") &&
+        !/\.(jpg|jpeg|png|webp|bmp|gif)$/.test(name)
+      ) {
+        continue;
+      }
+      imageFiles.push({
+        id: img.id,
+        file_name: img.fileName,
+        dataset_id: img.datasetId,
+        dataset_name: dataset.name,
+      });
+    }
+  }
 
   return (
     <InferencePageClient
       projectId={id}
-      models={models}
+      models={toClientModels(models)}
       datasets={datasets}
       files={imageFiles}
     />

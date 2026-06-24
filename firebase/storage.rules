@@ -1,0 +1,35 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userRole() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userRole() == 'admin';
+    }
+
+    function projectPath(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId));
+    }
+
+    function isProjectCreator(projectId) {
+      return isSignedIn() && projectPath(projectId).data.createdBy == request.auth.uid;
+    }
+
+    function canAccessProject(projectId) {
+      return isAdmin() || isProjectCreator(projectId) || isSignedIn();
+    }
+
+    match /projects/{projectId}/{allPaths=**} {
+      allow read: if canAccessProject(projectId);
+      allow write: if isAdmin() || isProjectCreator(projectId) ||
+        (isSignedIn() && userRole() in ['annotator', 'reviewer', 'admin']);
+    }
+  }
+}

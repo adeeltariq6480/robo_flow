@@ -34,7 +34,7 @@ export async function GET(
 
   try {
     const artifact = await buildExportArtifact(loaded.data, format);
-    return new NextResponse(new Uint8Array(artifact.body), {
+    return new NextResponse(new Uint8Array(artifact.buffer), {
       status: 200,
       headers: {
         "Content-Type": artifact.mimeType,

@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getProject } from "@/lib/server/auth";
+import * as datasetService from "@/lib/services/datasetService";
+import * as modelService from "@/lib/services/modelService";
 import { AutoLabelPanel } from "@/components/inference/auto-label-panel";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import type { Dataset } from "@/lib/types/database";
 import { toClientModels } from "@/lib/serialize/model";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
@@ -17,19 +17,9 @@ export default async function DatasetLabelPage({
   const { id: projectId, datasetId } = await params;
   await getProject(projectId);
 
-  const supabase = createAdminClient();
-  const [{ data: dataset }, { data: models }] = await Promise.all([
-    supabase
-      .from("datasets")
-      .select("*")
-      .eq("id", datasetId)
-      .eq("project_id", projectId)
-      .single(),
-    supabase
-      .from("models")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false }),
+  const [dataset, models] = await Promise.all([
+    datasetService.getDataset(projectId, datasetId),
+    modelService.listModels(projectId),
   ]);
 
   if (!dataset) notFound();
@@ -79,7 +69,7 @@ export default async function DatasetLabelPage({
         <AutoLabelPanel
           projectId={projectId}
           models={modelList}
-          datasets={[dataset as Dataset]}
+          datasets={[dataset]}
           defaultDatasetId={datasetId}
           lockDataset
           reviewHref={reviewHref}

@@ -1,17 +1,21 @@
 import asyncio
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.jobs import update_job
 from app.models.schemas import DetectionBox, JobConfig, JobStatus
 from app.services.detection_merge import merge_detections
+from app.services.firestore_repo import (
+    classify_queue,
+    list_dataset_images,
+    save_image_annotations,
+    update_image_queue,
+)
 from app.services.storage import (
     build_class_name_map,
     download_dataset_image,
     download_model,
     get_project_class_map,
 )
-from app.services.supabase_client import get_supabase
 from app.services.yolo_inference import run_yolo_inference
 
 
@@ -40,32 +44,28 @@ async def run_auto_label(
     project_id: UUID,
     data: dict,
     config: JobConfig,
+    project_id_str: str,
 ) -> dict:
     model_ids = _resolve_model_ids(data)
     dataset_id = UUID(data["dataset_id"])
-    sb = get_supabase()
 
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
-    files = (
-        sb.table("dataset_files")
-        .select("id, file_path, file_name, mime_type")
-        .eq("dataset_id", str(dataset_id))
-        .eq("project_id", str(project_id))
-        .execute()
-    )
-    file_list = files.data or []
+    file_list = list_dataset_images(project_id_str, str(dataset_id))
     total = len(file_list)
 
     if total == 0:
         raise ValueError("Dataset has no files to label")
+
+    low_threshold = int(getattr(config, "low_label_threshold", 1) or 1)
 
     await update_job(
         job_id,
         progress=2,
         progress_message=f"Loading {len(model_ids)} model(s)…",
         processed_items=0,
+        project_id=project_id_str,
     )
 
     model_paths: list[tuple[UUID, object]] = []
@@ -75,6 +75,7 @@ async def run_auto_label(
             job_id,
             progress=pct,
             progress_message=f"Downloading model {i + 1}/{len(model_ids)}…",
+            project_id=project_id_str,
         )
         model_path = await asyncio.to_thread(download_model, model_id, project_id)
         model_paths.append((model_id, model_path))
@@ -90,29 +91,21 @@ async def run_auto_label(
         await update_job(
             job_id,
             progress=pct,
-            progress_message=f"Labeling {idx + 1}/{total}: {file_row['file_name']} ({len(model_ids)} models)",
+            progress_message=f"Labeling {idx + 1}/{total}: {file_row['fileName']} ({len(model_ids)} models)",
             processed_items=idx,
+            project_id=project_id_str,
         )
 
-        item_row = {
-            "job_id": str(job_id),
-            "dataset_file_id": str(file_id),
-            "status": JobStatus.RUNNING.value,
-        }
-        item = sb.table("inference_job_items").insert(item_row).execute()
-        item_id = item.data[0]["id"]
-
         try:
-            if not (file_row.get("mime_type") or "").startswith("image/"):
-                mime = file_row.get("file_name", "")
-                if not any(
-                    mime.lower().endswith(ext)
-                    for ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-                ):
-                    raise ValueError("Not an image file")
+            mime = file_row.get("mimeType") or ""
+            name = file_row.get("fileName", "").lower()
+            if not mime.startswith("image/") and not any(
+                name.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+            ):
+                raise ValueError("Not an image file")
 
             image_path = await asyncio.to_thread(
-                download_dataset_image, file_row["file_path"], file_id
+                download_dataset_image, file_row["storagePath"], file_id
             )
 
             combined: list[DetectionBox] = []
@@ -134,31 +127,21 @@ async def run_auto_label(
             annotations = [d.model_dump() for d in merged]
 
             if config.save_to_dataset:
-                primary_class_id = None
-                if merged:
-                    primary_class_id = merged[0].project_class_id
-
-                sb.table("dataset_files").update(
-                    {
-                        "annotations": annotations,
-                        "auto_labeled_at": datetime.now(timezone.utc).isoformat(),
-                        "class_id": primary_class_id,
-                    }
-                ).eq("id", str(file_id)).execute()
-
-            sb.table("inference_job_items").update(
-                {
-                    "status": JobStatus.COMPLETED.value,
-                    "progress": 100,
-                    "result": {
-                        "detections": annotations,
-                        "count": len(annotations),
-                        "per_model": per_model,
-                        "models_used": len(model_ids),
-                    },
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ).eq("id", item_id).execute()
+                save_image_annotations(
+                    project_id_str,
+                    str(file_id),
+                    annotations,
+                    job_id=str(job_id),
+                    source="auto",
+                    auto_labeled=True,
+                )
+                queue_type, reason = classify_queue(
+                    annotations,
+                    confidence=config.confidence,
+                    low_label_threshold=low_threshold,
+                    per_model=per_model if len(model_ids) > 1 else None,
+                )
+                update_image_queue(project_id_str, str(file_id), queue_type, reason)
 
             labeled += 1
             all_results.append(
@@ -171,15 +154,12 @@ async def run_auto_label(
 
         except Exception as exc:
             failed += 1
-            sb.table("inference_job_items").update(
-                {
-                    "status": JobStatus.FAILED.value,
-                    "error_message": str(exc),
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ).eq("id", item_id).execute()
+            logger_msg = str(exc)
+            all_results.append({"file_id": str(file_id), "error": logger_msg})
 
-    await update_job(job_id, processed_items=total)
+    await update_job(
+        job_id, processed_items=total, project_id=project_id_str
+    )
 
     return {
         "job_type": "auto_label",

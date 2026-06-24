@@ -11,37 +11,41 @@ export default function SetupErrorPage() {
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-500" />
           <div>
             <h1 className="text-lg font-semibold text-slate-900">
-              Supabase not configured
+              Firebase not configured
             </h1>
             <p className="mt-2 text-sm text-slate-600">
-              This app uses <strong>Supabase only</strong> — there is no Firebase
-              in this project. The Internal Server Error happens when environment
-              variables are missing or misnamed.
+              Label AI uses <strong>Firebase</strong> for authentication, database,
+              and storage. This error appears when environment variables are missing
+              or still contain placeholder values.
             </p>
             <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-slate-600">
               <li>
-                Create a file named{" "}
+                Create{" "}
                 <code className="rounded bg-slate-100 px-1">.env.local</code> in the
-                project root (same folder as package.json)
+                project root
               </li>
               <li>
-                <strong>Do not</strong> use{" "}
-                <code className="rounded bg-slate-100 px-1">.env.example</code> — Next.js
-                does not load it automatically
+                Copy variables from{" "}
+                <code className="rounded bg-slate-100 px-1">.env.local.example</code>
+              </li>
+              <li>
+                Add Firebase client config from Firebase Console → Project settings
               </li>
               <li>
                 Add{" "}
-                <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_SUPABASE_URL</code>{" "}
-                and{" "}
-                <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>{" "}
-                from Supabase Dashboard → Settings → API
+                <code className="rounded bg-slate-100 px-1">
+                  FIREBASE_SERVICE_ACCOUNT_JSON
+                </code>{" "}
+                for server-side operations (single-line JSON)
               </li>
-              <li>
-                Restart: <code className="rounded bg-slate-100 px-1">npm run dev</code>
-              </li>
+              <li>Restart the dev server after saving</li>
             </ol>
-            <Link href="/" className="mt-6 inline-block">
-              <Button variant="secondary">Back to home</Button>
+            <p className="mt-4 text-sm text-slate-600">
+              See <code className="rounded bg-slate-100 px-1">docs/firebase-migration-plan.md</code>{" "}
+              for full setup instructions.
+            </p>
+            <Link href="/login" className="mt-4 inline-block">
+              <Button variant="secondary">Back to login</Button>
             </Link>
           </div>
         </div>
