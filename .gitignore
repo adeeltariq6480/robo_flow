@@ -15,6 +15,7 @@ build/
 .env.example
 .env.local.example
 .env.*.local
+.env.vercel
 
 # Debug
 npm-debug.log*

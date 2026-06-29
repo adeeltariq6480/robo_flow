@@ -15,7 +15,8 @@
     "lint": "next lint",
     "emulators": "firebase emulators:start --only auth,firestore,storage --project label-ai-local",
     "dev:emulator": "node scripts/dev-with-emulator.mjs",
-    "check:firebase": "node scripts/check-firebase.mjs"
+    "check:firebase": "node scripts/check-firebase.mjs",
+    "sync:vercel": "node scripts/sync-vercel-env.mjs"
   },
   "dependencies": {
     "firebase": "^12.15.0",
@@ -25,6 +26,9 @@
     "next": "^15.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "overrides": {
+    "jose": "5.9.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
