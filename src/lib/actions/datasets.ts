@@ -15,13 +15,15 @@ export async function createDataset(
 
   if (!name) return { error: "Dataset name is required" };
 
+  let newId: string;
   try {
-    const id = await datasetService.createDataset(projectId, { name, description });
-    revalidatePath(`/projects/${projectId}/datasets`);
-    redirect(`/projects/${projectId}/datasets/${id}/upload`);
+    newId = await datasetService.createDataset(projectId, { name, description });
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to create dataset" };
   }
+
+  revalidatePath(`/projects/${projectId}/datasets`);
+  redirect(`/projects/${projectId}/datasets/${newId}/upload`);
 }
 
 export async function deleteDataset(

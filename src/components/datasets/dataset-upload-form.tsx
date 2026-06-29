@@ -263,7 +263,7 @@ export function DatasetUploadForm({
             )}
 
             <div className="mt-4 flex gap-3">
-              <Button onClick={handleUpload} disabled={uploading}>
+              <Button onClick={handleUpload} loading={uploading}>
                 {uploading ? "Uploading…" : `Upload ${queue.length} file${queue.length !== 1 ? "s" : ""}`}
               </Button>
               <Button

@@ -230,6 +230,7 @@ export function AnnotationReviewQueue({
           onDeleteSelected={handleDeleteSelected}
           onDeleteAll={handleDeleteAll}
           disabled={loading}
+          loading={loading}
           allSelected={allSelected}
           onToggleSelectAll={toggleSelectAll}
         />

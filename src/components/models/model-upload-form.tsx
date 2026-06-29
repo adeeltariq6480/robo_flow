@@ -234,7 +234,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
             </div>
           )}
 
-          <Button type="submit" disabled={uploading || !file}>
+          <Button type="submit" loading={uploading} disabled={!file}>
             {uploading ? "Uploading…" : "Upload model"}
           </Button>
         </form>

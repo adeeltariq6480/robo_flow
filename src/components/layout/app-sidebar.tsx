@@ -27,14 +27,7 @@ function resolveProjectId(pathname: string): string | undefined {
   const match = pathname.match(/^\/projects\/([^/]+)/);
   const segment = match?.[1];
   if (!segment || RESERVED_PROJECT_SEGMENTS.has(segment)) return undefined;
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      segment
-    )
-  ) {
-    return undefined;
-  }
-  return segment;
+  return decodeURIComponent(segment);
 }
 
 export function AppSidebar() {

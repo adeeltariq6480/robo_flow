@@ -494,27 +494,27 @@ export function AnnotationEditor({
         )}
 
         <div className="flex flex-col gap-2">
-          <Button onClick={() => onSave(boxes)} disabled={saving}>
-            <Save className="h-4 w-4" />
-            Save annotations
+          <Button onClick={() => onSave(boxes)} loading={saving}>
+            {!saving && <Save className="h-4 w-4" />}
+            {saving ? "Saving…" : "Save annotations"}
           </Button>
           <Button
             variant="secondary"
             onClick={() => onApprove(boxes)}
-            disabled={saving}
+            loading={saving}
             className="!border-green-300 !text-green-700 hover:!bg-green-50"
           >
-            <Check className="h-4 w-4" />
-            Approve
+            {!saving && <Check className="h-4 w-4" />}
+            {saving ? "Saving…" : "Approve"}
           </Button>
           <Button
             variant="secondary"
             onClick={() => onReject(boxes)}
-            disabled={saving}
+            loading={saving}
             className="!border-red-300 !text-red-700 hover:!bg-red-50"
           >
-            <X className="h-4 w-4" />
-            Reject
+            {!saving && <X className="h-4 w-4" />}
+            {saving ? "Saving…" : "Reject"}
           </Button>
         </div>
 

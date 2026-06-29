@@ -167,8 +167,8 @@ export function DatasetExportPanel({
             </div>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Button onClick={handleDownload} disabled={loading}>
-                <Download className="h-4 w-4" />
+              <Button onClick={handleDownload} loading={loading}>
+                {!loading && <Download className="h-4 w-4" />}
                 {loading ? "Preparing zip…" : `Download ${EXPORT_FORMAT_LABELS[format].label}`}
               </Button>
               <Link

@@ -10,6 +10,7 @@ interface BulkDeleteToolbarProps {
   onDeleteSelected: () => void;
   onDeleteAll: () => void;
   disabled?: boolean;
+  loading?: boolean;
   showSelectAll?: boolean;
   allSelected?: boolean;
   onToggleSelectAll?: () => void;
@@ -22,6 +23,7 @@ export function BulkDeleteToolbar({
   onDeleteSelected,
   onDeleteAll,
   disabled = false,
+  loading = false,
   showSelectAll = true,
   allSelected = false,
   onToggleSelectAll,
@@ -57,9 +59,10 @@ export function BulkDeleteToolbar({
               variant="secondary"
               onClick={onDeleteSelected}
               disabled={disabled}
+              loading={loading}
               className="!border-red-200 !text-red-700 hover:!bg-red-50"
             >
-              <Trash2 className="h-4 w-4" />
+              {!loading && <Trash2 className="h-4 w-4" />}
               Delete
             </Button>
             <Button
@@ -67,9 +70,10 @@ export function BulkDeleteToolbar({
               variant="secondary"
               onClick={onDeleteAll}
               disabled={disabled}
+              loading={loading}
               className="!border-red-300 !text-red-800 hover:!bg-red-100"
             >
-              <Trash2 className="h-4 w-4" />
+              {!loading && <Trash2 className="h-4 w-4" />}
               Delete all
             </Button>
           </>

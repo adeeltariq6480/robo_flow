@@ -118,6 +118,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
           onDeleteSelected={handleDeleteSelected}
           onDeleteAll={handleDeleteAll}
           disabled={loading}
+          loading={loading}
           allSelected={allSelected}
           onToggleSelectAll={toggleSelectAll}
         />
@@ -175,10 +176,10 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
                 <Button
                   variant="ghost"
                   onClick={() => handleDeleteOne(model.id)}
-                  disabled={loading}
+                  loading={loading}
                   className="text-red-600 hover:bg-red-50"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  {!loading && <Trash2 className="h-4 w-4" />}
                 </Button>
               </li>
             ))}

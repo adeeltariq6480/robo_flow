@@ -136,7 +136,7 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
               placeholder="What does this dataset contain?"
             />
             <div className="flex gap-2">
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" loading={loading}>
                 <Check className="h-4 w-4" />
                 Create & upload
               </Button>
@@ -167,6 +167,7 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
           onDeleteSelected={handleDeleteSelected}
           onDeleteAll={handleDeleteAll}
           disabled={loading}
+          loading={loading}
           allSelected={allSelected}
           onToggleSelectAll={toggleSelectAll}
         />
@@ -251,10 +252,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
                   <Button
                     variant="ghost"
                     onClick={() => handleDeleteOne(dataset.id)}
-                    disabled={loading}
+                    loading={loading}
                     className="text-red-600 hover:bg-red-50"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {!loading && <Trash2 className="h-4 w-4" />}
                   </Button>
                 </div>
               </li>

@@ -307,7 +307,7 @@ export function ProjectDropProvider({
                 Cancel
               </Button>
               {modal.kind === "images" && modal.datasets.length > 0 && (
-                <Button onClick={confirmImageUpload} disabled={modal.loading}>
+                <Button onClick={confirmImageUpload} loading={modal.loading}>
                   {modal.loading ? "Opening…" : "Continue"}
                 </Button>
               )}

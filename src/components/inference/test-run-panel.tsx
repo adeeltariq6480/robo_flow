@@ -120,8 +120,8 @@ export function TestRunPanel({ projectId, models, files }: TestRunPanelProps) {
           onIouChange={setIou}
         />
 
-        <Button onClick={handleRun} disabled={loading || (!!jobId && !completedJob)}>
-          <Play className="h-4 w-4" />
+        <Button onClick={handleRun} loading={loading} disabled={!!jobId && !completedJob}>
+          {!loading && <Play className="h-4 w-4" />}
           {loading ? "Submitting…" : "Run test"}
         </Button>
 

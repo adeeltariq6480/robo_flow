@@ -13,29 +13,31 @@ export async function createProject(formData: FormData): Promise<ActionResult | 
 
   if (!name) return { error: "Project name is required" };
 
+  let newId: string;
   try {
     const user = await getSessionUser();
-    const id = await projectService.createProject({
+    newId = await projectService.createProject({
       name,
       description,
       createdBy: user?.uid ?? null,
     });
-
-    revalidatePath("/");
-    redirect(`/projects/${id}`);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to create project" };
   }
+
+  revalidatePath("/");
+  redirect(`/projects/${newId}`);
 }
 
 export async function deleteProject(projectId: string): Promise<ActionResult | void> {
   try {
     await projectService.deleteProject(projectId);
-    revalidatePath("/");
-    redirect("/");
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete project" };
   }
+
+  revalidatePath("/");
+  redirect("/");
 }
 
 export async function deleteProjects(projectIds: string[]): Promise<ActionResult> {

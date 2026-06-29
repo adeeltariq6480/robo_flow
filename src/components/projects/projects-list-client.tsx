@@ -13,7 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
-import { FolderKanban, Plus, Trash2 } from "lucide-react";
+import { FolderKanban, Loader2, Plus, Trash2 } from "lucide-react";
 
 interface ProjectsListClientProps {
   projects: Project[];
@@ -23,6 +23,7 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const allSelected = projects.length > 0 && selected.size === projects.length;
@@ -71,7 +72,13 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   async function handleDeleteOne(projectId: string) {
     if (!confirm("Delete this project and all its data?")) return;
     setLoading(true);
-    await deleteProject(projectId);
+    setDeletingId(projectId);
+    const result = await deleteProject(projectId);
+    if (result?.error) {
+      setError(result.error);
+      setDeletingId(null);
+      setLoading(false);
+    }
   }
 
   return (
@@ -120,6 +127,7 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
             onDeleteSelected={handleDeleteSelected}
             onDeleteAll={handleDeleteAll}
             disabled={loading}
+            loading={loading}
             allSelected={allSelected}
             onToggleSelectAll={toggleSelectAll}
           />
@@ -140,10 +148,14 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
                     type="button"
                     onClick={() => handleDeleteOne(project.id)}
                     disabled={loading}
-                    className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                    className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                     title="Delete project"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {deletingId === project.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
                 <Link href={`/projects/${project.id}`} className="block">

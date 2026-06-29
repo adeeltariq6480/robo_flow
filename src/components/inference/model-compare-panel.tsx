@@ -140,8 +140,8 @@ export function ModelComparePanel({ projectId, models, files }: ModelComparePane
           onIouChange={setIou}
         />
 
-        <Button onClick={handleCompare} disabled={loading}>
-          <GitCompare className="h-4 w-4" />
+        <Button onClick={handleCompare} loading={loading}>
+          {!loading && <GitCompare className="h-4 w-4" />}
           {loading ? "Submitting…" : "Compare models"}
         </Button>
 

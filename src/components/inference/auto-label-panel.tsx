@@ -155,9 +155,10 @@ export function AutoLabelPanel({
 
         <Button
           onClick={handleRun}
-          disabled={loading || !!jobId || selectedModelIds.length === 0}
+          loading={loading}
+          disabled={!!jobId || selectedModelIds.length === 0}
         >
-          <Tags className="h-4 w-4" />
+          {!loading && <Tags className="h-4 w-4" />}
           {loading
             ? "Submitting…"
             : lockDataset

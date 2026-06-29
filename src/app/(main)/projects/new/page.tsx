@@ -47,7 +47,7 @@ export default function NewProjectPage() {
           <Input label="Project name" name="name" placeholder="e.g. Assembly Line QC" required autoFocus />
           <Textarea label="Description (optional)" name="description" rows={3} />
           <div className="flex gap-3 pt-2">
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" loading={loading}>
               {loading ? "Creating…" : "Create project"}
             </Button>
             <Link href="/">

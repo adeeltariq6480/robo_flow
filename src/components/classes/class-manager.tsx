@@ -207,7 +207,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
               autoFocus
             />
             <div className="flex gap-2">
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" loading={loading}>
                 <Check className="h-4 w-4" />
                 Add all
               </Button>
@@ -230,7 +230,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
           >
             <ClassFormFields />
             <div className="flex gap-2">
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" loading={loading}>
                 <Check className="h-4 w-4" />
                 Save
               </Button>
@@ -253,6 +253,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
           onDeleteSelected={handleDeleteSelected}
           onDeleteAll={handleDeleteAll}
           disabled={loading}
+          loading={loading}
           allSelected={allSelected}
           onToggleSelectAll={toggleSelectAll}
         />
@@ -276,7 +277,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
                       defaultColor={cls.color}
                     />
                     <div className="flex gap-2">
-                      <Button type="submit" disabled={loading}>
+                      <Button type="submit" loading={loading}>
                         Save
                       </Button>
                       <Button
