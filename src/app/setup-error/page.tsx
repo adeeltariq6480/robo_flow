@@ -44,8 +44,8 @@ export default function SetupErrorPage() {
               See <code className="rounded bg-slate-100 px-1">docs/firebase-migration-plan.md</code>{" "}
               for full setup instructions.
             </p>
-            <Link href="/login" className="mt-4 inline-block">
-              <Button variant="secondary">Back to login</Button>
+            <Link href="/" className="mt-4 inline-block">
+              <Button variant="secondary">Back to app</Button>
             </Link>
           </div>
         </div>

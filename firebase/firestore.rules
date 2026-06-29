@@ -1,65 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function userDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function isAdmin() {
-      return isSignedIn() && userDoc().data.role == 'admin';
-    }
-
-    function isProjectCreator(projectId) {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/projects/$(projectId)).data.createdBy == request.auth.uid;
-    }
-
-    function canReadProject(projectId) {
-      return isAdmin() || isProjectCreator(projectId) || isSignedIn();
-    }
-
-    function canWriteProject(projectId) {
-      return isAdmin() || isProjectCreator(projectId);
-    }
-
-    function canAnnotate(projectId) {
-      return canWriteProject(projectId) ||
-        (isSignedIn() && userDoc().data.role in ['annotator', 'reviewer', 'admin']);
-    }
-
-    function canReview(projectId) {
-      return canWriteProject(projectId) ||
-        (isSignedIn() && userDoc().data.role in ['reviewer', 'admin']);
-    }
-
-    match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-    }
-
-    match /projects/{projectId} {
-      allow read: if canReadProject(projectId);
-      allow create: if isSignedIn();
-      allow update, delete: if canWriteProject(projectId);
-
-      match /{subcollection}/{docId} {
-        allow read: if canReadProject(projectId);
-        allow create: if canAnnotate(projectId);
-        allow update: if canAnnotate(projectId) || canReview(projectId);
-        allow delete: if canWriteProject(projectId);
-      }
-    }
-
-    // Worker job lookup index (written by Python worker via Admin SDK)
-    match /jobRegistry/{jobId} {
-      allow read: if isSignedIn();
-      allow write: if false;
+    // No-auth mode: app runs without login. Server actions and the Python
+    // worker use the Firebase Admin SDK (which bypasses these rules anyway).
+    // Client-side access is open so the UI works without authentication.
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }

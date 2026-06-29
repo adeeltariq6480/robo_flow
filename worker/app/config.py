@@ -17,6 +17,14 @@ class Settings(BaseSettings):
             "FIREBASE_STORAGE_BUCKET", "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET"
         )
     )
+    firebase_service_account_json: str = Field(
+        default="",
+        validation_alias=AliasChoices("FIREBASE_SERVICE_ACCOUNT_JSON"),
+    )
+    google_application_credentials: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
+    )
 
     worker_host: str = "0.0.0.0"
     worker_port: int = Field(

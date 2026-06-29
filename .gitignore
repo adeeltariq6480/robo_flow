@@ -51,3 +51,4 @@ worker/.worker-tmp/
 # Firebase credentials — never commit
 *firebase-adminsdk*.json
 service-account.json
+worker/service-account.json

@@ -7,6 +7,11 @@ import {
   getFirebaseStorageBucket,
   useFirebaseEmulator,
 } from "@/lib/firebase/config";
+import {
+  getCompatDb,
+  getCompatStorage,
+  useClientSdkOnServer,
+} from "@/lib/firebase/client-compat";
 
 function ensureEmulatorEnv() {
   if (!useFirebaseEmulator()) return;
@@ -80,10 +85,16 @@ export function getAdminApp(): App {
 }
 
 export function getAdminDb(): Firestore {
+  if (useClientSdkOnServer()) {
+    return getCompatDb() as unknown as Firestore;
+  }
   return getFirestore(getAdminApp());
 }
 
 export function getAdminStorage(): Storage {
+  if (useClientSdkOnServer()) {
+    return getCompatStorage() as unknown as Storage;
+  }
   return getStorage(getAdminApp());
 }
 
