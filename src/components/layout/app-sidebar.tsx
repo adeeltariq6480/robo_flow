@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LabelAILogo } from "@/components/layout/label-ai-logo";
@@ -12,6 +13,8 @@ import {
   LayoutDashboard,
   Zap,
 } from "lucide-react";
+
+const LAST_PROJECT_KEY = "labelai:lastProjectId";
 
 const projectLinks = [
   { suffix: "", label: "Overview", icon: LayoutDashboard },
@@ -33,8 +36,30 @@ function resolveProjectId(pathname: string): string | undefined {
 export function AppSidebar() {
   const pathname = usePathname() ?? "";
 
-  const projectId = resolveProjectId(pathname);
+  const activeProjectId = resolveProjectId(pathname);
   const isNewProject = pathname === "/projects/new";
+
+  const [lastProjectId, setLastProjectId] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (activeProjectId) {
+      setLastProjectId(activeProjectId);
+      try {
+        localStorage.setItem(LAST_PROJECT_KEY, activeProjectId);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      try {
+        const stored = localStorage.getItem(LAST_PROJECT_KEY);
+        if (stored) setLastProjectId(stored);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [activeProjectId]);
+
+  const projectId = activeProjectId ?? lastProjectId;
 
   const linkClass = (active: boolean) =>
     `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -65,7 +90,7 @@ export function AppSidebar() {
         {projectId && (
           <>
             <p className="mb-2 mt-6 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Current project
+              {activeProjectId ? "Current project" : "Recent project"}
             </p>
             {projectLinks.map(({ suffix, label, icon: Icon }) => {
               const href = `/projects/${projectId}${suffix}`;
