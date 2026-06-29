@@ -164,7 +164,22 @@ Open <http://localhost:3000>. The app opens straight to the **project list** —
 | POST | `/api/reject-image` | Reject image annotations |
 | POST | `/api/export` | Export approved labels → Hugging Face |
 
-### Review queues
+## 7. Deploy frontend on Vercel
+
+1. Deploy the **FastAPI worker first** (see section 4) on a public host and note its URL,
+   e.g. `https://your-api.railway.app`.
+2. In **Vercel → Project → Settings → Environment Variables**, set:
+   ```bash
+   NEXT_PUBLIC_WORKER_API_URL=https://your-api.railway.app
+   ```
+   **Do not use `http://localhost:8000` in production** — Vercel serverless functions
+   cannot reach your laptop; that causes a 500 error on page load.
+3. Remove obsolete variables if present (`FIREBASE_SERVICE_ACCOUNT_JSON`,
+   `NEXT_PUBLIC_FIREBASE_*`, etc.) — the frontend no longer uses Firebase directly.
+4. Redeploy after changing env vars.
+
+If the backend URL is wrong, the home page shows a **Backend not reachable** setup
+card instead of crashing.
 
 After auto-labelling, each image is placed into one of:
 `good`, `no_label`, `low_label`, `low_confidence`, `conflict`, `class_missing`.
