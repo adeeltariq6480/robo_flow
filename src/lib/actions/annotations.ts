@@ -40,12 +40,15 @@ export async function getDatasetFileForReview(
   );
 }
 
-export async function getSignedDatasetImageUrl(filePath: string) {
+export async function getSignedDatasetImageUrl(
+  projectId: string,
+  imageId: string
+) {
   try {
-    const url = await annotationService.getSignedImageUrl(filePath);
+    const url = annotationService.getSignedImageUrl(projectId, imageId);
     return { url };
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Could not sign URL" };
+    return { error: e instanceof Error ? e.message : "Could not load image URL" };
   }
 }
 

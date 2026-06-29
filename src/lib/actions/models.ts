@@ -2,39 +2,8 @@
 
 import * as modelService from "@/lib/services/modelService";
 import { revalidatePath } from "next/cache";
-import type { ModelFormat } from "@/lib/types/database";
 
 import type { ActionResult } from "@/lib/actions/types";
-
-export async function registerModel(
-  projectId: string,
-  data: {
-    name: string;
-    description?: string | null;
-    filePath: string;
-    fileSize: number;
-    format: ModelFormat;
-    version: string;
-    downloadUrl?: string;
-  }
-): Promise<ActionResult> {
-  try {
-    await modelService.registerModel(projectId, {
-      name: data.name,
-      description: data.description,
-      storagePath: data.filePath,
-      downloadUrl: data.downloadUrl ?? "",
-      fileSize: data.fileSize,
-      format: data.format,
-      version: data.version,
-    });
-
-    revalidatePath(`/projects/${projectId}/models`);
-    return { success: true };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : "Failed to register model" };
-  }
-}
 
 export async function deleteModel(
   projectId: string,

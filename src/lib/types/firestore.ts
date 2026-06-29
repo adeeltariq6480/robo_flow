@@ -1,5 +1,3 @@
-export type UserRole = "admin" | "annotator" | "reviewer" | "viewer";
-
 export type QueueType =
   | "good"
   | "no_label"
@@ -19,21 +17,12 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
-export interface FirestoreUser {
-  uid: string;
-  fullName: string;
-  email: string;
-  role: UserRole;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface FirestoreProject {
   id: string;
   name: string;
   description: string | null;
   annotationType: string;
-  createdBy: string | null;
+  createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -53,7 +42,9 @@ export interface FirestoreDataset {
   name: string;
   description?: string | null;
   totalImages: number;
-  totalSizeBytes: number;
+  totalSizeBytes?: number;
+  hfRepo?: string | null;
+  hfFolderPath?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -62,8 +53,8 @@ export interface FirestoreImage {
   id: string;
   datasetId: string;
   fileName: string;
-  storagePath: string;
-  downloadUrl: string;
+  hfRepo?: string | null;
+  hfPath?: string | null;
   mimeType?: string | null;
   fileSize?: number;
   width?: number;
@@ -79,8 +70,8 @@ export interface FirestoreModel {
   modelName: string;
   modelVersion: string;
   modelType: string;
-  storagePath: string;
-  downloadUrl: string;
+  hfRepo?: string | null;
+  hfPath?: string | null;
   classMapping?: Record<string, string>;
   fileSize?: number;
   description?: string | null;

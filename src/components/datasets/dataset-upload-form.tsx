@@ -2,9 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { registerDatasetFiles } from "@/lib/actions/datasets";
-import { prepareDatasetFileUpload } from "@/lib/actions/uploads";
-import { uploadFileToStorage } from "@/lib/upload/firebase-storage";
+import { uploadImages, uploadZip } from "@/lib/api/uploads";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
@@ -87,60 +85,31 @@ export function DatasetUploadForm({
     setError(null);
     setProgress(0);
 
-    const uploaded: {
-      fileName: string;
-      filePath: string;
-      fileSize: number;
-      mimeType: string;
-      classId?: string | null;
-      downloadUrl?: string;
-    }[] = [];
+    const zips = queue
+      .map((q) => q.file)
+      .filter((f) => f.name.toLowerCase().endsWith(".zip"));
+    const images = queue
+      .map((q) => q.file)
+      .filter((f) => !f.name.toLowerCase().endsWith(".zip"));
 
-    for (let i = 0; i < queue.length; i++) {
-      const { file, classId } = queue[i];
-      const fileBase = (i / queue.length) * 100;
-
-      const prepared = await prepareDatasetFileUpload(
-        projectId,
-        datasetId,
-        file.name
-      );
-
-      const result = await uploadFileToStorage(
-        "datasets",
-        prepared.filePath,
-        file,
-        (filePercent) => {
-          const overall = Math.round(fileBase + filePercent / queue.length);
-          setProgress(Math.min(99, overall));
-        }
-      );
-
-      if (result.error) {
-        setError(`Failed to upload ${file.name}: ${result.error}`);
-        setUploading(false);
-        return;
+    try {
+      if (images.length > 0) {
+        await uploadImages(projectId, datasetId, images, (p) =>
+          setProgress(Math.min(99, p))
+        );
       }
-
-      uploaded.push({
-        fileName: file.name,
-        filePath: prepared.filePath,
-        fileSize: file.size,
-        mimeType: file.type,
-        classId: classId && classId !== ALL_CLASS_ID ? classId : null,
-        downloadUrl: result.downloadUrl,
-      });
-
-      setProgress(Math.round(((i + 1) / queue.length) * 100));
-    }
-
-    const result = await registerDatasetFiles(projectId, datasetId, uploaded);
-    if (result?.error) {
-      setError(result.error);
+      for (const zip of zips) {
+        await uploadZip(projectId, datasetId, zip, (p) =>
+          setProgress(Math.min(99, p))
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
       setUploading(false);
       return;
     }
 
+    setProgress(100);
     setDone(true);
     setUploading(false);
     router.refresh();

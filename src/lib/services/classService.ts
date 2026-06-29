@@ -1,69 +1,72 @@
-import { getAdminDb, nowIso } from "@/lib/firebase/admin";
+import { api } from "@/lib/api/client";
 import { toClass } from "@/lib/firebase/adapters";
-import { projectSub } from "@/lib/firebase/paths";
 import type { FirestoreClass } from "@/lib/types/firestore";
 import type { Class } from "@/lib/types/database";
 
-function classesRef(projectId: string) {
-  return getAdminDb().collection(projectSub(projectId, "classes"));
+/**
+ * The backend exposes a single "replace all classes" endpoint (POST /api/classes).
+ * Granular create/update/delete are implemented client-side by reading the
+ * current list, applying the change, and saving the whole list back.
+ */
+
+interface ClassPayload {
+  className: string;
+  classIndex: number;
+  color?: string | null;
+  description?: string | null;
+}
+
+async function fetchRaw(projectId: string): Promise<FirestoreClass[]> {
+  return api.get<FirestoreClass[]>(`/api/classes/${projectId}`);
+}
+
+async function saveAll(projectId: string, classes: ClassPayload[]) {
+  await api.post("/api/classes", { projectId, classes });
+}
+
+function toPayload(c: FirestoreClass): ClassPayload {
+  return {
+    className: c.className,
+    classIndex: c.classIndex,
+    color: c.color ?? null,
+    description: c.description ?? null,
+  };
 }
 
 export async function listClasses(projectId: string): Promise<Class[]> {
-  const snap = await classesRef(projectId).orderBy("classIndex", "asc").get();
-  return snap.docs.map((doc) =>
-    toClass(projectId, {
-      id: doc.id,
-      ...(doc.data() as Omit<FirestoreClass, "id">),
-    })
-  );
+  const rows = await fetchRaw(projectId);
+  return rows
+    .sort((a, b) => a.classIndex - b.classIndex)
+    .map((r) => toClass(projectId, r));
 }
 
 export async function getClassCount(projectId: string): Promise<number> {
-  const snap = await classesRef(projectId).count().get();
-  return snap.data().count;
+  return (await fetchRaw(projectId)).length;
 }
 
 export async function createClass(
   projectId: string,
   data: { name: string; description?: string | null; color: string; sortOrder: number }
 ) {
-  const now = nowIso();
-  const ref = classesRef(projectId).doc();
-  const doc: Omit<FirestoreClass, "id"> = {
+  const current = (await fetchRaw(projectId)).map(toPayload);
+  current.push({
     className: data.name,
     classIndex: data.sortOrder,
     color: data.color,
     description: data.description ?? null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await ref.set(doc);
-  await touchProject(projectId);
-  return ref.id;
+  });
+  await saveAll(projectId, current);
 }
 
 export async function createClassesBulk(
   projectId: string,
   rows: { name: string; color: string; sortOrder: number }[]
 ) {
-  const db = getAdminDb();
-  const batch = db.batch();
-  const now = nowIso();
-
+  const current = (await fetchRaw(projectId)).map(toPayload);
   for (const row of rows) {
-    const ref = classesRef(projectId).doc();
-    batch.set(ref, {
-      className: row.name,
-      classIndex: row.sortOrder,
-      color: row.color,
-      description: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    current.push({ className: row.name, classIndex: row.sortOrder, color: row.color });
   }
-
-  await batch.commit();
-  await touchProject(projectId);
+  await saveAll(projectId, current);
 }
 
 export async function updateClass(
@@ -71,42 +74,37 @@ export async function updateClass(
   classId: string,
   data: { name: string; description?: string | null; color: string }
 ) {
-  await classesRef(projectId)
-    .doc(classId)
-    .update({
-      className: data.name,
-      description: data.description ?? null,
-      color: data.color,
-      updatedAt: nowIso(),
-    });
-  await touchProject(projectId);
+  const current = await fetchRaw(projectId);
+  const updated = current.map((c) =>
+    c.id === classId
+      ? toPayload({
+          ...c,
+          className: data.name,
+          description: data.description ?? null,
+          color: data.color,
+        })
+      : toPayload(c)
+  );
+  await saveAll(projectId, updated);
 }
 
 export async function deleteClass(projectId: string, classId: string) {
-  await classesRef(projectId).doc(classId).delete();
-  await touchProject(projectId);
+  const current = await fetchRaw(projectId);
+  await saveAll(
+    projectId,
+    current.filter((c) => c.id !== classId).map(toPayload)
+  );
 }
 
 export async function deleteClasses(projectId: string, classIds: string[]) {
-  const batch = getAdminDb().batch();
-  for (const id of classIds) {
-    batch.delete(classesRef(projectId).doc(id));
-  }
-  await batch.commit();
-  await touchProject(projectId);
+  const remove = new Set(classIds);
+  const current = await fetchRaw(projectId);
+  await saveAll(
+    projectId,
+    current.filter((c) => !remove.has(c.id)).map(toPayload)
+  );
 }
 
 export async function deleteAllClasses(projectId: string) {
-  const snap = await classesRef(projectId).get();
-  const batch = getAdminDb().batch();
-  snap.docs.forEach((d) => batch.delete(d.ref));
-  if (snap.docs.length) await batch.commit();
-  await touchProject(projectId);
-}
-
-async function touchProject(projectId: string) {
-  await getAdminDb()
-    .collection("projects")
-    .doc(projectId)
-    .update({ updatedAt: nowIso() });
+  await saveAll(projectId, []);
 }

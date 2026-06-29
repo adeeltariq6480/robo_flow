@@ -7,7 +7,7 @@ from app.models.schemas import JobConfig
 from app.services.firestore_repo import get_image
 from app.services.storage import (
     build_class_name_map,
-    download_dataset_image,
+    download_image_row,
     download_model,
     get_project_class_map,
 )
@@ -26,9 +26,7 @@ async def _resolve_image(
         row = get_image(project_id_str, str(file_id))
         if not row:
             raise ValueError(f"Image {file_id} not found")
-        path = await asyncio.to_thread(
-            download_dataset_image, row["storagePath"], UUID(str(file_id))
-        )
+        path = await asyncio.to_thread(download_image_row, row, UUID(str(file_id)))
         return path, str(file_id)
 
     if input_payload.get("image_path"):

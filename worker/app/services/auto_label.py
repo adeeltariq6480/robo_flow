@@ -2,17 +2,18 @@ import asyncio
 from uuid import UUID
 
 from app.core.jobs import update_job
-from app.models.schemas import DetectionBox, JobConfig, JobStatus
+from app.models.schemas import DetectionBox, JobConfig
 from app.services.detection_merge import merge_detections
 from app.services.firestore_repo import (
     classify_queue,
+    detections_to_objects,
     list_dataset_images,
     save_image_annotations,
     update_image_queue,
 )
 from app.services.storage import (
     build_class_name_map,
-    download_dataset_image,
+    download_image_row,
     download_model,
     get_project_class_map,
 )
@@ -105,7 +106,7 @@ async def run_auto_label(
                 raise ValueError("Not an image file")
 
             image_path = await asyncio.to_thread(
-                download_dataset_image, file_row["storagePath"], file_id
+                download_image_row, file_row, file_id
             )
 
             combined: list[DetectionBox] = []
@@ -124,21 +125,24 @@ async def run_auto_label(
                 per_model[str(model_id)] = len(inference.detections)
 
             merged = merge_detections(combined, iou_threshold=config.iou)
-            annotations = [d.model_dump() for d in merged]
+            detections = [d.model_dump() for d in merged]
+            objects = detections_to_objects(detections)
+            class_known = all(d.get("project_class_id") for d in detections) if detections else True
 
             if config.save_to_dataset:
                 save_image_annotations(
                     project_id_str,
                     str(file_id),
-                    annotations,
+                    objects,
                     job_id=str(job_id),
                     source="auto",
                     auto_labeled=True,
                 )
                 queue_type, reason = classify_queue(
-                    annotations,
+                    objects,
                     confidence=config.confidence,
                     low_label_threshold=low_threshold,
+                    class_id_known=class_known,
                     per_model=per_model if len(model_ids) > 1 else None,
                 )
                 update_image_queue(project_id_str, str(file_id), queue_type, reason)
@@ -147,7 +151,7 @@ async def run_auto_label(
             all_results.append(
                 {
                     "file_id": str(file_id),
-                    "detections": len(annotations),
+                    "detections": len(objects),
                     "per_model": per_model,
                 }
             )

@@ -36,6 +36,8 @@ QUEUE_FOR_JOB_TYPE: dict[JobType, JobQueue] = {
 class JobConfig(BaseModel):
     confidence: float = Field(default=0.25, ge=0.0, le=1.0)
     iou: float = Field(default=0.45, ge=0.0, le=1.0)
+    image_size: int = Field(default=640, ge=64, le=4096)
+    low_label_threshold: int = Field(default=1, ge=0)
     class_name_map: dict[str, str] = Field(
         default_factory=dict,
         description="Map YOLO class names to project class names",
@@ -130,3 +132,77 @@ class JobCreateResponse(BaseModel):
     queue_name: JobQueue
     status: JobStatus
     message: str
+
+
+# ---------------------------------------------------------------------------
+# REST request bodies (project / class / dataset CRUD)
+# ---------------------------------------------------------------------------
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str | None = None
+    annotation_type: str = Field(default="bounding_box", alias="annotationType")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    annotation_type: str | None = Field(default=None, alias="annotationType")
+
+    model_config = {"populate_by_name": True}
+
+
+class ClassItem(BaseModel):
+    class_name: str = Field(alias="className")
+    class_index: int | None = Field(default=None, alias="classIndex")
+    color: str | None = None
+    description: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class ClassesSave(BaseModel):
+    project_id: str = Field(alias="projectId")
+    classes: list[ClassItem]
+
+    model_config = {"populate_by_name": True}
+
+
+class DatasetCreate(BaseModel):
+    project_id: str = Field(alias="projectId")
+    name: str
+
+    model_config = {"populate_by_name": True}
+
+
+class AnnotationObjectIn(BaseModel):
+    class_id: str | None = Field(default=None, alias="classId")
+    class_index: int = Field(default=0, alias="classIndex")
+    class_name: str = Field(alias="className")
+    x_min: float = Field(alias="xMin")
+    y_min: float = Field(alias="yMin")
+    x_max: float = Field(alias="xMax")
+    y_max: float = Field(alias="yMax")
+    confidence: float = 1.0
+
+    model_config = {"populate_by_name": True}
+
+
+class AnnotationsSave(BaseModel):
+    objects: list[AnnotationObjectIn] = Field(default_factory=list)
+
+
+class ReviewAction(BaseModel):
+    project_id: str = Field(alias="projectId")
+    image_id: str = Field(alias="imageId")
+
+    model_config = {"populate_by_name": True}
+
+
+class ExportRequest(BaseModel):
+    project_id: str = Field(alias="projectId")
+    export_format: str = Field(alias="exportFormat")
+
+    model_config = {"populate_by_name": True}

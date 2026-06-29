@@ -2,9 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { registerModel } from "@/lib/actions/models";
-import { prepareModelUpload } from "@/lib/actions/uploads";
-import { uploadFileToStorage } from "@/lib/upload/firebase-storage";
+import { uploadModel } from "@/lib/api/uploads";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import type { ModelFormat } from "@/lib/types/database";
@@ -69,44 +67,19 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     setProgress(0);
 
     try {
-      const prepared = await prepareModelUpload(projectId, file.name);
-      if (!prepared?.filePath) {
-        setError("Could not prepare upload");
-        setUploading(false);
-        return;
-      }
-
-      const uploadResult = await uploadFileToStorage(
-        "models",
-        prepared.filePath,
-        file,
+      await uploadModel(
+        projectId,
+        {
+          file,
+          modelName: name.trim(),
+          modelVersion: version.trim() || "1.0.0",
+          modelType: format,
+          description: description.trim() || undefined,
+        },
         setProgress
       );
 
-      if (uploadResult.error) {
-        setError(uploadResult.error);
-        setUploading(false);
-        return;
-      }
-
       setProgress(100);
-
-      const result = await registerModel(projectId, {
-        name: name.trim(),
-        description: description.trim() || null,
-        filePath: prepared.filePath,
-        fileSize: file.size,
-        format,
-        version: version.trim() || "1.0.0",
-        downloadUrl: uploadResult.downloadUrl,
-      });
-
-      if (result?.error) {
-        setError(result.error);
-        setUploading(false);
-        return;
-      }
-
       setDone(true);
       setUploading(false);
       router.refresh();

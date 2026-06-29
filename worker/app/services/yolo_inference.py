@@ -41,6 +41,7 @@ def run_yolo_inference(
         source=str(image_path),
         conf=config.confidence,
         iou=config.iou,
+        imgsz=getattr(config, "image_size", 640),
         verbose=False,
     )
 

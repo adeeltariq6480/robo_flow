@@ -89,34 +89,3 @@ export async function deleteAllDatasetFiles(
 ): Promise<ActionResult> {
   return deleteDatasetFiles(projectId, datasetId, fileIds);
 }
-
-export async function registerDatasetFiles(
-  projectId: string,
-  datasetId: string,
-  files: {
-    fileName: string;
-    filePath: string;
-    fileSize: number;
-    mimeType: string;
-    classId?: string | null;
-    downloadUrl?: string;
-  }[]
-): Promise<ActionResult> {
-  try {
-    await datasetService.registerImages(
-      projectId,
-      datasetId,
-      files.map((f) => ({
-        fileName: f.fileName,
-        storagePath: f.filePath,
-        downloadUrl: f.downloadUrl ?? "",
-        fileSize: f.fileSize,
-        mimeType: f.mimeType,
-      }))
-    );
-    revalidatePath(`/projects/${projectId}/datasets`);
-    return { success: true };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : "Failed to register files" };
-  }
-}

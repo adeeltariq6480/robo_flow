@@ -17,22 +17,22 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     queue_manager.set_processor(process_job)
     await queue_manager.start()
-    logger.info("Label AI worker started on %s:%s", settings.worker_host, settings.worker_port)
+    logger.info("Robo Flow API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
     await queue_manager.stop()
-    logger.info("Worker stopped")
+    logger.info("API stopped")
 
 
 app = FastAPI(
-    title="Label AI Worker",
-    description="YOLO inference, auto-labelling, and model comparison",
-    version="0.1.0",
+    title="Robo Flow API",
+    description="Main API layer: Firestore metadata, Hugging Face storage, YOLO auto-labelling",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

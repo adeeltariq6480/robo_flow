@@ -1,7 +1,6 @@
 "use server";
 
 import * as projectService from "@/lib/services/projectService";
-import { getSessionUser } from "@/lib/services/authService";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -15,12 +14,7 @@ export async function createProject(formData: FormData): Promise<ActionResult | 
 
   let newId: string;
   try {
-    const user = await getSessionUser();
-    newId = await projectService.createProject({
-      name,
-      description,
-      createdBy: user?.uid ?? null,
-    });
+    newId = await projectService.createProject({ name, description });
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to create project" };
   }
