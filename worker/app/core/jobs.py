@@ -3,14 +3,11 @@ from uuid import UUID
 
 from app.core.queue import queue_manager
 from app.models.schemas import QUEUE_FOR_JOB_TYPE, JobConfig, JobQueue, JobStatus, JobType
-from app.services.auto_label import run_auto_label
-from app.services.model_compare import run_model_compare
 from app.services.firestore_repo import (
     create_labelling_job,
     get_labelling_job,
     update_labelling_job,
 )
-from app.services.test_run import run_test_run
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +115,16 @@ async def process_job(job_id: UUID) -> None:
 
     try:
         if job_type == JobType.TEST_RUN:
+            from app.services.test_run import run_test_run
+
             result = await run_test_run(job_id, pid, data, config, project_id)
         elif job_type == JobType.AUTO_LABEL:
+            from app.services.auto_label import run_auto_label
+
             result = await run_auto_label(job_id, pid, data, config, project_id)
         elif job_type == JobType.MODEL_COMPARE:
+            from app.services.model_compare import run_model_compare
+
             result = await run_model_compare(job_id, pid, data, config, project_id)
         else:
             raise ValueError(f"Unknown job type: {job_type}")
@@ -136,7 +139,13 @@ async def process_job(job_id: UUID) -> None:
             project_id=project_id,
         )
     except Exception as exc:
-        logger.exception("Job %s failed", job_id)
+        logger.exception(
+            "Job %s failed (type=%s, project=%s): %s",
+            job_id,
+            job_type.value,
+            project_id,
+            exc,
+        )
         await update_job(
             job_id,
             status=JobStatus.FAILED,
