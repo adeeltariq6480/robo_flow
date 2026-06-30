@@ -1,0 +1,33 @@
+{
+  "name": "robo-flow",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev",
+    "dev:fresh": "node scripts/clean.mjs && next dev",
+    "dev:clean": "node scripts/clean.mjs && next dev",
+    "dev:turbo": "next dev --turbopack",
+    "clean": "node scripts/clean.mjs",
+    "rebuild": "npm run clean && npm run build",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "lucide-react": "^0.475.0",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.20.0",
+    "eslint-config-next": "^15.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
