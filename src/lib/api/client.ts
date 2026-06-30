@@ -8,6 +8,20 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_WORKER_API_URL ?? "http://localhost:8000";
 
+/** Server-only — never use NEXT_PUBLIC_ for this. Matches Railway WORKER_API_KEY. */
+const WORKER_API_KEY = process.env.WORKER_API_KEY ?? "";
+
+function apiHeaders(extra?: HeadersInit, isForm = false): HeadersInit {
+  const headers: Record<string, string> = {
+    ...(isForm ? {} : { "Content-Type": "application/json" }),
+    ...(extra as Record<string, string>),
+  };
+  if (WORKER_API_KEY) {
+    headers["X-Worker-Key"] = WORKER_API_KEY;
+  }
+  return headers;
+}
+
 /** Thrown when the API cannot be reached (misconfigured URL or backend down). */
 export class BackendUnavailableError extends Error {
   constructor(message: string) {
@@ -82,10 +96,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     res = await fetch(`${API_BASE_URL}${path}`, {
       cache: "no-store",
       ...options,
-      headers: {
-        ...(isForm ? {} : { "Content-Type": "application/json" }),
-        ...options.headers,
-      },
+      headers: apiHeaders(options.headers, isForm),
     });
   } catch (err) {
     throw new BackendUnavailableError(backendUnreachableMessage(err));
