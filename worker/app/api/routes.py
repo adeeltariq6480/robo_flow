@@ -1,6 +1,7 @@
 import io
 import logging
 import zipfile
+import asyncio
 from uuid import UUID
 
 from fastapi import (
@@ -49,6 +50,35 @@ async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
     # Open in local no-auth mode; only enforce when a key is configured.
     if settings.worker_api_key and x_worker_key != settings.worker_api_key:
         raise HTTPException(status_code=401, detail="Invalid worker API key")
+
+
+def _check_upload_config() -> None:
+    """Fail fast with a clear message when Railway env is incomplete."""
+    missing: list[str] = []
+    if not settings.hf_token:
+        missing.append("HF_TOKEN")
+    if not settings.dataset_repo_id:
+        missing.append("HF_DATASET_REPO (or HF_USERNAME)")
+    has_firebase = bool(
+        settings.firebase_service_account_json.strip()
+        or settings.google_application_credentials.strip()
+    )
+    if not has_firebase:
+        missing.append("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Upload storage not configured on the backend. "
+                f"Set these Railway variables: {', '.join(missing)}"
+            ),
+        )
+
+
+def _safe_filename(name: str | None, fallback: str = "image.jpg") -> str:
+    if not name or not name.strip():
+        return fallback
+    return name.replace("\\", "/").rsplit("/", 1)[-1]
 
 
 def _image_dimensions(data: bytes) -> tuple[int | None, int | None]:
@@ -200,22 +230,50 @@ async def upload_images(
     files: list[UploadFile] = File(...),
     _: None = Depends(verify_api_key),
 ):
+    _check_upload_config()
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
     created = []
     for f in files:
         data = await f.read()
+        if not data:
+            continue
+        filename = _safe_filename(f.filename)
         width, height = _image_dimensions(data)
-        loc = hf_storage.upload_dataset_image(project_id, dataset_id, f.filename, data)
-        image = repo.create_image(project_id, dataset_id, {
-            "fileName": f.filename,
-            "hfRepo": loc["hfRepo"],
-            "hfPath": loc["hfPath"],
-            "width": width,
-            "height": height,
-            "mimeType": f.content_type,
-            "fileSize": len(data),
-        })
+        try:
+            loc = await asyncio.to_thread(
+                hf_storage.upload_dataset_image,
+                project_id,
+                dataset_id,
+                filename,
+                data,
+            )
+            image = await asyncio.to_thread(
+                repo.create_image,
+                project_id,
+                dataset_id,
+                {
+                    "fileName": filename,
+                    "hfRepo": loc["hfRepo"],
+                    "hfPath": loc["hfPath"],
+                    "width": width,
+                    "height": height,
+                    "mimeType": f.content_type,
+                    "fileSize": len(data),
+                },
+            )
+        except HTTPException:
+            raise
+        except RuntimeError as exc:
+            logger.exception("HF upload failed for %s", filename)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("upload-images failed for %s", filename)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         created.append(image)
-    repo.recount_dataset_images(project_id, dataset_id)
+
+    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     return {"uploaded": len(created), "images": created}
 
 
