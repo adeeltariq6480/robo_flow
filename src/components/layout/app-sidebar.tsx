@@ -19,8 +19,8 @@ const LAST_PROJECT_KEY = "labelai:lastProjectId";
 const projectLinks = [
   { suffix: "", label: "Overview", icon: LayoutDashboard },
   { suffix: "/classes", label: "Classes", icon: Tags },
-  { suffix: "/datasets", label: "Datasets", icon: Database },
   { suffix: "/models", label: "Models", icon: Box },
+  { suffix: "/datasets", label: "Datasets", icon: Database },
   { suffix: "/inference", label: "Inference", icon: Zap },
 ];
 
