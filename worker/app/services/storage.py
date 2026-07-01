@@ -1,7 +1,6 @@
 """Resolve model/image files by downloading them from Hugging Face Hub."""
 
 from pathlib import Path
-from uuid import UUID
 
 from app.services import hf_storage
 from app.services.firestore_repo import (
@@ -11,8 +10,8 @@ from app.services.firestore_repo import (
 )
 
 
-def download_model(model_id: UUID, project_id: UUID) -> Path:
-    row = get_model(str(project_id), str(model_id))
+def download_model(model_id: str, project_id: str) -> Path:
+    row = get_model(project_id, model_id)
     if not row:
         raise ValueError(f"Model {model_id} not found in project {project_id}")
     repo = row.get("hfRepo")
@@ -26,7 +25,7 @@ def download_model(model_id: UUID, project_id: UUID) -> Path:
     )
 
 
-def download_image(repo: str, path: str, image_id: UUID) -> Path:
+def download_image(repo: str, path: str, image_id: str) -> Path:
     ext = Path(path).suffix or ".jpg"
     return hf_storage.download_to_local(
         repo, path, repo_type=hf_storage.REPO_TYPE_DATASET,
@@ -34,8 +33,8 @@ def download_image(repo: str, path: str, image_id: UUID) -> Path:
     )
 
 
-def download_image_by_id(project_id: UUID, image_id: UUID) -> Path:
-    row = get_image(str(project_id), str(image_id))
+def download_image_by_id(project_id: str, image_id: str) -> Path:
+    row = get_image(project_id, image_id)
     if not row:
         raise ValueError(f"Image {image_id} not found")
     repo, path = row.get("hfRepo"), row.get("hfPath")
@@ -44,18 +43,18 @@ def download_image_by_id(project_id: UUID, image_id: UUID) -> Path:
     return download_image(repo, path, image_id)
 
 
-def download_image_row(row: dict, image_id: UUID) -> Path:
+def download_image_row(row: dict, image_id: str) -> Path:
     repo, path = row.get("hfRepo"), row.get("hfPath")
     if not repo or not path:
         raise ValueError(f"Image {image_id} has no Hugging Face location")
     return download_image(repo, path, image_id)
 
 
-def get_project_class_map(project_id: UUID) -> dict[str, str]:
-    return _class_map(str(project_id))
+def get_project_class_map(project_id: str) -> dict[str, str]:
+    return _class_map(project_id)
 
 
-def build_class_name_map(project_id: UUID, user_map: dict[str, str]) -> dict[str, str]:
+def build_class_name_map(project_id: str, user_map: dict[str, str]) -> dict[str, str]:
     project_classes = get_project_class_map(project_id)
     return {
         yolo_name: project_name

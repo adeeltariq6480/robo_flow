@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import Any
-from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -49,18 +48,18 @@ class JobConfig(BaseModel):
 
 
 class TestRunRequest(BaseModel):
-    project_id: UUID
-    model_id: UUID
+    project_id: str
+    model_id: str
     image_path: str | None = None
-    dataset_file_id: UUID | None = None
+    dataset_file_id: str | None = None
     config: JobConfig = Field(default_factory=JobConfig)
 
 
 class AutoLabelRequest(BaseModel):
-    project_id: UUID
-    dataset_id: UUID
-    model_id: UUID | None = None
-    model_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    project_id: str
+    dataset_id: str
+    model_id: str | None = None
+    model_ids: list[str] = Field(default_factory=list, max_length=10)
     config: JobConfig = Field(default_factory=JobConfig)
 
     @model_validator(mode="after")
@@ -69,24 +68,23 @@ class AutoLabelRequest(BaseModel):
             raise ValueError("Provide model_id or at least one entry in model_ids")
         return self
 
-    def resolved_model_ids(self) -> list[UUID]:
-        ids: list[UUID] = []
+    def resolved_model_ids(self) -> list[str]:
+        ids: list[str] = []
         seen: set[str] = set()
         for mid in [self.model_id, *self.model_ids]:
             if mid is None:
                 continue
-            key = str(mid)
-            if key not in seen:
-                seen.add(key)
+            if mid not in seen:
+                seen.add(mid)
                 ids.append(mid)
         return ids
 
 
 class ModelCompareRequest(BaseModel):
-    project_id: UUID
-    model_ids: list[UUID] = Field(min_length=2, max_length=5)
+    project_id: str
+    model_ids: list[str] = Field(min_length=2, max_length=5)
     image_path: str | None = None
-    dataset_file_id: UUID | None = None
+    dataset_file_id: str | None = None
     config: JobConfig = Field(default_factory=JobConfig)
 
 
@@ -114,8 +112,8 @@ class ModelCompareResult(BaseModel):
 
 
 class JobResponse(BaseModel):
-    id: UUID
-    project_id: UUID
+    id: str
+    project_id: str
     job_type: JobType
     queue_name: JobQueue
     status: JobStatus
@@ -128,7 +126,7 @@ class JobResponse(BaseModel):
 
 
 class JobCreateResponse(BaseModel):
-    job_id: UUID
+    job_id: str
     queue_name: JobQueue
     status: JobStatus
     message: str

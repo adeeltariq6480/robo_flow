@@ -2,7 +2,6 @@ import io
 import logging
 import zipfile
 import asyncio
-from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -388,13 +387,13 @@ async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key
 @jobs_router.post("/auto-label", response_model=JobCreateResponse)
 @api_router.post("/auto-label", response_model=JobCreateResponse)
 async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api_key)):
-    total = repo.count_dataset_images(str(body.project_id), str(body.dataset_id))
+    total = repo.count_dataset_images(body.project_id, body.dataset_id)
     model_ids = body.resolved_model_ids()
     job_id, queue, position = await submit_job(
         body.project_id, JobType.AUTO_LABEL,
         model_id=model_ids[0], model_ids=model_ids,
         dataset_id=body.dataset_id, config=body.config, total_items=total,
-        input_payload={"model_ids": [str(m) for m in model_ids]},
+        input_payload={"model_ids": model_ids},
     )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,
@@ -429,8 +428,8 @@ async def queue_stats(_: None = Depends(verify_api_key)):
 def _job_to_response(project_id: str, job_id: str, d: dict) -> JobResponse:
     queue_map = {"test_run": "interactive", "auto_label": "batch", "model_compare": "compare"}
     return JobResponse(
-        id=UUID(job_id),
-        project_id=UUID(project_id),
+        id=job_id,
+        project_id=project_id,
         job_type=d.get("jobType", "auto_label"),
         queue_name=queue_map.get(d.get("jobType", ""), "batch"),
         status=d.get("status", "queued"),
@@ -449,7 +448,7 @@ def _resolve_project_for_job(job_id: str) -> str | None:
 
 
 @jobs_router.get("/{job_id}", response_model=JobResponse)
-async def get_job_by_id(job_id: UUID, _: None = Depends(verify_api_key)):
+async def get_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
     project_id = _resolve_project_for_job(str(job_id))
     if not project_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -461,7 +460,7 @@ async def get_job_by_id(job_id: UUID, _: None = Depends(verify_api_key)):
 
 @api_router.get("/jobs/{project_id}/{job_id}", response_model=JobResponse)
 async def get_job_for_project(
-    project_id: str, job_id: UUID, _: None = Depends(verify_api_key)
+    project_id: str, job_id: str, _: None = Depends(verify_api_key)
 ):
     d = repo.get_labelling_job(project_id, str(job_id))
     if not d:

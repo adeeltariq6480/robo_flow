@@ -3,7 +3,6 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Coroutine, Any
-from uuid import UUID
 
 from app.config import settings
 from app.models.schemas import JobQueue, JobStatus
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 @dataclass(order=True)
 class QueueItem:
     priority: int
-    job_id: UUID = field(compare=False)
+    job_id: str = field(compare=False)
 
 
 class QueueManager:
@@ -39,11 +38,11 @@ class QueueManager:
             JobQueue.COMPARE: settings.compare_queue_workers,
             JobQueue.BATCH: settings.batch_queue_workers,
         }
-        self._processor: Callable[[UUID], Coroutine[Any, Any, None]] | None = None
+        self._processor: Callable[[str], Coroutine[Any, Any, None]] | None = None
         self._dispatcher_task: asyncio.Task | None = None
 
     def set_processor(
-        self, fn: Callable[[UUID], Coroutine[Any, Any, None]]
+        self, fn: Callable[[str], Coroutine[Any, Any, None]]
     ) -> None:
         self._processor = fn
 
@@ -61,7 +60,7 @@ class QueueManager:
                 pass
             self._dispatcher_task = None
 
-    async def enqueue(self, job_id: UUID, queue: JobQueue) -> int:
+    async def enqueue(self, job_id: str, queue: JobQueue) -> int:
         """Add job to queue. Returns position (1-based)."""
         priority = {JobQueue.INTERACTIVE: 0, JobQueue.COMPARE: 1, JobQueue.BATCH: 2}[
             queue
@@ -74,7 +73,7 @@ class QueueManager:
     async def _dispatch_loop(self) -> None:
         while True:
             async with self._not_empty:
-                job_to_run: tuple[UUID, JobQueue] | None = None
+                job_to_run: tuple[str, JobQueue] | None = None
 
                 for queue in (JobQueue.INTERACTIVE, JobQueue.COMPARE, JobQueue.BATCH):
                     if (
@@ -93,7 +92,7 @@ class QueueManager:
             job_id, queue = job_to_run
             asyncio.create_task(self._run_job(job_id, queue))
 
-    async def _run_job(self, job_id: UUID, queue: JobQueue) -> None:
+    async def _run_job(self, job_id: str, queue: JobQueue) -> None:
         try:
             if self._processor:
                 await self._processor(job_id)

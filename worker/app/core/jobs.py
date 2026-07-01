@@ -1,5 +1,4 @@
 import logging
-from uuid import UUID
 
 from app.core.queue import queue_manager
 from app.models.schemas import QUEUE_FOR_JOB_TYPE, JobConfig, JobQueue, JobStatus, JobType
@@ -14,16 +13,16 @@ logger = logging.getLogger(__name__)
 _job_project_map: dict[str, str] = {}
 
 
-def register_job_project(job_id: UUID, project_id: UUID) -> None:
-    _job_project_map[str(job_id)] = str(project_id)
+def register_job_project(job_id: str, project_id: str) -> None:
+    _job_project_map[job_id] = project_id
 
 
-def get_job_project(job_id: UUID) -> str | None:
-    return _job_project_map.get(str(job_id))
+def get_job_project(job_id: str) -> str | None:
+    return _job_project_map.get(job_id)
 
 
 async def update_job(
-    job_id: UUID,
+    job_id: str,
     *,
     status: JobStatus | None = None,
     progress: int | None = None,
@@ -44,7 +43,7 @@ async def update_job(
     await asyncio.to_thread(
         update_labelling_job,
         pid,
-        str(job_id),
+        job_id,
         status=status.value if status else None,
         progress=progress,
         progress_message=progress_message,
@@ -57,43 +56,42 @@ async def update_job(
 
 
 async def create_job_record(
-    project_id: UUID,
+    project_id: str,
     job_type: JobType,
     *,
-    model_id: UUID | None = None,
-    model_ids: list[UUID] | None = None,
-    dataset_id: UUID | None = None,
+    model_id: str | None = None,
+    model_ids: list[str] | None = None,
+    dataset_id: str | None = None,
     config: JobConfig | None = None,
     input_payload: dict | None = None,
     total_items: int = 0,
-) -> UUID:
+) -> str:
     cfg = (config or JobConfig()).model_dump()
     job_id = create_labelling_job(
-        str(project_id),
+        project_id,
         job_type=job_type.value,
-        dataset_id=str(dataset_id) if dataset_id else None,
-        model_id=str(model_id) if model_id else None,
-        model_ids=[str(m) for m in (model_ids or [])],
+        dataset_id=dataset_id,
+        model_id=model_id,
+        model_ids=model_ids or [],
         config=cfg,
         input_payload=input_payload or {},
         total_items=total_items,
     )
-    return UUID(job_id)
+    return job_id
 
 
-async def process_job(job_id: UUID) -> None:
+async def process_job(job_id: str) -> None:
     project_id = get_job_project(job_id)
     if not project_id:
         logger.error("Job %s missing project mapping", job_id)
         return
 
-    job = get_labelling_job(project_id, str(job_id))
+    job = get_labelling_job(project_id, job_id)
     if not job:
         logger.error("Job %s not found in project %s", job_id, project_id)
         return
 
     job_type = JobType(job["jobType"])
-    pid = UUID(project_id)
     config = JobConfig(**(job.get("config") or {}))
 
     await update_job(
@@ -117,15 +115,15 @@ async def process_job(job_id: UUID) -> None:
         if job_type == JobType.TEST_RUN:
             from app.services.test_run import run_test_run
 
-            result = await run_test_run(job_id, pid, data, config, project_id)
+            result = await run_test_run(job_id, project_id, data, config)
         elif job_type == JobType.AUTO_LABEL:
             from app.services.auto_label import run_auto_label
 
-            result = await run_auto_label(job_id, pid, data, config, project_id)
+            result = await run_auto_label(job_id, project_id, data, config)
         elif job_type == JobType.MODEL_COMPARE:
             from app.services.model_compare import run_model_compare
 
-            result = await run_model_compare(job_id, pid, data, config, project_id)
+            result = await run_model_compare(job_id, project_id, data, config)
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 
@@ -157,10 +155,10 @@ async def process_job(job_id: UUID) -> None:
 
 
 async def submit_job(
-    project_id: UUID,
+    project_id: str,
     job_type: JobType,
     **kwargs,
-) -> tuple[UUID, JobQueue, int]:
+) -> tuple[str, JobQueue, int]:
     job_id = await create_job_record(project_id, job_type, **kwargs)
     register_job_project(job_id, project_id)
     queue = QUEUE_FOR_JOB_TYPE[job_type]

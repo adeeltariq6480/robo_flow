@@ -1,5 +1,4 @@
 import asyncio
-from uuid import UUID
 
 from app.core.jobs import update_job
 from app.models.schemas import InferenceResult, JobConfig, ModelCompareResult
@@ -13,20 +12,19 @@ from app.services.yolo_inference import run_yolo_inference
 
 
 async def run_model_compare(
-    job_id: UUID,
-    project_id: UUID,
+    job_id: str,
+    project_id: str,
     data: dict,
     config: JobConfig,
-    project_id_str: str,
 ) -> dict:
-    model_ids = [UUID(m) for m in (data.get("model_ids") or [])]
+    model_ids = [str(m) for m in (data.get("model_ids") or [])]
     if len(model_ids) < 2:
         raise ValueError("model_compare requires at least 2 model_ids")
 
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
-    image_path, file_id = await _resolve_image(project_id, project_id_str, data)
+    image_path, file_id = await _resolve_image(project_id, data)
 
     results: dict[str, InferenceResult] = {}
     step = int(80 / len(model_ids))
@@ -37,7 +35,7 @@ async def run_model_compare(
             job_id,
             progress=pct,
             progress_message=f"Running model {i + 1}/{len(model_ids)}…",
-            project_id=project_id_str,
+            project_id=project_id,
         )
 
         model_path = await asyncio.to_thread(download_model, model_id, project_id)
@@ -47,10 +45,10 @@ async def run_model_compare(
             model_path,
             image_path,
             config,
-            model_name=str(model_id),
+            model_name=model_id,
             class_id_map=class_id_map,
         )
-        results[str(model_id)] = inference
+        results[model_id] = inference
 
     compare = _pick_winner(results)
     compare_result = ModelCompareResult(
