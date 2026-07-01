@@ -10,12 +10,16 @@ export default function MainLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex h-dvh overflow-hidden bg-slate-50">
       <Suspense fallback={null}>
         <NavigationProgress />
       </Suspense>
       <AppSidebar />
-      <main className="flex-1 overflow-auto p-6 lg:p-8">{children}</main>
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-6 lg:p-8">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {children}
+        </div>
+      </main>
     </div>
   );
 }

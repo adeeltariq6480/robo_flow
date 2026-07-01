@@ -14,6 +14,7 @@ interface BulkDeleteToolbarProps {
   showSelectAll?: boolean;
   allSelected?: boolean;
   onToggleSelectAll?: () => void;
+  className?: string;
 }
 
 export function BulkDeleteToolbar({
@@ -27,11 +28,14 @@ export function BulkDeleteToolbar({
   showSelectAll = true,
   allSelected = false,
   onToggleSelectAll,
+  className = "mb-4",
 }: BulkDeleteToolbarProps) {
   if (totalCount === 0) return null;
 
   return (
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 ${className}`}
+    >
       <div className="flex items-center gap-3 text-sm text-slate-600">
         {showSelectAll && onToggleSelectAll && (
           <label className="flex cursor-pointer items-center gap-2">

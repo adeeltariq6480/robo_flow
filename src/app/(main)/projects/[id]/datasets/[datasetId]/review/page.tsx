@@ -112,11 +112,13 @@ export default async function DatasetReviewPage({
           <p className="text-sm text-slate-500">Loading review queue…</p>
         }
       >
-        <ReviewContent
-          projectId={projectId}
-          datasetId={datasetId}
-          filter={filter}
-        />
+        <div className="mt-4">
+          <ReviewContent
+            projectId={projectId}
+            datasetId={datasetId}
+            filter={filter}
+          />
+        </div>
       </Suspense>
     </div>
   );

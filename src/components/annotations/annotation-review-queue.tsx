@@ -164,7 +164,7 @@ export function AnnotationReviewQueue({
       fileId,
       status
     );
-    if (result?.error) setError(result.error);
+    if (result && "error" in result) setError(result.error ?? "Request failed");
     else {
       setSelected((prev) => {
         const next = new Set(prev);
@@ -188,7 +188,7 @@ export function AnnotationReviewQueue({
       Array.from(selected),
       status
     );
-    if (result?.error) setError(result.error);
+    if (result && "error" in result) setError(result.error ?? "Request failed");
     else {
       setSelected(new Set());
       router.refresh();
@@ -206,7 +206,7 @@ export function AnnotationReviewQueue({
       datasetId,
       Array.from(selected)
     );
-    if (result?.error) setError(result.error);
+    if (result && "error" in result) setError(result.error ?? "Request failed");
     else {
       setSelected(new Set());
       router.refresh();
@@ -224,7 +224,7 @@ export function AnnotationReviewQueue({
       datasetId,
       visibleFiles.map((f) => f.id)
     );
-    if (result?.error) setError(result.error);
+    if (result && "error" in result) setError(result.error ?? "Request failed");
     else {
       setSelected(new Set());
       router.refresh();
@@ -233,73 +233,78 @@ export function AnnotationReviewQueue({
   }
 
   return (
-    <div className="relative space-y-6 pb-24">
+    <div className="relative pb-20">
       {error && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+        <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
-      <Card>
-        <CardHeader
-          title="Annotation review"
-          description={`Open each image to edit boxes, or select images to approve / reject in bulk.`}
-        />
+      <Card className="flex max-h-[calc(100dvh-11rem)] min-h-[28rem] flex-col overflow-hidden !p-0">
+        <div className="shrink-0 space-y-4 border-b border-slate-100 px-6 pb-4 pt-6">
+          <CardHeader
+            title="Annotation review"
+            description={`Open each image to edit boxes, or select images to approve / reject in bulk.`}
+            className="mb-0"
+          />
 
-        <div className="mb-4 flex flex-wrap items-end gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Filter className="h-4 w-4 text-slate-400" />
-            {FILTERS.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setFilter(filter)}
-                className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
-                  activeFilter === filter
-                    ? "bg-brand-600 text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {REVIEW_FILTER_LABELS[filter]}
-                <span className="ml-1 opacity-70">({counts[filter] ?? 0})</span>
-              </button>
-            ))}
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Filter className="h-4 w-4 shrink-0 text-slate-400" />
+              {FILTERS.map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  onClick={() => setFilter(filter)}
+                  className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                    activeFilter === filter
+                      ? "bg-brand-600 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {REVIEW_FILTER_LABELS[filter]}
+                  <span className="ml-1 opacity-70">({counts[filter] ?? 0})</span>
+                </button>
+              ))}
+            </div>
+
+            {classes.length > 0 && (
+              <ClassSelect
+                label="Class"
+                classes={classes}
+                value={classFilter}
+                onChange={(value) => {
+                  setClassFilter(value);
+                  setSelected(new Set());
+                }}
+                className="w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            )}
           </div>
 
-          {classes.length > 0 && (
-            <ClassSelect
-              label="Class"
-              classes={classes}
-              value={classFilter}
-              onChange={(value) => {
-                setClassFilter(value);
-                setSelected(new Set());
-              }}
-              className="w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          )}
+          <BulkDeleteToolbar
+            itemLabel="images"
+            totalCount={visibleFiles.length}
+            selectedCount={selected.size}
+            onDeleteSelected={handleDeleteSelected}
+            onDeleteAll={handleDeleteAll}
+            disabled={loading}
+            loading={loading}
+            allSelected={allSelected}
+            onToggleSelectAll={toggleSelectAll}
+            className="mb-0"
+          />
         </div>
 
-        <BulkDeleteToolbar
-          itemLabel="images"
-          totalCount={visibleFiles.length}
-          selectedCount={selected.size}
-          onDeleteSelected={handleDeleteSelected}
-          onDeleteAll={handleDeleteAll}
-          disabled={loading}
-          loading={loading}
-          allSelected={allSelected}
-          onToggleSelectAll={toggleSelectAll}
-        />
-
-        {visibleFiles.length === 0 ? (
-          <p className="text-sm text-slate-500">
-            No images match this filter. Upload images or run auto-label from
-            Inference, then use <strong>Needs review</strong> to see labeled
-            files.
-          </p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+          {visibleFiles.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No images match this filter. Upload images or run auto-label from
+              Inference, then use <strong>Needs review</strong> to see labeled
+              files.
+            </p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {visibleFiles.map((file) => {
               const isSelected = selected.has(file.id);
               const thumbUrl = imageContentUrl(projectId, file.id);
@@ -402,8 +407,9 @@ export function AnnotationReviewQueue({
                 </article>
               );
             })}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </Card>
 
       {selectionActive && (

@@ -69,12 +69,12 @@ export function AppSidebar() {
     }`;
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <Link href="/" className="flex h-16 items-center border-b border-slate-200 px-4">
+    <aside className="flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white">
+      <Link href="/" className="flex h-16 shrink-0 items-center border-b border-slate-200 px-4">
         <LabelAILogo />
       </Link>
 
-      <nav className="flex-1 space-y-1 p-4">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4">
         <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
           Main
         </p>
