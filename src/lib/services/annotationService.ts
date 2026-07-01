@@ -141,3 +141,16 @@ export async function setReviewStatus(
     return { error: e instanceof Error ? e.message : "Update failed" };
   }
 }
+
+export async function bulkSetReviewStatus(
+  projectId: string,
+  datasetId: string,
+  imageIds: string[],
+  status: ReviewStatus
+) {
+  for (const imageId of imageIds) {
+    const result = await setReviewStatus(projectId, datasetId, imageId, status);
+    if (result.error) return result;
+  }
+  return { success: true as const, count: imageIds.length };
+}

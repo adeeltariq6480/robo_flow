@@ -2,6 +2,7 @@
 
 Supported formats: yolo (TXT), coco (JSON), voc (Pascal VOC XML), csv.
 Boxes are stored normalized (xMin/yMin/xMax/yMax in 0..1).
+Each export includes image files downloaded from Hugging Face Hub.
 """
 
 import csv
@@ -11,7 +12,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
 
-from app.services import firestore_repo
+from app.services import firestore_repo, hf_storage
 
 
 def _class_index_map(project_id: str) -> dict[str, int]:
@@ -23,10 +24,31 @@ def _stem(file_name: str) -> str:
     return file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
 
+def _image_bytes(img: dict) -> bytes:
+    repo = img.get("hfRepo")
+    path = img.get("hfPath")
+    if not repo or not path:
+        raise ValueError(
+            f"Image {img.get('fileName', img.get('id'))} has no Hugging Face location"
+        )
+    return hf_storage.download_bytes(
+        repo, path, repo_type=hf_storage.REPO_TYPE_DATASET
+    )
+
+
+def _append_images(data: list[dict], files: dict[str, str | bytes]) -> None:
+    for entry in data:
+        img = entry["image"]
+        files[f"images/{img['fileName']}"] = _image_bytes(img)
+
+
 def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
     """Return (zip_bytes, file_name)."""
     fmt = export_format.lower()
     data = firestore_repo.get_approved_export_data(project_id)
+    if not data:
+        raise ValueError("No approved images to export. Review and approve labels first.")
+
     class_index = _class_index_map(project_id)
     classes_ordered = [
         name for name, _ in sorted(class_index.items(), key=lambda kv: kv[1])
@@ -51,12 +73,27 @@ def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
     return buf.getvalue(), f"{fmt}-export-{ts}.zip"
 
 
-def _build_yolo(data, class_index, classes_ordered) -> dict[str, str]:
-    files: dict[str, str] = {}
+def _build_yolo(data, class_index, classes_ordered) -> dict[str, str | bytes]:
+    files: dict[str, str | bytes] = {}
     files["classes.txt"] = "\n".join(classes_ordered) + ("\n" if classes_ordered else "")
+    names_block = "\n".join(
+        f"  {i}: {json.dumps(name)}" for i, name in enumerate(classes_ordered)
+    )
     files["data.yaml"] = (
+        "# Robo Flow export — approved labels only\n"
+        "path: .\n"
+        "train: images\n"
+        "val: images\n"
+        f"names:\n{names_block}\n"
         f"nc: {len(classes_ordered)}\n"
-        f"names: {classes_ordered}\n"
+    )
+    files["README.txt"] = (
+        "YOLO dataset export (approved labels only)\n\n"
+        "Structure:\n"
+        "  images/                      — image files\n"
+        "  labels/<image_basename>.txt  — YOLO format (class cx cy w h, normalized)\n"
+        "  classes.txt                  — class names, one per line\n"
+        "  data.yaml                    — YOLO dataset config\n"
     )
     for entry in data:
         img = entry["image"]
@@ -68,11 +105,14 @@ def _build_yolo(data, class_index, classes_ordered) -> dict[str, str]:
             w = o["xMax"] - o["xMin"]
             h = o["yMax"] - o["yMin"]
             lines.append(f"{idx} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}")
-        files[f"labels/{_stem(img['fileName'])}.txt"] = "\n".join(lines)
+        files[f"labels/{_stem(img['fileName'])}.txt"] = "\n".join(lines) + (
+            "\n" if lines else ""
+        )
+    _append_images(data, files)
     return files
 
 
-def _build_coco(data, class_index, classes_ordered) -> dict[str, str]:
+def _build_coco(data, class_index, classes_ordered) -> dict[str, str | bytes]:
     categories = [
         {"id": class_index[name], "name": name, "supercategory": "none"}
         for name in classes_ordered
@@ -106,11 +146,13 @@ def _build_coco(data, class_index, classes_ordered) -> dict[str, str]:
             })
             ann_id += 1
     coco = {"images": images, "annotations": annotations, "categories": categories}
-    return {"annotations.json": json.dumps(coco, indent=2)}
+    files: dict[str, str | bytes] = {"annotations.json": json.dumps(coco, indent=2)}
+    _append_images(data, files)
+    return files
 
 
-def _build_voc(data, class_index) -> dict[str, str]:
-    files: dict[str, str] = {}
+def _build_voc(data, class_index) -> dict[str, str | bytes]:
+    files: dict[str, str | bytes] = {}
     for entry in data:
         img = entry["image"]
         w = img.get("width") or 0
@@ -132,10 +174,11 @@ def _build_voc(data, class_index) -> dict[str, str]:
             ET.SubElement(bnd, "ymax").text = str(round(o["yMax"] * h))
         xml = ET.tostring(ann, encoding="unicode")
         files[f"annotations/{_stem(img['fileName'])}.xml"] = xml
+    _append_images(data, files)
     return files
 
 
-def _build_csv(data) -> dict[str, str]:
+def _build_csv(data) -> dict[str, str | bytes]:
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([
@@ -153,4 +196,6 @@ def _build_csv(data) -> dict[str, str]:
                 round(o["yMax"], 6),
                 round(o.get("confidence", 1.0), 4),
             ])
-    return {"annotations.csv": out.getvalue()}
+    files: dict[str, str | bytes] = {"annotations.csv": out.getvalue()}
+    _append_images(data, files)
+    return files

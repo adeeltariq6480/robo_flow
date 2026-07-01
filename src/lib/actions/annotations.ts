@@ -88,6 +88,22 @@ export async function setReviewStatus(
   return result;
 }
 
+export async function bulkSetReviewStatus(
+  projectId: string,
+  datasetId: string,
+  fileIds: string[],
+  status: ReviewStatus
+) {
+  const result = await annotationService.bulkSetReviewStatus(
+    projectId,
+    datasetId,
+    fileIds,
+    status
+  );
+  revalidatePath(reviewBase(projectId, datasetId));
+  return result;
+}
+
 export async function getReviewCounts(projectId: string, datasetId: string) {
   const result = await getDatasetReviewQueue(projectId, datasetId, "all");
   if (result.error || !result.files) return { error: result.error };

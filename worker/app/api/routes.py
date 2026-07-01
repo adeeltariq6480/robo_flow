@@ -543,8 +543,8 @@ async def reject_image(body: ReviewAction, _: None = Depends(verify_api_key)):
 async def export(body: ExportRequest, _: None = Depends(verify_api_key)):
     export_job_id = repo.create_export_job(body.project_id, body.export_format)
     try:
-        zip_bytes, file_name = export_builder.build_export(
-            body.project_id, body.export_format
+        zip_bytes, file_name = await asyncio.to_thread(
+            export_builder.build_export, body.project_id, body.export_format
         )
         loc = hf_storage.upload_export(body.project_id, file_name, zip_bytes)
         repo.complete_export_job(
@@ -556,7 +556,31 @@ async def export(body: ExportRequest, _: None = Depends(verify_api_key)):
             "hfPath": loc["hfPath"],
             "fileName": file_name,
         }
+    except ValueError as exc:
+        repo.fail_export_job(body.project_id, export_job_id, str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Export failed")
         repo.fail_export_job(body.project_id, export_job_id, str(exc))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@api_router.post("/export/download")
+async def export_download(body: ExportRequest, _: None = Depends(verify_api_key)):
+    """Build export ZIP (images + labels) and return it as a file download."""
+    try:
+        zip_bytes, file_name = await asyncio.to_thread(
+            export_builder.build_export, body.project_id, body.export_format
+        )
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Export download failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

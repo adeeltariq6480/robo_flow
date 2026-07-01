@@ -4,9 +4,14 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  bulkSetReviewStatus,
+  setReviewStatus,
+} from "@/lib/actions/annotations";
+import {
   deleteDatasetFiles,
   deleteAllDatasetFiles,
 } from "@/lib/actions/datasets";
+import { imageContentUrl } from "@/lib/api/client";
 import type {
   DatasetFileReview,
   ReviewFilter,
@@ -22,11 +27,12 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { ClassSelect } from "@/components/ui/class-select";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import {
+  Check,
   CheckCircle2,
   Clock,
-  FileImage,
+  ExternalLink,
   Filter,
-  Pencil,
+  X,
   XCircle,
 } from "lucide-react";
 
@@ -99,6 +105,8 @@ export function AnnotationReviewQueue({
 }: AnnotationReviewQueueProps) {
   const router = useRouter();
   const base = `/projects/${projectId}/datasets/${datasetId}/review`;
+  const filterQuery =
+    activeFilter !== "all" ? `?filter=${activeFilter}` : "";
   const [classFilter, setClassFilter] = useState(ALL_CLASS_ID);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -118,6 +126,7 @@ export function AnnotationReviewQueue({
 
   const allSelected =
     visibleFiles.length > 0 && selected.size === visibleFiles.length;
+  const selectionActive = selected.size > 0;
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -137,6 +146,54 @@ export function AnnotationReviewQueue({
     const q = filter === "all" ? "" : `?filter=${filter}`;
     router.push(`${base}${q}`);
     setSelected(new Set());
+  }
+
+  function openReview(fileId: string) {
+    router.push(`${base}/${fileId}${filterQuery}`);
+  }
+
+  async function handleReviewAction(
+    fileId: string,
+    status: "approved" | "rejected"
+  ) {
+    setLoading(true);
+    setError(null);
+    const result = await setReviewStatus(
+      projectId,
+      datasetId,
+      fileId,
+      status
+    );
+    if (result?.error) setError(result.error);
+    else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(fileId);
+        return next;
+      });
+      router.refresh();
+    }
+    setLoading(false);
+  }
+
+  async function handleBulkReview(status: "approved" | "rejected") {
+    if (selected.size === 0) return;
+    const label = status === "approved" ? "approve" : "reject";
+    if (!confirm(`${label} ${selected.size} selected image(s)?`)) return;
+    setLoading(true);
+    setError(null);
+    const result = await bulkSetReviewStatus(
+      projectId,
+      datasetId,
+      Array.from(selected),
+      status
+    );
+    if (result?.error) setError(result.error);
+    else {
+      setSelected(new Set());
+      router.refresh();
+    }
+    setLoading(false);
   }
 
   async function handleDeleteSelected() {
@@ -176,7 +233,7 @@ export function AnnotationReviewQueue({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6 pb-24">
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}
@@ -186,7 +243,7 @@ export function AnnotationReviewQueue({
       <Card>
         <CardHeader
           title="Annotation review"
-          description={`Review and edit bounding boxes for ${datasetName}.`}
+          description={`Open each image to edit boxes, or select images to approve / reject in bulk.`}
         />
 
         <div className="mb-4 flex flex-wrap items-end gap-4">
@@ -224,7 +281,7 @@ export function AnnotationReviewQueue({
         </div>
 
         <BulkDeleteToolbar
-          itemLabel="files"
+          itemLabel="images"
           totalCount={visibleFiles.length}
           selectedCount={selected.size}
           onDeleteSelected={handleDeleteSelected}
@@ -237,52 +294,142 @@ export function AnnotationReviewQueue({
 
         {visibleFiles.length === 0 ? (
           <p className="text-sm text-slate-500">
-            No files match this filter. Upload images or run auto-label from
-            Inference.
+            No images match this filter. Upload images or run auto-label from
+            Inference, then use <strong>Needs review</strong> to see labeled
+            files.
           </p>
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {visibleFiles.map((file) => (
-              <li
-                key={file.id}
-                className="flex items-center justify-between gap-4 py-3"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(file.id)}
-                    onChange={() => toggleSelect(file.id)}
-                    disabled={loading}
-                    className="rounded border-slate-300"
-                  />
-                  <div className="rounded-lg bg-slate-100 p-2">
-                    <FileImage className="h-5 w-5 text-slate-500" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleFiles.map((file) => {
+              const isSelected = selected.has(file.id);
+              const thumbUrl = imageContentUrl(projectId, file.id);
+              const reviewHref = `${base}/${file.id}${filterQuery}`;
+
+              return (
+                <article
+                  key={file.id}
+                  className={`overflow-hidden rounded-xl border bg-white shadow-sm transition-shadow ${
+                    isSelected
+                      ? "border-brand-500 ring-2 ring-brand-200"
+                      : "border-slate-200 hover:shadow-md"
+                  }`}
+                >
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => openReview(file.id)}
+                      className="group block w-full text-left"
+                      title="Open image to review"
+                    >
+                      <div className="relative aspect-[4/3] bg-slate-100">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={thumbUrl}
+                          alt={file.file_name}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/30 group-hover:opacity-100">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 shadow">
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open & review
+                          </span>
+                        </span>
+                      </div>
+                    </button>
+                    <label className="absolute left-2 top-2 flex cursor-pointer items-center rounded-md bg-white/90 p-1.5 shadow">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(file.id)}
+                        disabled={loading}
+                        className="rounded border-slate-300"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </label>
+                    <div className="absolute right-2 top-2">{statusBadge(file)}</div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-slate-900">
-                      {file.file_name}
-                    </p>
-                    <p className="text-sm text-slate-500">
-                      {file.annotations.length} box
-                      {file.annotations.length !== 1 ? "es" : ""}
-                      {file.auto_labeled_at && " · auto-labeled"}
-                    </p>
+
+                  <div className="space-y-2 p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-900">
+                        {file.file_name}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {file.annotations.length} box
+                        {file.annotations.length !== 1 ? "es" : ""}
+                        {file.auto_labeled_at && " · auto-labeled"}
+                      </p>
+                    </div>
+
+                    {isSelected ? (
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="flex-1 !border-green-300 !py-1.5 !text-xs !text-green-700 hover:!bg-green-50"
+                          onClick={() => handleReviewAction(file.id, "approved")}
+                          disabled={loading}
+                          loading={loading}
+                        >
+                          {!loading && <Check className="h-3.5 w-3.5" />}
+                          Approve
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="flex-1 !border-red-300 !py-1.5 !text-xs !text-red-700 hover:!bg-red-50"
+                          onClick={() => handleReviewAction(file.id, "rejected")}
+                          disabled={loading}
+                          loading={loading}
+                        >
+                          {!loading && <X className="h-3.5 w-3.5" />}
+                          Reject
+                        </Button>
+                      </div>
+                    ) : (
+                      <Link href={reviewHref} className="block">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full !py-1.5 !text-xs"
+                        >
+                          Review image
+                        </Button>
+                      </Link>
+                    )}
                   </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  {statusBadge(file)}
-                  <Link href={`${base}/${file.id}?filter=${activeFilter}`}>
-                    <Button variant="secondary">
-                      <Pencil className="h-4 w-4" />
-                      Edit
-                    </Button>
-                  </Link>
-                </div>
-              </li>
-            ))}
-          </ul>
+                </article>
+              );
+            })}
+          </div>
         )}
       </Card>
+
+      {selectionActive && (
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 sm:flex-row">
+          <Button
+            type="button"
+            onClick={() => handleBulkReview("approved")}
+            disabled={loading}
+            loading={loading}
+            className="shadow-lg !bg-green-600 hover:!bg-green-700"
+          >
+            {!loading && <Check className="h-4 w-4" />}
+            Approve all ({selected.size})
+          </Button>
+          <Button
+            type="button"
+            onClick={() => handleBulkReview("rejected")}
+            disabled={loading}
+            loading={loading}
+            className="shadow-lg !bg-red-600 hover:!bg-red-700"
+          >
+            {!loading && <X className="h-4 w-4" />}
+            Reject all ({selected.size})
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
