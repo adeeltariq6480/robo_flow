@@ -54,12 +54,31 @@ export interface UploadedImage {
   hfPath?: string | null;
 }
 
+export interface UploadSkipInfo {
+  fileName: string;
+  reason: string;
+  message?: string;
+}
+
+export interface UploadAdjustInfo {
+  fileName: string;
+  reason: string;
+  message?: string;
+}
+
+export interface UploadImagesResult {
+  uploaded: number;
+  images: UploadedImage[];
+  skipped?: UploadSkipInfo[];
+  adjusted?: UploadAdjustInfo[];
+}
+
 export function uploadImages(
   projectId: string,
   datasetId: string,
   files: File[],
   onProgress?: (percent: number) => void
-): Promise<{ uploaded: number; images: UploadedImage[] }> {
+): Promise<UploadImagesResult> {
   const form = new FormData();
   form.append("project_id", projectId);
   form.append("dataset_id", datasetId);
@@ -72,7 +91,7 @@ export function uploadZip(
   datasetId: string,
   file: File,
   onProgress?: (percent: number) => void
-): Promise<{ uploaded: number; images: UploadedImage[] }> {
+): Promise<UploadImagesResult> {
   const form = new FormData();
   form.append("project_id", projectId);
   form.append("dataset_id", datasetId);

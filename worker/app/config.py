@@ -60,6 +60,40 @@ class Settings(BaseSettings):
     default_image_size: int = 640
     temp_dir: str = "./.worker-tmp"
 
+    # --- Upload image QA ---
+    upload_auto_portrait: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UPLOAD_AUTO_PORTRAIT"),
+    )
+    upload_reject_blurry: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UPLOAD_REJECT_BLURRY"),
+    )
+    upload_blur_threshold: float = Field(
+        default=80.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_THRESHOLD"),
+        description="Laplacian variance minimum; lower = more rejections",
+    )
+
+    # --- Upload image QA (auto portrait + blur reject) ---
+    upload_auto_portrait: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UPLOAD_AUTO_PORTRAIT"),
+    )
+    upload_reject_blurry: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UPLOAD_REJECT_BLURRY"),
+    )
+    upload_blur_threshold: float = Field(
+        default=80.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_THRESHOLD"),
+        description="Laplacian variance below this is treated as blurry",
+    )
+    upload_blur_max_side: int = Field(
+        default=800,
+        validation_alias=AliasChoices("UPLOAD_BLUR_MAX_SIDE"),
+    )
+
     @property
     def dataset_repo_id(self) -> str:
         if self.hf_dataset_repo:

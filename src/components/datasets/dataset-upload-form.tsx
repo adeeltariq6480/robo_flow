@@ -42,6 +42,11 @@ export function DatasetUploadForm({
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [uploadSummary, setUploadSummary] = useState<{
+    uploaded: number;
+    skipped: { fileName: string; message?: string }[];
+    adjusted: { fileName: string; message?: string }[];
+  } | null>(null);
 
   const addFilesToQueue = useCallback(
     (files: File[]) => {
@@ -92,16 +97,28 @@ export function DatasetUploadForm({
       .map((q) => q.file)
       .filter((f) => !f.name.toLowerCase().endsWith(".zip"));
 
+    const summary = {
+      uploaded: 0,
+      skipped: [] as { fileName: string; message?: string }[],
+      adjusted: [] as { fileName: string; message?: string }[],
+    };
+
     try {
       if (images.length > 0) {
-        await uploadImages(projectId, datasetId, images, (p) =>
+        const result = await uploadImages(projectId, datasetId, images, (p) =>
           setProgress(Math.min(99, p))
         );
+        summary.uploaded += result.uploaded;
+        summary.skipped.push(...(result.skipped ?? []));
+        summary.adjusted.push(...(result.adjusted ?? []));
       }
       for (const zip of zips) {
-        await uploadZip(projectId, datasetId, zip, (p) =>
+        const result = await uploadZip(projectId, datasetId, zip, (p) =>
           setProgress(Math.min(99, p))
         );
+        summary.uploaded += result.uploaded;
+        summary.skipped.push(...(result.skipped ?? []));
+        summary.adjusted.push(...(result.adjusted ?? []));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -110,19 +127,53 @@ export function DatasetUploadForm({
     }
 
     setProgress(100);
+    setUploadSummary(summary);
     setDone(true);
     setUploading(false);
     router.refresh();
   }
 
   if (done) {
+    const skipped = uploadSummary?.skipped ?? [];
+    const adjusted = uploadSummary?.adjusted ?? [];
+    const uploaded = uploadSummary?.uploaded ?? 0;
+
     return (
       <Card className="text-center">
         <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
         <h2 className="mt-4 text-lg font-semibold">Upload complete</h2>
         <p className="mt-2 text-sm text-slate-500">
-          {queue.length} file{queue.length !== 1 ? "s" : ""} added to {datasetName}
+          {uploaded} image{uploaded !== 1 ? "s" : ""} saved to {datasetName}
         </p>
+
+        {adjusted.length > 0 && (
+          <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-left text-sm text-blue-900">
+            <p className="font-medium">Auto-fixed orientation</p>
+            <ul className="mt-2 list-inside list-disc text-blue-800">
+              {adjusted.map((item) => (
+                <li key={item.fileName}>
+                  {item.fileName}
+                  {item.message ? ` — ${item.message}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {skipped.length > 0 && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
+            <p className="font-medium">Skipped automatically</p>
+            <ul className="mt-2 list-inside list-disc text-amber-800">
+              {skipped.map((item) => (
+                <li key={item.fileName}>
+                  {item.fileName}
+                  {item.message ? ` — ${item.message}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="mt-6 flex justify-center gap-3">
           <Button
             variant="secondary"
@@ -130,6 +181,7 @@ export function DatasetUploadForm({
               setDone(false);
               setQueue([]);
               setProgress(0);
+              setUploadSummary(null);
             }}
           >
             Upload more
@@ -149,7 +201,7 @@ export function DatasetUploadForm({
       <Card>
         <CardHeader
           title={`Upload to ${datasetName}`}
-          description="Add images or data files. Assign a class label to each file."
+          description="Images are auto-rotated to portrait when needed. Blurry photos are skipped."
         />
 
         {classes.length > 0 && (

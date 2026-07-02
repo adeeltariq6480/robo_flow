@@ -33,7 +33,7 @@ from app.models.schemas import (
     ReviewAction,
     TestRunRequest,
 )
-from app.services import export_builder, hf_storage
+from app.services import export_builder, hf_storage, image_preprocess
 from app.services import firestore_repo as repo
 from app.services.firebase_client import get_db
 
@@ -88,6 +88,88 @@ def _image_dimensions(data: bytes) -> tuple[int | None, int | None]:
             return img.width, img.height
     except Exception:
         return None, None
+
+
+def _preprocess_upload_item(
+    data: bytes, filename: str
+) -> tuple[
+    image_preprocess.PreprocessResult | None,
+    dict | None,
+    dict | None,
+]:
+    """Returns (result, skip_info, adjust_info)."""
+    result = image_preprocess.preprocess_upload_image(data, filename)
+    if not result.accepted:
+        reason = result.skip_reason or "rejected"
+        labels = {
+            "blurry": "Image is too blurry",
+            "invalid_image": "Invalid or unreadable image",
+        }
+        return None, {"fileName": filename, "reason": reason, "message": labels.get(reason, reason)}, None
+
+    adjust_info = None
+    if result.rotated_to_portrait or result.exif_corrected:
+        parts = []
+        if result.exif_corrected:
+            parts.append("orientation corrected")
+        if result.rotated_to_portrait:
+            parts.append("rotated to portrait")
+        adjust_info = {
+            "fileName": filename,
+            "reason": "rotated_to_portrait" if result.rotated_to_portrait else "exif_corrected",
+            "message": ", ".join(parts),
+        }
+    return result, None, adjust_info
+
+
+async def _store_dataset_image(
+    project_id: str,
+    dataset_id: str,
+    filename: str,
+    result: image_preprocess.PreprocessResult,
+    content_type: str | None,
+) -> dict:
+    loc = await asyncio.to_thread(
+        hf_storage.upload_dataset_image,
+        project_id,
+        dataset_id,
+        filename,
+        result.data,
+    )
+    return await asyncio.to_thread(
+        repo.create_image,
+        project_id,
+        dataset_id,
+        {
+            "fileName": filename,
+            "hfRepo": loc["hfRepo"],
+            "hfPath": loc["hfPath"],
+            "width": result.width,
+            "height": result.height,
+            "mimeType": result.mime_type or content_type,
+            "fileSize": len(result.data),
+        },
+    )
+
+
+async def _upload_one_image(
+    project_id: str,
+    dataset_id: str,
+    filename: str,
+    raw_data: bytes,
+    content_type: str | None = None,
+) -> tuple[dict | None, dict | None, dict | None]:
+    """Upload after QA. Returns (image_record, skip_info, adjust_info)."""
+    result, skip_info, adjust_info = await asyncio.to_thread(
+        _preprocess_upload_item, raw_data, filename
+    )
+    if skip_info:
+        return None, skip_info, None
+    assert result is not None
+    image = await _store_dataset_image(
+        project_id, dataset_id, filename, result, content_type
+    )
+    return image, None, adjust_info
 
 
 # ===========================================================================
@@ -234,33 +316,16 @@ async def upload_images(
         raise HTTPException(status_code=400, detail="No files provided")
 
     created = []
+    skipped = []
+    adjusted = []
     for f in files:
         data = await f.read()
         if not data:
             continue
         filename = _safe_filename(f.filename)
-        width, height = _image_dimensions(data)
         try:
-            loc = await asyncio.to_thread(
-                hf_storage.upload_dataset_image,
-                project_id,
-                dataset_id,
-                filename,
-                data,
-            )
-            image = await asyncio.to_thread(
-                repo.create_image,
-                project_id,
-                dataset_id,
-                {
-                    "fileName": filename,
-                    "hfRepo": loc["hfRepo"],
-                    "hfPath": loc["hfPath"],
-                    "width": width,
-                    "height": height,
-                    "mimeType": f.content_type,
-                    "fileSize": len(data),
-                },
+            image, skip_info, adjust_info = await _upload_one_image(
+                project_id, dataset_id, filename, data, f.content_type
             )
         except HTTPException:
             raise
@@ -270,10 +335,21 @@ async def upload_images(
         except Exception as exc:
             logger.exception("upload-images failed for %s", filename)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if skip_info:
+            skipped.append(skip_info)
+            continue
+        if adjust_info:
+            adjusted.append(adjust_info)
         created.append(image)
 
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
-    return {"uploaded": len(created), "images": created}
+    return {
+        "uploaded": len(created),
+        "images": created,
+        "skipped": skipped,
+        "adjusted": adjusted,
+    }
 
 
 @api_router.post("/upload-zip")
@@ -287,6 +363,8 @@ async def upload_zip(
     hf_storage.upload_dataset_zip(project_id, dataset_id, file.filename, raw)
 
     created = []
+    skipped = []
+    adjusted = []
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
             for name in zf.namelist():
@@ -294,21 +372,25 @@ async def upload_zip(
                     continue
                 data = zf.read(name)
                 base = name.rsplit("/", 1)[-1]
-                width, height = _image_dimensions(data)
-                loc = hf_storage.upload_dataset_image(project_id, dataset_id, base, data)
-                created.append(repo.create_image(project_id, dataset_id, {
-                    "fileName": base,
-                    "hfRepo": loc["hfRepo"],
-                    "hfPath": loc["hfPath"],
-                    "width": width,
-                    "height": height,
-                    "fileSize": len(data),
-                }))
+                image, skip_info, adjust_info = await _upload_one_image(
+                    project_id, dataset_id, base, data
+                )
+                if skip_info:
+                    skipped.append(skip_info)
+                    continue
+                if adjust_info:
+                    adjusted.append(adjust_info)
+                created.append(image)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
-    repo.recount_dataset_images(project_id, dataset_id)
-    return {"uploaded": len(created), "images": created}
+    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
+    return {
+        "uploaded": len(created),
+        "images": created,
+        "skipped": skipped,
+        "adjusted": adjusted,
+    }
 
 
 @api_router.post("/upload-model")

@@ -57,7 +57,7 @@ function buildDataYaml(datasetName: string, classNames: string[]) {
     .map((name, i) => `  ${i}: ${JSON.stringify(name)}`)
     .join("\n");
   return [
-    `# Label AI export — approved labels only`,
+    `# Axiom AI export — approved labels only`,
     `path: .`,
     `train: images`,
     `val: images`,

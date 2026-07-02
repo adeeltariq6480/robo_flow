@@ -1,5 +1,5 @@
 /**
- * Typed HTTP client for the Robo Flow FastAPI backend.
+ * Typed HTTP client for the Axiom AI FastAPI backend.
  *
  * The frontend talks ONLY to this backend — no Firebase Admin / Storage and no
  * secrets in the browser. The base URL is the public worker API URL.

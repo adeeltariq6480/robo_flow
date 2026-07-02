@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LabelAILogo } from "@/components/layout/label-ai-logo";
+import { AxiomAILogo } from "@/components/layout/axiom-ai-logo";
 import {
   FolderKanban,
   Plus,
@@ -14,7 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 
-const LAST_PROJECT_KEY = "labelai:lastProjectId";
+const LAST_PROJECT_KEY = "axiomai:lastProjectId";
 
 const projectLinks = [
   { suffix: "", label: "Overview", icon: LayoutDashboard },
@@ -71,7 +71,7 @@ export function AppSidebar() {
   return (
     <aside className="flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white">
       <Link href="/" className="flex h-16 shrink-0 items-center border-b border-slate-200 px-4">
-        <LabelAILogo />
+        <AxiomAILogo />
       </Link>
 
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4">

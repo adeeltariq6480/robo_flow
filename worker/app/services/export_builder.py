@@ -80,7 +80,7 @@ def _build_yolo(data, class_index, classes_ordered) -> dict[str, str | bytes]:
         f"  {i}: {json.dumps(name)}" for i, name in enumerate(classes_ordered)
     )
     files["data.yaml"] = (
-        "# Robo Flow export — approved labels only\n"
+        "# Axiom AI export — approved labels only\n"
         "path: .\n"
         "train: images\n"
         "val: images\n"

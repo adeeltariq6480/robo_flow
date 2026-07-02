@@ -23,15 +23,15 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "HF_DATASET_REPO / HF_USERNAME is not set — dataset uploads will fail"
         )
-    logger.info("Robo Flow API started on %s:%s", settings.worker_host, settings.worker_port)
+    logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
     await queue_manager.stop()
     logger.info("API stopped")
 
 
 app = FastAPI(
-    title="Robo Flow API",
-    description="Main API layer: Firestore metadata, Hugging Face storage, YOLO auto-labelling",
+    title="Axiom AI API",
+    description="Axiom AI backend: Firestore metadata, Hugging Face storage, YOLO auto-labelling",
     version="1.0.0",
     lifespan=lifespan,
 )
