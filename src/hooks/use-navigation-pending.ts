@@ -1,25 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { useNavigation } from "@/contexts/navigation-context";
 
-/** Tracks in-flight navigation; auto-clears when the route finishes loading. */
+/** Tracks in-flight navigation with a minimum transition animation duration. */
 export function useNavigationPending() {
-  const pathname = usePathname();
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    setPendingKey(null);
-  }, [pathname]);
-
-  const startNavigation = useCallback((key: string) => {
-    setPendingKey(key);
-  }, []);
-
-  const isPending = useCallback(
-    (key: string) => pendingKey === key,
-    [pendingKey]
-  );
-
+  const { startNavigation, isPending, pendingKey } = useNavigation();
   return { pendingKey, startNavigation, isPending };
 }
