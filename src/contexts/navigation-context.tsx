@@ -155,6 +155,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
 
       navigatingRef.current = true;
       routeReadyRef.current = false;
+      readyAtRef.current = 0;
       startedAtRef.current = Date.now();
       setPendingKey(href);
       setTargetHref(href);
