@@ -13,7 +13,7 @@ const UPLOAD_BATCH_SIZE = 25;
 /** Parallel upload requests from the browser. */
 const UPLOAD_CONCURRENCY = 4;
 const UPLOAD_MAX_RETRIES = 2;
-const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 60 * 60 * 1000;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const batches: T[][] = [];
