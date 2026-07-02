@@ -13,10 +13,13 @@ Model repo (HF model):
 """
 
 import logging
+import tempfile
+import threading
 from functools import lru_cache
 from pathlib import Path
 
-from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.utils import HfHubHTTPError
 
 from app.config import settings
 
@@ -24,8 +27,9 @@ logger = logging.getLogger(__name__)
 
 REPO_TYPE_DATASET = "dataset"
 REPO_TYPE_MODEL = "model"
-# HF commits with too many files can fail; chunk batch uploads.
-HF_BATCH_COMMIT_SIZE = 50
+
+# HF free tier: ~128 repo commits/hour — serialize commits + batch per request.
+_hf_commit_lock = threading.Lock()
 
 
 @lru_cache(maxsize=1)
@@ -53,6 +57,22 @@ def _temp_dir() -> Path:
     path = Path(settings.temp_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _safe_local_name(file_name: str, used: set[str]) -> str:
+    base = file_name.replace("\\", "/").rsplit("/", 1)[-1].strip() or "image.jpg"
+    if base not in used:
+        used.add(base)
+        return base
+    stem = Path(base).stem or "image"
+    suffix = Path(base).suffix or ".jpg"
+    n = 2
+    while True:
+        candidate = f"{stem}_{n}{suffix}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        n += 1
 
 
 # ---------------------------------------------------------------------------
@@ -95,13 +115,14 @@ def upload_bytes(
         else settings.model_repo_id
     )
     _ensure_repo(repo_id, repo_type)
-    _api().upload_file(
-        path_or_fileobj=data,
-        path_in_repo=path_in_repo,
-        repo_id=repo_id,
-        repo_type=repo_type,
-        commit_message=commit_message or f"Upload {path_in_repo}",
-    )
+    with _hf_commit_lock:
+        _api().upload_file(
+            path_or_fileobj=data,
+            path_in_repo=path_in_repo,
+            repo_id=repo_id,
+            repo_type=repo_type,
+            commit_message=commit_message or f"Upload {path_in_repo}",
+        )
     return {"hfRepo": repo_id, "hfPath": path_in_repo, "repoType": repo_type}
 
 
@@ -120,34 +141,71 @@ def upload_dataset_images_batch(
     dataset_id: str,
     items: list[tuple[str, bytes]],
 ) -> dict:
-    """Upload many images in few Hugging Face commits (faster than one-by-one)."""
+    """Upload many images in a single HF commit via upload_folder."""
     if not items:
         raise ValueError("No images to upload")
 
     repo_id = settings.dataset_repo_id
     _ensure_repo(repo_id, REPO_TYPE_DATASET)
 
-    api = _api()
-    for start in range(0, len(items), HF_BATCH_COMMIT_SIZE):
-        chunk = items[start : start + HF_BATCH_COMMIT_SIZE]
-        operations = [
-            CommitOperationAdd(
-                path_in_repo=dataset_image_path(project_id, dataset_id, file_name),
-                path_or_fileobj=data,
-            )
-            for file_name, data in chunk
-        ]
-        api.create_commit(
-            repo_id=repo_id,
-            repo_type=REPO_TYPE_DATASET,
-            operations=operations,
-            commit_message=(
-                f"Upload {len(chunk)} images to dataset {dataset_id}"
-                f" ({start + len(chunk)}/{len(items)})"
-            ),
-        )
+    repo_folder = f"datasets/{project_id}/{dataset_id}/images"
+    used_names: set[str] = set()
+    local_names: list[str] = []
 
-    return {"hfRepo": repo_id, "count": len(items)}
+    with tempfile.TemporaryDirectory(dir=_temp_dir()) as tmp:
+        tmp_path = Path(tmp)
+        for file_name, data in items:
+            local_name = _safe_local_name(file_name, used_names)
+            local_names.append(local_name)
+            (tmp_path / local_name).write_bytes(data)
+
+        with _hf_commit_lock:
+            try:
+                _api().upload_folder(
+                    folder_path=str(tmp_path),
+                    repo_id=repo_id,
+                    repo_type=REPO_TYPE_DATASET,
+                    path_in_repo=repo_folder,
+                    commit_message=f"Upload {len(items)} images to dataset {dataset_id}",
+                )
+            except HfHubHTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    raise RuntimeError(
+                        "Hugging Face commit rate limit reached. "
+                        "Wait ~30 minutes or upload fewer images per session."
+                    ) from exc
+                raise
+
+    return {"hfRepo": repo_id, "count": len(items), "localNames": local_names}
+
+
+def upload_dataset_images_from_folder(
+    project_id: str,
+    dataset_id: str,
+    folder_path: str,
+    count: int,
+) -> dict:
+    """Upload an existing local folder in a single commit."""
+    repo_id = settings.dataset_repo_id
+    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+    repo_folder = f"datasets/{project_id}/{dataset_id}/images"
+    with _hf_commit_lock:
+        try:
+            _api().upload_folder(
+                folder_path=folder_path,
+                repo_id=repo_id,
+                repo_type=REPO_TYPE_DATASET,
+                path_in_repo=repo_folder,
+                commit_message=f"Upload {count} images to dataset {dataset_id}",
+            )
+        except HfHubHTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise RuntimeError(
+                    "Hugging Face commit rate limit reached. "
+                    "Wait ~30 minutes or upload fewer images per session."
+                ) from exc
+            raise
+    return {"hfRepo": repo_id, "count": count}
 
 
 def upload_dataset_zip(

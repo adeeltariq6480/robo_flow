@@ -3,28 +3,65 @@
 /**
  * Browser → FastAPI multipart uploads. Files are sent to the backend, which
  * stores them in Hugging Face Hub and records metadata in Firestore.
- * No secrets are used here — only the public backend URL.
  */
 
 import { API_BASE_URL } from "@/lib/api/client";
 
-/** Images per HTTP request. */
-const UPLOAD_BATCH_SIZE = 25;
-/** Parallel upload requests from the browser. */
-const UPLOAD_CONCURRENCY = 4;
+/** Stay under Railway/proxy body limits (~15–25 MB per request). */
+const MAX_BATCH_BYTES = 15 * 1024 * 1024;
+/** Cap files per request even when images are small. */
+const MAX_BATCH_FILES = 20;
 const UPLOAD_MAX_RETRIES = 2;
-const UPLOAD_TIMEOUT_MS = 60 * 60 * 1000;
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const batches: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    batches.push(items.slice(i, i + size));
-  }
-  return batches;
-}
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Size-aware batches: fewer commits than 1-by-1, small enough to avoid timeouts. */
+export function buildUploadBatches(files: File[]): File[][] {
+  const batches: File[][] = [];
+  let current: File[] = [];
+  let currentBytes = 0;
+
+  for (const file of files) {
+    const wouldOverflow =
+      current.length > 0 &&
+      (current.length >= MAX_BATCH_FILES ||
+        currentBytes + file.size > MAX_BATCH_BYTES);
+
+    if (wouldOverflow) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+
+    current.push(file);
+    currentBytes += file.size;
+  }
+
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function isConnectionError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes("connection error") ||
+    m.includes("network error") ||
+    m.includes("timed out") ||
+    m.includes("failed to fetch") ||
+    m.includes("cors")
+  );
+}
+
+function isRateLimitError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes("429") ||
+    m.includes("rate limit") ||
+    m.includes("too many requests")
+  );
 }
 
 function uploadForm<T>(
@@ -66,16 +103,12 @@ function uploadForm<T>(
     xhr.onerror = () =>
       reject(
         new Error(
-          "Upload failed — connection error. If you see CORS in the console, the request may be too large or timed out."
+          "Connection lost while uploading — batch may be too large or the server timed out."
         )
       );
 
     xhr.ontimeout = () =>
-      reject(
-        new Error(
-          "Upload timed out — try again or upload fewer images at once."
-        )
-      );
+      reject(new Error("Upload timed out — retrying with a smaller batch."));
 
     xhr.send(form);
   });
@@ -106,15 +139,34 @@ export interface UploadImagesResult {
   adjusted?: UploadAdjustInfo[];
 }
 
+function emptyResult(): UploadImagesResult {
+  return { uploaded: 0, images: [], skipped: [], adjusted: [] };
+}
+
+function mergeResults(
+  target: UploadImagesResult,
+  source: UploadImagesResult
+): UploadImagesResult {
+  target.uploaded += source.uploaded;
+  target.images.push(...(source.images ?? []));
+  target.skipped!.push(...(source.skipped ?? []));
+  target.adjusted!.push(...(source.adjusted ?? []));
+  return target;
+}
+
 function uploadImagesBatch(
   projectId: string,
   datasetId: string,
   files: File[],
+  uploadSessionId: string,
+  finalizeSession: boolean,
   onProgress?: (percent: number) => void
 ): Promise<UploadImagesResult> {
   const form = new FormData();
   form.append("project_id", projectId);
   form.append("dataset_id", datasetId);
+  form.append("upload_session_id", uploadSessionId);
+  form.append("finalize_session", String(finalizeSession));
   for (const f of files) form.append("files", f);
   return uploadForm("/api/upload-images", form, onProgress);
 }
@@ -122,32 +174,58 @@ function uploadImagesBatch(
 async function uploadBatchWithRetry(
   projectId: string,
   datasetId: string,
-  batch: File[]
+  batch: File[],
+  uploadSessionId: string,
+  finalizeSession: boolean,
+  onProgress?: (percent: number) => void
 ): Promise<UploadImagesResult> {
+  if (batch.length === 0) return emptyResult();
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
     try {
-      return await uploadImagesBatch(projectId, datasetId, batch);
+      return await uploadImagesBatch(
+        projectId,
+        datasetId,
+        batch,
+        uploadSessionId,
+        finalizeSession,
+        onProgress
+      );
     } catch (err) {
       lastError = err instanceof Error ? err : new Error("Upload failed");
+      const msg = lastError.message;
+
+      if (isConnectionError(msg) && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        const left = await uploadBatchWithRetry(
+          projectId,
+          datasetId,
+          batch.slice(0, mid),
+          uploadSessionId,
+          false,
+          onProgress
+        );
+        const right = await uploadBatchWithRetry(
+          projectId,
+          datasetId,
+          batch.slice(mid),
+          uploadSessionId,
+          finalizeSession,
+          onProgress
+        );
+        return mergeResults(left, right);
+      }
+
       if (attempt < UPLOAD_MAX_RETRIES) {
-        await sleep(800 * (attempt + 1));
+        await sleep(isRateLimitError(msg) ? 90_000 : 1500 * (attempt + 1));
+        continue;
       }
     }
   }
 
   throw lastError ?? new Error("Upload failed");
-}
-
-function mergeResults(
-  target: UploadImagesResult,
-  source: UploadImagesResult
-) {
-  target.uploaded += source.uploaded;
-  target.images.push(...(source.images ?? []));
-  target.skipped!.push(...(source.skipped ?? []));
-  target.adjusted!.push(...(source.adjusted ?? []));
 }
 
 export async function uploadImages(
@@ -156,42 +234,40 @@ export async function uploadImages(
   files: File[],
   onProgress?: (percent: number) => void
 ): Promise<UploadImagesResult> {
-  if (files.length === 0) {
-    return { uploaded: 0, images: [], skipped: [], adjusted: [] };
-  }
+  if (files.length === 0) return emptyResult();
 
-  const combined: UploadImagesResult = {
-    uploaded: 0,
-    images: [],
-    skipped: [],
-    adjusted: [],
-  };
-
-  const batches = chunk(files, UPLOAD_BATCH_SIZE);
-  let nextBatch = 0;
+  const combined = emptyResult();
+  const batches = buildUploadBatches(files);
+  const uploadSessionId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   let completedFiles = 0;
   const totalFiles = files.length;
 
-  const reportProgress = () => {
-    if (!onProgress) return;
-    onProgress(Math.min(99, Math.round((completedFiles / totalFiles) * 100)));
-  };
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchStart = completedFiles;
 
-  async function worker() {
-    while (true) {
-      const index = nextBatch++;
-      if (index >= batches.length) break;
+    const result = await uploadBatchWithRetry(
+      projectId,
+      datasetId,
+      batch,
+      uploadSessionId,
+      i === batches.length - 1,
+      onProgress
+        ? (pct) => {
+            const doneInBatch = (pct / 100) * batch.length;
+            const overall = ((batchStart + doneInBatch) / totalFiles) * 100;
+            onProgress(Math.min(99, Math.round(overall)));
+          }
+        : undefined
+    );
 
-      const batch = batches[index];
-      const result = await uploadBatchWithRetry(projectId, datasetId, batch);
-      mergeResults(combined, result);
-      completedFiles += batch.length;
-      reportProgress();
-    }
+    mergeResults(combined, result);
+    completedFiles += batch.length;
+    onProgress?.(Math.min(99, Math.round((completedFiles / totalFiles) * 100)));
   }
-
-  const workers = Math.min(UPLOAD_CONCURRENCY, batches.length);
-  await Promise.all(Array.from({ length: workers }, () => worker()));
 
   return combined;
 }
