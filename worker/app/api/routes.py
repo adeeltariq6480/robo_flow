@@ -33,6 +33,7 @@ from app.models.schemas import (
     JobStatus,
     JobType,
     ModelCompareRequest,
+    ModelRegister,
     ProjectCreate,
     ProjectUpdate,
     ReviewAction,
@@ -680,8 +681,11 @@ async def upload_model(
     file: UploadFile = File(...),
     _: None = Depends(verify_api_key),
 ):
+    """Legacy path: file through worker. Prefer /api/models/register + direct storage."""
     data = await file.read()
-    loc = file_storage.upload_model_file(project_id, file.filename, data)
+    loc = await asyncio.to_thread(
+        file_storage.upload_model_file, project_id, file.filename, data
+    )
     model = repo.create_model(project_id, {
         "modelName": model_name,
         "modelVersion": model_version,
@@ -692,6 +696,26 @@ async def upload_model(
         "fileSize": len(data),
     })
     return model
+
+
+@api_router.post("/models/register")
+async def register_model(body: ModelRegister, _: None = Depends(verify_api_key)):
+    """Register model metadata after browser uploaded file to Supabase Storage."""
+    if not body.hf_path.strip():
+        raise HTTPException(status_code=400, detail="hf_path is required")
+    return await asyncio.to_thread(
+        repo.create_model,
+        body.project_id,
+        {
+            "modelName": body.model_name,
+            "modelVersion": body.model_version,
+            "modelType": body.model_type,
+            "description": body.description,
+            "hfRepo": body.hf_repo or "models",
+            "hfPath": body.hf_path,
+            "fileSize": body.file_size,
+        },
+    )
 
 
 @api_router.get("/models/{project_id}")

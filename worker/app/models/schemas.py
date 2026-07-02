@@ -232,3 +232,16 @@ class ExportRequest(BaseModel):
     export_format: str = Field(alias="exportFormat")
 
     model_config = {"populate_by_name": True}
+
+
+class ModelRegister(BaseModel):
+    project_id: str = Field(alias="projectId")
+    model_name: str = Field(alias="modelName")
+    model_version: str = Field(default="1.0.0", alias="modelVersion")
+    model_type: str = Field(default="pytorch", alias="modelType")
+    description: str | None = None
+    hf_repo: str = Field(default="models", alias="hfRepo")
+    hf_path: str = Field(alias="hfPath")
+    file_size: int = Field(default=0, alias="fileSize")
+
+    model_config = {"populate_by_name": True}

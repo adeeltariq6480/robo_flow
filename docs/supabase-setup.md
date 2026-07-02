@@ -16,9 +16,11 @@ The frontend still talks to the **FastAPI worker** — only Railway env changes.
 
 Supabase Dashboard → **SQL Editor** → New query → paste and run:
 
-**File:** [`supabase/schema_full.sql`](../supabase/schema_full.sql)
+**File:** [`supabase/schema_reset.sql`](../supabase/schema_reset.sql)
 
-This creates all tables, RLS (open/no-auth), and storage buckets: `datasets`, `models`, `exports`.
+This **drops** old tables (`dataset_files`, `inference_jobs`, …) and creates the **current** schema (`images`, `labelling_jobs`, …).
+
+> Do **not** use `ml_schema.sql` — that is the legacy schema and will cause `PGRST205` / missing `images` table errors.
 
 ---
 
@@ -45,11 +47,11 @@ Health check should return:
 
 ## 4. Vercel (frontend)
 
-No Supabase keys needed on Vercel if you keep the worker API pattern.
-
 | Variable | Value |
 |----------|--------|
 | `NEXT_PUBLIC_WORKER_API_URL` | Railway public URL |
+| `NEXT_PUBLIC_SUPABASE_URL` | Same Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon / publishable key (for large model uploads direct to Storage) |
 | `WORKER_API_KEY` | same as Railway (or empty) |
 
 Redeploy frontend.

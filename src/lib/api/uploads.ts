@@ -5,7 +5,11 @@
  * stores them in Hugging Face Hub and records metadata in Firestore.
  */
 
-import { API_BASE_URL } from "@/lib/api/client";
+import { API_BASE_URL, api } from "@/lib/api/client";
+import {
+  modelStoragePath,
+  uploadFileToSupabaseStorage,
+} from "@/lib/supabase/storage-upload";
 
 /** Stay under Railway/proxy body limits (~15–25 MB per request). */
 const MAX_BATCH_BYTES = 15 * 1024 * 1024;
@@ -285,7 +289,7 @@ export function uploadZip(
   return uploadForm("/api/upload-zip", form, onProgress);
 }
 
-export function uploadModel(
+export async function uploadModel(
   projectId: string,
   data: {
     file: File;
@@ -296,12 +300,29 @@ export function uploadModel(
   },
   onProgress?: (percent: number) => void
 ): Promise<{ id: string; modelName: string }> {
-  const form = new FormData();
-  form.append("project_id", projectId);
-  form.append("model_name", data.modelName);
-  form.append("model_version", data.modelVersion);
-  form.append("model_type", data.modelType);
-  form.append("description", data.description ?? "");
-  form.append("file", data.file);
-  return uploadForm("/api/upload-model", form, onProgress);
+  const storagePath = modelStoragePath(projectId, data.file.name);
+
+  await uploadFileToSupabaseStorage(
+    "models",
+    storagePath,
+    data.file,
+    onProgress ? (pct) => onProgress(Math.round(pct * 0.92)) : undefined
+  );
+
+  const model = await api.post<{ id: string; modelName: string }>(
+    "/api/models/register",
+    {
+      project_id: projectId,
+      model_name: data.modelName,
+      model_version: data.modelVersion,
+      model_type: data.modelType,
+      description: data.description ?? null,
+      hf_repo: "models",
+      hf_path: storagePath,
+      file_size: data.file.size,
+    }
+  );
+
+  onProgress?.(100);
+  return model;
 }
