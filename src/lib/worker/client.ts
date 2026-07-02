@@ -1,8 +1,3 @@
-/**
- * Server-side fetch for /jobs/* inference endpoints.
- * Uses the same API key rules as the main API client (no hardcoded default).
- */
-
 import { API_BASE_URL } from "@/lib/api/client";
 
 const WORKER_API_KEY = process.env.WORKER_API_KEY ?? "";
@@ -41,16 +36,28 @@ function workerHeaders(extra?: HeadersInit): HeadersInit {
   return headers;
 }
 
-async function parseWorkerError(res: Response): Promise<string> {
+async function readResponseText(res: Response): Promise<string> {
   try {
-    const data = await res.json();
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+async function parseWorkerError(res: Response): Promise<string> {
+  const raw = await readResponseText(res);
+  if (!raw.trim()) return `Worker error ${res.status}`;
+  try {
+    const data = JSON.parse(raw) as {
+      detail?: string | Array<{ msg?: string }>;
+    };
     if (typeof data?.detail === "string") return data.detail;
     if (Array.isArray(data?.detail)) {
-      return data.detail.map((d: { msg?: string }) => d.msg).join(", ");
+      return data.detail.map((d) => d.msg).filter(Boolean).join(", ");
     }
-    return JSON.stringify(data);
+    return raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
   } catch {
-    return (await res.text()) || `Worker error ${res.status}`;
+    return raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
   }
 }
 
@@ -75,7 +82,11 @@ async function workerFetch<T>(
     throw new Error(message || `Worker error ${res.status}`);
   }
 
-  return res.json() as Promise<T>;
+  const raw = await readResponseText(res);
+  if (!raw.trim()) {
+    return undefined as T;
+  }
+  return JSON.parse(raw) as T;
 }
 
 export async function submitTestRun(body: {

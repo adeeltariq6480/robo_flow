@@ -36,13 +36,16 @@ export async function downloadExportZip(
   });
 
   if (!res.ok) {
+    const raw = await res.text();
     let message = `Export failed (${res.status})`;
-    try {
-      const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-    } catch {
-      const text = await res.text();
-      if (text) message = text;
+    if (raw.trim()) {
+      try {
+        const data = JSON.parse(raw) as { detail?: string };
+        if (typeof data?.detail === "string") message = data.detail;
+        else message = raw.slice(0, 300);
+      } catch {
+        message = raw.slice(0, 300);
+      }
     }
     throw new Error(message);
   }

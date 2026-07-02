@@ -71,17 +71,34 @@ function backendUnreachableMessage(cause?: unknown): string {
   );
 }
 
-async function parseError(res: Response): Promise<string> {
+/** Read body once — never call res.json() then res.text() on the same Response. */
+async function readResponseText(res: Response): Promise<string> {
   try {
-    const data = await res.json();
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+function formatApiErrorPayload(raw: string, status: number): string {
+  if (!raw.trim()) return `Request failed (${status})`;
+  try {
+    const data = JSON.parse(raw) as {
+      detail?: string | Array<{ msg?: string }>;
+    };
     if (typeof data?.detail === "string") return data.detail;
     if (Array.isArray(data?.detail)) {
-      return data.detail.map((d: { msg?: string }) => d.msg).join(", ");
+      return data.detail.map((d) => d.msg).filter(Boolean).join(", ");
     }
-    return JSON.stringify(data);
+    return raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
   } catch {
-    return (await res.text()) || `Request failed (${res.status})`;
+    return raw.length > 500 ? `${raw.slice(0, 500)}…` : raw;
   }
+}
+
+async function parseError(res: Response): Promise<string> {
+  const raw = await readResponseText(res);
+  return formatApiErrorPayload(raw, res.status);
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -109,14 +126,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (res.status === 204) return undefined as T;
   const contentType = res.headers.get("content-type") ?? "";
+  const raw = await readResponseText(res);
   if (!contentType.includes("application/json")) {
     throw new ApiError(
-      `Expected JSON from ${path} but got ${contentType || "no content-type"}`,
+      `Expected JSON from ${path} but got ${contentType || "no content-type"}${raw ? `: ${raw.slice(0, 200)}` : ""}`,
       res.status
     );
   }
+  if (!raw.trim()) {
+    return undefined as T;
+  }
   try {
-    return (await res.json()) as T;
+    return JSON.parse(raw) as T;
   } catch (err) {
     throw new ApiError(
       `Invalid JSON from ${path}: ${err instanceof Error ? err.message : "parse failed"}`,
