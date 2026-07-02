@@ -155,9 +155,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
 
         {hasModels && datasets.length > 0 && (
           <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-900">
-            <strong>Label images:</strong> Har dataset ke saath{" "}
-            <strong>Label all</strong> dabayein — model saari images par boxes
-            laga dega. Phir <strong>Review</strong> se approve karein.
+            <strong>Label images:</strong> Click{" "}
+            <strong>Label all</strong> next to each dataset — the model will draw
+            boxes on every image. Then approve results in{" "}
+            <strong>Review</strong>.
           </div>
         )}
 
