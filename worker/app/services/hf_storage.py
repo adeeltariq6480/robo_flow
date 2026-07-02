@@ -16,7 +16,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 from app.config import settings
 
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 REPO_TYPE_DATASET = "dataset"
 REPO_TYPE_MODEL = "model"
+# HF commits with too many files can fail; chunk batch uploads.
+HF_BATCH_COMMIT_SIZE = 50
 
 
 @lru_cache(maxsize=1)
@@ -118,25 +120,34 @@ def upload_dataset_images_batch(
     dataset_id: str,
     items: list[tuple[str, bytes]],
 ) -> dict:
-    """Upload many images in one Hugging Face commit (much faster than one-by-one)."""
+    """Upload many images in few Hugging Face commits (faster than one-by-one)."""
     if not items:
         raise ValueError("No images to upload")
 
     repo_id = settings.dataset_repo_id
     _ensure_repo(repo_id, REPO_TYPE_DATASET)
 
-    files = [
-        (dataset_image_path(project_id, dataset_id, file_name), data)
-        for file_name, data in items
-    ]
+    api = _api()
+    for start in range(0, len(items), HF_BATCH_COMMIT_SIZE):
+        chunk = items[start : start + HF_BATCH_COMMIT_SIZE]
+        operations = [
+            CommitOperationAdd(
+                path_in_repo=dataset_image_path(project_id, dataset_id, file_name),
+                path_or_fileobj=data,
+            )
+            for file_name, data in chunk
+        ]
+        api.create_commit(
+            repo_id=repo_id,
+            repo_type=REPO_TYPE_DATASET,
+            operations=operations,
+            commit_message=(
+                f"Upload {len(chunk)} images to dataset {dataset_id}"
+                f" ({start + len(chunk)}/{len(items)})"
+            ),
+        )
 
-    _api().upload_files(
-        repo_id=repo_id,
-        repo_type=REPO_TYPE_DATASET,
-        files=files,
-        commit_message=f"Upload {len(files)} images to dataset {dataset_id}",
-    )
-    return {"hfRepo": repo_id, "count": len(files)}
+    return {"hfRepo": repo_id, "count": len(items)}
 
 
 def upload_dataset_zip(
