@@ -23,13 +23,23 @@ export function DetectionResults({ job }: { job: JobResponse }) {
   }
 
   if (job.job_type === "auto_label") {
-    const labeled = result.labeled as number;
-    const failed = result.failed as number;
-    const total = result.total_files as number;
+    const labeled = (result.labeled as number) ?? 0;
+    const failed = (result.failed as number) ?? 0;
+    const total = (result.total_files as number) ?? 0;
     const modelsUsed = (result.models_used as number) ?? 1;
+    const variant =
+      labeled === 0 ? "error" : failed > 0 ? "warning" : "success";
+    const border =
+      variant === "error"
+        ? "border-red-200 bg-red-50 text-red-800"
+        : variant === "warning"
+          ? "border-amber-200 bg-amber-50 text-amber-900"
+          : "border-green-200 bg-green-50 text-green-800";
     return (
-      <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-        <p className="font-medium">Auto-label complete</p>
+      <div className={`rounded-lg border p-4 text-sm ${border}`}>
+        <p className="font-medium">
+          {labeled === 0 ? "Auto-label failed" : "Auto-label complete"}
+        </p>
         <p className="mt-1">
           {labeled}/{total} files labeled using {modelsUsed} model
           {modelsUsed !== 1 ? "s" : ""}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { startAutoLabel } from "@/lib/actions/inference";
 import type { JobResponse } from "@/lib/worker/client";
 import type { Model, Dataset } from "@/lib/types/database";
@@ -11,7 +11,7 @@ import { InferenceConfigFields } from "@/components/inference/inference-config";
 import { JobProgress } from "@/components/inference/job-progress";
 import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
-import { Tags, ArrowRight } from "lucide-react";
+import { Tags, ArrowRight, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import {
   clearActiveInferenceJob,
@@ -23,12 +23,15 @@ interface AutoLabelPanelProps {
   projectId: string;
   models: Model[];
   datasets: Dataset[];
-  /** Pre-select dataset (e.g. from dataset label page) */
   defaultDatasetId?: string;
-  /** Hide dataset picker when labeling a specific dataset */
   lockDataset?: boolean;
-  /** Show link to review after job completes */
   reviewHref?: string;
+}
+
+function labeledCount(job: JobResponse | null): number {
+  if (!job?.result || typeof job.result !== "object") return 0;
+  const n = (job.result as { labeled?: number }).labeled;
+  return typeof n === "number" ? n : 0;
 }
 
 export function AutoLabelPanel({
@@ -57,7 +60,12 @@ export function AutoLabelPanel({
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
-  const hasRestoredJob = useMemo(() => !!jobId && !completedJob, [jobId, completedJob]);
+  const isRunning = !!jobId && !completedJob;
+  const labeled = labeledCount(completedJob);
+  const canReview =
+    !!reviewHref &&
+    completedJob &&
+    (completedJob.status === "completed" || labeled > 0);
 
   useEffect(() => {
     const active = readActiveInferenceJob();
@@ -70,6 +78,7 @@ export function AutoLabelPanel({
 
     setDatasetId(active.datasetId);
     setJobId(active.jobId);
+    setCompletedJob(null);
   }, [projectId, datasets]);
 
   async function handleRun() {
@@ -106,6 +115,13 @@ export function AutoLabelPanel({
     setLoading(false);
   }
 
+  function handleReset() {
+    setJobId(null);
+    setCompletedJob(null);
+    setError(null);
+    clearActiveInferenceJob();
+  }
+
   if (!models.length) {
     return <Alert variant="info">Upload a YOLO model (.pt) first.</Alert>;
   }
@@ -119,7 +135,7 @@ export function AutoLabelPanel({
         title={lockDataset ? "Label all images with model(s)" : "Auto-label dataset"}
         description={
           lockDataset
-            ? "Select one or more YOLO models — har image par sab models chalenge, phir boxes save honge."
+            ? "Select one or more YOLO models. Each image is labeled with every selected model; overlapping boxes are merged."
             : "Run one or more YOLO models on every image in a dataset."
         }
       />
@@ -136,7 +152,7 @@ export function AutoLabelPanel({
             models={models}
             selectedIds={selectedModelIds}
             onChange={setSelectedModelIds}
-            disabled={loading || !!jobId}
+            disabled={loading || isRunning}
           />
           {!lockDataset && (
             <div>
@@ -144,6 +160,7 @@ export function AutoLabelPanel({
               <select
                 value={datasetId}
                 onChange={(e) => setDatasetId(e.target.value)}
+                disabled={isRunning}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               >
                 {datasets.map((d) => (
@@ -162,6 +179,12 @@ export function AutoLabelPanel({
             {selectedModelIds.length !== 1 ? "s" : ""} × {selectedDataset.file_count} image
             {selectedDataset.file_count !== 1 ? "s" : ""} in &quot;
             {selectedDataset.name}&quot;
+            {selectedModelIds.length > 2 && (
+              <span className="block text-amber-700">
+                Using {selectedModelIds.length} models — labeling runs one model at a time to
+                save memory. Large datasets may take several minutes.
+              </span>
+            )}
           </p>
         )}
 
@@ -177,6 +200,7 @@ export function AutoLabelPanel({
             type="checkbox"
             checked={saveToDataset}
             onChange={(e) => setSaveToDataset(e.target.checked)}
+            disabled={isRunning}
             className="rounded border-slate-300"
           />
           Save annotations to dataset files
@@ -185,7 +209,7 @@ export function AutoLabelPanel({
         <Button
           onClick={handleRun}
           loading={loading}
-          disabled={!!jobId || selectedModelIds.length === 0}
+          disabled={isRunning || selectedModelIds.length === 0}
         >
           {!loading && <Tags className="h-4 w-4" />}
           {loading
@@ -195,15 +219,11 @@ export function AutoLabelPanel({
               : "Start auto-label"}
         </Button>
 
-        <p className="text-xs text-slate-500">
-          Python worker must be running:{" "}
-          <code className="rounded bg-slate-100 px-1">cd worker && uvicorn main:app --reload</code>
-        </p>
-
-        {hasRestoredJob && (
+        {isRunning && (
           <Alert variant="info">
-            Labeling is running in background for <strong>{selectedDatasetName}</strong>.
-            You can change pages and come back anytime.
+            Labeling <strong>{selectedDatasetName}</strong> with {selectedModelIds.length}{" "}
+            model{selectedModelIds.length !== 1 ? "s" : ""}. You can switch pages and return —
+            progress is saved.
           </Alert>
         )}
 
@@ -219,18 +239,29 @@ export function AutoLabelPanel({
           }}
         />
 
-        {completedJob?.status === "completed" && (
-          <>
-            <DetectionResults job={completedJob} />
-            {reviewHref && (
-              <Link href={reviewHref}>
-                <Button className="w-full">
-                  Review & approve labels
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </Link>
-            )}
-          </>
+        {completedJob?.status === "failed" && (
+          <Alert variant="error">
+            <p className="font-medium">Auto-label failed</p>
+            <p className="mt-1">{completedJob.error_message ?? "Unknown worker error"}</p>
+          </Alert>
+        )}
+
+        {completedJob?.status === "completed" && <DetectionResults job={completedJob} />}
+
+        {canReview && (
+          <Link href={reviewHref!}>
+            <Button className="w-full">
+              Review & approve labels
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </Link>
+        )}
+
+        {completedJob && (
+          <Button type="button" variant="secondary" onClick={handleReset}>
+            <RotateCcw className="h-4 w-4" />
+            Label again
+          </Button>
         )}
       </div>
     </Card>

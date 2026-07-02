@@ -12,44 +12,62 @@ interface JobProgressProps {
   onComplete?: (job: JobResponse) => void;
 }
 
+const POLL_MS = 2000;
+const MAX_POLL_ERRORS = 15;
+
 export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const completedRef = useRef(false);
 
   useEffect(() => {
     if (!jobId) {
       setJob(null);
+      setError(null);
+      completedRef.current = false;
       return;
     }
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let pollErrors = 0;
 
     async function poll() {
+      if (cancelled || completedRef.current) return;
+
       const result = await fetchJobStatus(jobId!, projectId);
-      if (cancelled) return;
+      if (cancelled || completedRef.current) return;
 
       if ("error" in result && result.error) {
+        pollErrors += 1;
+        if (pollErrors < MAX_POLL_ERRORS) {
+          timer = setTimeout(poll, POLL_MS);
+          return;
+        }
         setError(result.error);
         return;
       }
 
+      pollErrors = 0;
       const j = result as JobResponse;
       setJob(j);
       setError(null);
 
       if (j.status === "completed" || j.status === "failed") {
+        completedRef.current = true;
         onCompleteRef.current?.(j);
         return;
       }
 
-      setTimeout(poll, 1500);
+      timer = setTimeout(poll, POLL_MS);
     }
 
     poll();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [jobId, projectId]);
 
@@ -58,7 +76,8 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
   if (error) {
     return (
       <Alert variant="error">
-        Worker error: {error}. Is the Python worker running on port 8000?
+        Could not reach the worker: {error}. Check Railway is running and WORKER_API_KEY matches
+        Vercel.
       </Alert>
     );
   }
@@ -116,24 +135,35 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
 function FileFailureSummary({ result }: { result: Record<string, unknown> }) {
   const files = Array.isArray(result.files) ? result.files : [];
   const errors = files
-    .filter((f): f is { file_id?: string; error: string } =>
-      typeof f === "object" && f !== null && "error" in f && typeof (f as { error: unknown }).error === "string"
+    .filter(
+      (f): f is { file_id?: string; error: string } =>
+        typeof f === "object" &&
+        f !== null &&
+        "error" in f &&
+        typeof (f as { error: unknown }).error === "string"
     )
     .slice(0, 5);
 
-  if (errors.length === 0) return null;
+  const failed = (result.failed as number) ?? 0;
+  const labeled = (result.labeled as number) ?? 0;
 
   return (
     <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-      <p className="font-medium">Some images failed:</p>
-      <ul className="mt-1 list-disc space-y-1 pl-4">
-        {errors.map((f, i) => (
-          <li key={f.file_id ?? i}>
-            {f.file_id ? `${f.file_id.slice(0, 8)}…: ` : ""}
-            {f.error}
-          </li>
-        ))}
-      </ul>
+      <p className="font-medium">
+        {labeled > 0
+          ? `${labeled} labeled, ${failed} failed — you can still review successful labels.`
+          : `${failed} image(s) failed.`}
+      </p>
+      {errors.length > 0 && (
+        <ul className="mt-1 list-disc space-y-1 pl-4">
+          {errors.map((f, i) => (
+            <li key={f.file_id ?? i}>
+              {f.file_id ? `${f.file_id.slice(0, 8)}…: ` : ""}
+              {f.error}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
