@@ -2,7 +2,6 @@ import {
   getDatasetFileForReview,
   getDatasetReviewQueue,
 } from "@/lib/actions/annotations";
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as classService from "@/lib/services/classService";
 import { AnnotationEditorClient } from "@/components/annotations/annotation-editor-client";
@@ -41,8 +40,6 @@ export default async function DatasetFileReviewPage({
   const filter = parseFilter(filterParam);
 
   return runBackendPage(async () => {
-    await getProject(projectId);
-
     const dataset = await datasetService.getDataset(projectId, datasetId);
     if (!dataset) notFound();
 

@@ -4,7 +4,6 @@ import {
   getDatasetReviewQueue,
   getReviewCounts,
 } from "@/lib/actions/annotations";
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as classService from "@/lib/services/classService";
 import { AnnotationReviewQueue } from "@/components/annotations/annotation-review-queue";
@@ -12,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import type { ReviewFilter } from "@/lib/types/annotations";
 import { ArrowLeft, Download } from "lucide-react";
 import { notFound } from "next/navigation";
-import { backendErrorPage, runBackendPage } from "@/lib/server/backend-page";
+import { backendErrorPage } from "@/lib/server/backend-page";
 
 const VALID_FILTERS: ReviewFilter[] = [
   "all",
@@ -95,11 +94,8 @@ export default async function DatasetReviewPage({
   const { filter: filterParam } = await searchParams;
   const filter = parseFilter(filterParam);
 
-  return runBackendPage(async () => {
-    await getProject(projectId);
-
-    return (
-      <div className="space-y-4">
+  return (
+    <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <Link href={`/projects/${projectId}/datasets`}>
             <Button variant="secondary">
@@ -127,8 +123,7 @@ export default async function DatasetReviewPage({
               filter={filter}
             />
           </div>
-        </Suspense>
-      </div>
-    );
-  });
+      </Suspense>
+    </div>
+  );
 }

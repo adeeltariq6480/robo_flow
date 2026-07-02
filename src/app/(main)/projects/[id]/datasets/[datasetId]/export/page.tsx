@@ -1,5 +1,4 @@
 import { getApprovedExportStats } from "@/lib/export/build";
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as classService from "@/lib/services/classService";
 import { DatasetExportPanel } from "@/components/datasets/dataset-export-panel";
@@ -14,8 +13,6 @@ export default async function DatasetExportPage({
   const { id: projectId, datasetId } = await params;
 
   return runBackendPage(async () => {
-    await getProject(projectId);
-
     const dataset = await datasetService.getDataset(projectId, datasetId);
     if (!dataset) notFound();
 

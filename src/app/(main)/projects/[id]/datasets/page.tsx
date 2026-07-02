@@ -1,4 +1,3 @@
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as modelService from "@/lib/services/modelService";
 import { DatasetsPageClient } from "@/components/datasets/datasets-page-client";
@@ -12,8 +11,6 @@ export default async function DatasetsPage({
   const { id } = await params;
 
   return runBackendPage(async () => {
-    await getProject(id);
-
     const [datasets, modelCount] = await Promise.all([
       datasetService.listDatasets(id),
       modelService.getModelCount(id),

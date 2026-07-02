@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { api } from "@/lib/api/client";
 import { toClass } from "@/lib/firebase/adapters";
 import type { FirestoreClass } from "@/lib/types/firestore";
@@ -16,9 +17,9 @@ interface ClassPayload {
   description?: string | null;
 }
 
-async function fetchRaw(projectId: string): Promise<FirestoreClass[]> {
+const fetchRaw = cache(async (projectId: string): Promise<FirestoreClass[]> => {
   return api.get<FirestoreClass[]>(`/api/classes/${projectId}`);
-}
+});
 
 async function saveAll(projectId: string, classes: ClassPayload[]) {
   await api.post("/api/classes", { projectId, classes });
@@ -33,16 +34,16 @@ function toPayload(c: FirestoreClass): ClassPayload {
   };
 }
 
-export async function listClasses(projectId: string): Promise<Class[]> {
+export const listClasses = cache(async (projectId: string): Promise<Class[]> => {
   const rows = await fetchRaw(projectId);
   return rows
     .sort((a, b) => a.classIndex - b.classIndex)
     .map((r) => toClass(projectId, r));
-}
+});
 
-export async function getClassCount(projectId: string): Promise<number> {
+export const getClassCount = cache(async (projectId: string): Promise<number> => {
   return (await fetchRaw(projectId)).length;
-}
+});
 
 export async function createClass(
   projectId: string,

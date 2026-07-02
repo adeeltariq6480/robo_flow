@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as modelService from "@/lib/services/modelService";
 import { AutoLabelPanel } from "@/components/inference/auto-label-panel";
@@ -18,8 +17,6 @@ export default async function DatasetLabelPage({
   const { id: projectId, datasetId } = await params;
 
   return runBackendPage(async () => {
-    await getProject(projectId);
-
     const [dataset, models] = await Promise.all([
       datasetService.getDataset(projectId, datasetId),
       modelService.listModels(projectId),

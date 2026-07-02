@@ -1,22 +1,23 @@
+import { cache } from "react";
 import { api } from "@/lib/api/client";
 import { toDataset } from "@/lib/firebase/adapters";
 import type { FirestoreDataset, FirestoreImage } from "@/lib/types/firestore";
 import type { Dataset } from "@/lib/types/database";
 
-export async function listDatasets(projectId: string): Promise<Dataset[]> {
+export const listDatasets = cache(async (projectId: string): Promise<Dataset[]> => {
   const rows = await api.get<FirestoreDataset[]>(`/api/datasets/${projectId}`);
   return rows.map((r) => toDataset(projectId, r));
-}
+});
 
-export async function listDatasetsBrief(projectId: string) {
+export const listDatasetsBrief = cache(async (projectId: string) => {
   const rows = await api.get<FirestoreDataset[]>(`/api/datasets/${projectId}`);
   return rows.map((d) => ({ id: d.id, name: d.name }));
-}
+});
 
-export async function getDataset(
+export const getDataset = cache(async (
   projectId: string,
   datasetId: string
-): Promise<Dataset | null> {
+): Promise<Dataset | null> => {
   try {
     const row = await api.get<FirestoreDataset>(
       `/api/datasets/${projectId}/${datasetId}`
@@ -25,8 +26,7 @@ export async function getDataset(
   } catch {
     return null;
   }
-}
-
+});
 export async function createDataset(
   projectId: string,
   data: { name: string; description?: string | null }
@@ -56,16 +56,15 @@ export async function deleteImages(
   });
 }
 
-export async function listImagesByDataset(
+export const listImagesByDataset = cache(async (
   projectId: string,
   datasetId: string
-): Promise<FirestoreImage[]> {
+): Promise<FirestoreImage[]> => {
   const rows = await api.get<FirestoreImage[]>(
     `/api/datasets/${projectId}/${datasetId}/images`
   );
   return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
-
+});
 export async function getImageCount(projectId: string): Promise<number> {
   const stats = await api.get<{ imageCount: number }>(
     `/api/projects/${projectId}/stats`

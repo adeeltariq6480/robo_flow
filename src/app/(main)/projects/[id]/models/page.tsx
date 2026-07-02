@@ -1,4 +1,3 @@
-import { getProject } from "@/lib/server/auth";
 import * as modelService from "@/lib/services/modelService";
 import { ModelsPageClient } from "@/components/models/models-page-client";
 import { runBackendPage } from "@/lib/server/backend-page";
@@ -11,7 +10,6 @@ export default async function ModelsPage({
   const { id } = await params;
 
   return runBackendPage(async () => {
-    await getProject(id);
     const models = await modelService.listModels(id);
     return <ModelsPageClient projectId={id} models={models} />;
   });

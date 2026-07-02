@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getProject } from "@/lib/server/auth";
 import * as datasetService from "@/lib/services/datasetService";
 import * as classService from "@/lib/services/classService";
 import { DatasetUploadForm } from "@/components/datasets/dataset-upload-form";
@@ -14,8 +13,6 @@ export default async function DatasetUploadPage({
   const { id, datasetId } = await params;
 
   return runBackendPage(async () => {
-    await getProject(id);
-
     const [dataset, classes] = await Promise.all([
       datasetService.getDataset(id, datasetId),
       classService.listClasses(id),

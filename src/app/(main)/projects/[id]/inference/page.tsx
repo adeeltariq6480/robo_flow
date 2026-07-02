@@ -1,4 +1,3 @@
-import { getProject } from "@/lib/server/auth";
 import * as modelService from "@/lib/services/modelService";
 import * as datasetService from "@/lib/services/datasetService";
 import { InferencePageClient } from "@/components/inference/inference-page-client";
@@ -14,17 +13,20 @@ export default async function InferencePage({
   const { id } = await params;
 
   return runBackendPage(async () => {
-    await getProject(id);
-
     const [models, datasets] = await Promise.all([
       modelService.listModels(id),
       datasetService.listDatasets(id),
     ]);
 
+    const imageLists = await Promise.all(
+      datasets.map((dataset) =>
+        datasetService.listImagesByDataset(id, dataset.id)
+      )
+    );
+
     const imageFiles: DatasetFileOption[] = [];
-    for (const dataset of datasets) {
-      const images = await datasetService.listImagesByDataset(id, dataset.id);
-      for (const img of images) {
+    datasets.forEach((dataset, index) => {
+      for (const img of imageLists[index]) {
         const mime = img.mimeType ?? "";
         const name = img.fileName?.toLowerCase() ?? "";
         if (
@@ -40,7 +42,7 @@ export default async function InferencePage({
           dataset_name: dataset.name,
         });
       }
-    }
+    });
 
     return (
       <InferencePageClient
