@@ -11,7 +11,6 @@ import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { CircularProgress } from "@/components/ui/circular-progress";
 import { FileImage, X, CheckCircle } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 
@@ -219,6 +218,10 @@ export function DatasetUploadForm({
         <FileDropZone
           onFiles={addFilesToQueue}
           disabled={uploading}
+          uploading={uploading}
+          progress={progress}
+          progressLabel="Uploading files…"
+          progressSublabel={`${progress}% complete`}
           multiple
           accept="image/*,.csv,.json,.txt,.zip"
           hint="Click or drag & drop files here"
@@ -272,16 +275,6 @@ export function DatasetUploadForm({
                 </li>
               ))}
             </ul>
-
-            {uploading && (
-              <div className="mt-6 flex justify-center py-4">
-                <CircularProgress
-                  value={progress}
-                  label="Uploading files…"
-                  sublabel={`${progress}% complete`}
-                />
-              </div>
-            )}
 
             <div className="mt-4 flex gap-3">
               <Button onClick={handleUpload} loading={uploading}>

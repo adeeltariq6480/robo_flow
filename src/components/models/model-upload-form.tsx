@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { CircularProgress } from "@/components/ui/circular-progress";
 import { Box, CheckCircle, X } from "lucide-react";
 
 interface ModelUploadFormProps {
@@ -185,6 +184,10 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
             onFiles={addFiles}
             multiple
             disabled={uploading}
+            uploading={uploading}
+            progress={progress}
+            progressLabel={uploadLabel || "Uploading models…"}
+            progressSublabel={`${progress}% complete`}
             accept=".onnx,.pt,.pth,.pb,.h5,.tflite"
             hint="Click or drag & drop model files"
             subhint="Select multiple files — up to 500 MB each"
@@ -270,16 +273,6 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
                 disabled={uploading}
               />
             </>
-          )}
-
-          {uploading && (
-            <div className="flex justify-center py-4">
-              <CircularProgress
-                value={progress}
-                label={uploadLabel || "Uploading models…"}
-                sublabel={`${progress}% complete`}
-              />
-            </div>
           )}
 
           <Button type="submit" loading={uploading} disabled={queue.length === 0}>

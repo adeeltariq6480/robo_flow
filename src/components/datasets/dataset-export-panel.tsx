@@ -146,36 +146,49 @@ export function DatasetExportPanel({
             <p className="mb-3 text-sm font-medium text-slate-700">
               Export format
             </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {formats.map((f) => {
-                const meta = EXPORT_FORMAT_LABELS[f];
-                const Icon = FORMAT_ICONS[f];
-                const active = format === f;
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    onClick={() => setFormat(f)}
-                    className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
-                      active
-                        ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <Icon
-                      className={`mt-0.5 h-5 w-5 shrink-0 ${
-                        active ? "text-brand-600" : "text-slate-400"
+            <div className="relative mt-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {formats.map((f) => {
+                  const meta = EXPORT_FORMAT_LABELS[f];
+                  const Icon = FORMAT_ICONS[f];
+                  const active = format === f;
+                  return (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setFormat(f)}
+                      disabled={loading}
+                      className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
+                        active
+                          ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500"
+                          : "border-slate-200 hover:border-slate-300"
                       }`}
-                    />
-                    <div>
-                      <p className="font-medium text-slate-900">{meta.label}</p>
-                      <p className="mt-0.5 text-sm text-slate-500">
-                        {meta.description}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
+                    >
+                      <Icon
+                        className={`mt-0.5 h-5 w-5 shrink-0 ${
+                          active ? "text-brand-600" : "text-slate-400"
+                        }`}
+                      />
+                      <div>
+                        <p className="font-medium text-slate-900">{meta.label}</p>
+                        <p className="mt-0.5 text-sm text-slate-500">
+                          {meta.description}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {loading && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/90 backdrop-blur-[1px]">
+                  <CircularProgress
+                    value={exportProgress}
+                    label="Building export…"
+                    sublabel="Downloading images and labels"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -197,16 +210,6 @@ export function DatasetExportPanel({
                 <Button variant="secondary">View approved</Button>
               </Link>
             </div>
-
-            {loading && (
-              <div className="mt-6 flex justify-center py-2">
-                <CircularProgress
-                  value={exportProgress}
-                  label="Building export…"
-                  sublabel="Downloading images and labels"
-                />
-              </div>
-            )}
 
             {exported && (
               <div className="mt-6">
