@@ -263,7 +263,8 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
             No classes yet. Add your first label class to get started.
           </p>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <div className="max-h-[80vh] overflow-y-auto">
+            <ul className="divide-y divide-slate-100">
             {classes.map((cls) => (
               <li key={cls.id} className="py-4">
                 {editingId === cls.id ? (
@@ -331,7 +332,8 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
                 )}
               </li>
             ))}
-          </ul>
+            </ul>
+          </div>
         )}
       </Card>
     </div>

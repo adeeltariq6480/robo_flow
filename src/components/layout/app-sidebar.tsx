@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AxiomAILogo } from "@/components/layout/axiom-ai-logo";
+import { useNavigationPending } from "@/hooks/use-navigation-pending";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderKanban,
-  Loader2,
   Plus,
   Tags,
   Database,
@@ -36,6 +37,7 @@ function resolveProjectId(pathname: string): string | undefined {
 
 export function AppSidebar() {
   const pathname = usePathname() ?? "";
+  const { startNavigation, isPending } = useNavigationPending();
 
   const activeProjectId = resolveProjectId(pathname);
   const isNewProject = pathname === "/projects/new";
@@ -62,38 +64,45 @@ export function AppSidebar() {
 
   const projectId = activeProjectId ?? lastProjectId;
 
-  const linkClass = (active: boolean) =>
-    `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-      active
-        ? "bg-brand-600 text-white"
-        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-    }`;
-
-  const [navigatingHref, setNavigatingHref] = useState<string | null>(null);
-
-  function navLink(href: string, active: boolean, icon: React.ReactNode, label: string) {
-    const loading = navigatingHref === href;
+  function navLink(
+    href: string,
+    active: boolean,
+    icon: React.ReactNode,
+    label: string
+  ) {
+    const loading = isPending(href);
     return (
       <Link
         key={href}
         href={href}
-        className={linkClass(active)}
-        onClick={() => setNavigatingHref(href)}
+        prefetch
+        onClick={() => startNavigation(href)}
         aria-busy={loading}
+        className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+          active
+            ? "bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-500/20"
+            : loading
+              ? "bg-slate-100 text-slate-800"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        }`}
       >
         {loading ? (
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          <Skeleton className="h-4 w-4 shrink-0 rounded" />
         ) : (
           icon
         )}
-        {label}
+        <span className={loading ? "opacity-70" : undefined}>{label}</span>
       </Link>
     );
   }
 
   return (
-    <aside className="flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white">
-      <Link href="/" className="flex h-16 shrink-0 items-center border-b border-slate-200 px-4">
+    <aside className="flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200/80 bg-white shadow-sm">
+      <Link
+        href="/"
+        onClick={() => startNavigation("/")}
+        className="flex h-16 shrink-0 items-center border-b border-slate-200/80 px-4 transition-colors hover:bg-slate-50"
+      >
         <AxiomAILogo />
       </Link>
 

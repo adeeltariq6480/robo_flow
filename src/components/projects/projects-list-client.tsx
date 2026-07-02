@@ -11,8 +11,10 @@ import {
 } from "@/lib/actions/projects";
 import type { Project } from "@/lib/types/database";
 import { Card } from "@/components/ui/card";
+import { CardLoadingOverlay } from "@/components/ui/card-loading-overlay";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
+import { useNavigationPending } from "@/hooks/use-navigation-pending";
 import { FolderKanban, Loader2, Plus, Trash2 } from "lucide-react";
 
 interface ProjectsListClientProps {
@@ -21,10 +23,10 @@ interface ProjectsListClientProps {
 
 export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   const router = useRouter();
+  const { startNavigation, isPending } = useNavigationPending();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [navigatingId, setNavigatingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const allSelected = projects.length > 0 && selected.size === projects.length;
@@ -83,10 +85,12 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   }
 
   return (
-    <div>
+    <div className="animate-in">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
+          <h1 className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 bg-clip-text text-2xl font-bold text-transparent">
+            Projects
+          </h1>
           <p className="mt-1 text-sm text-slate-500">
             Manage classes, datasets, and models — no login required
           </p>
@@ -130,60 +134,67 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
           />
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {projects.map((project) => (
-              <Card key={project.id} className="relative transition-shadow hover:shadow-md">
-                <div className="absolute right-3 top-3 flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(project.id)}
-                    onChange={() => toggleSelect(project.id)}
-                    disabled={loading}
-                    className="rounded border-slate-300"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteOne(project.id)}
-                    disabled={loading}
-                    className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
-                    title="Delete project"
-                  >
-                    {deletingId === project.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-                <Link
-                  href={`/projects/${project.id}`}
-                  className="relative block"
-                  onClick={() => setNavigatingId(project.id)}
+            {projects.map((project) => {
+              const href = `/projects/${project.id}`;
+              const isNavigating = isPending(href);
+              return (
+                <Card
+                  key={project.id}
+                  className={`group relative overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-lg hover:shadow-brand-500/10 ${
+                    isNavigating ? "pointer-events-none ring-2 ring-brand-400/40" : ""
+                  }`}
                 >
-                  {navigatingId === project.id && (
-                    <Loader2 className="absolute left-3 top-3 h-4 w-4 animate-spin text-brand-600" />
-                  )}
-                  <div className="flex items-start gap-3 pr-16">
-                    <div className="rounded-lg bg-brand-50 p-2">
-                      <FolderKanban className="h-5 w-5 text-brand-600" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate font-semibold text-slate-900">
-                        {project.name}
-                      </h3>
-                      {project.description && (
-                        <p className="mt-1 line-clamp-2 text-sm text-slate-500">
-                          {project.description}
-                        </p>
+                  {isNavigating && <CardLoadingOverlay />}
+                  <div className="absolute right-3 top-3 z-20 flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(project.id)}
+                      onChange={() => toggleSelect(project.id)}
+                      disabled={loading}
+                      className="rounded border-slate-300"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteOne(project.id)}
+                      disabled={loading}
+                      className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Delete project"
+                    >
+                      {deletingId === project.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
                       )}
-                      <p className="mt-3 text-xs text-slate-400">
-                        Updated {new Date(project.updated_at).toLocaleDateString()}
-                      </p>
-                    </div>
+                    </button>
                   </div>
-                </Link>
-              </Card>
-            ))}
+                  <Link
+                    href={href}
+                    className="block"
+                    onClick={() => startNavigation(href)}
+                  >
+                    <div className="flex items-start gap-3 pr-16">
+                      <div className="rounded-xl bg-gradient-to-br from-brand-50 to-indigo-50 p-2.5 shadow-inner transition-transform duration-300 group-hover:scale-105">
+                        <FolderKanban className="h-5 w-5 text-brand-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate font-semibold text-slate-900">
+                          {project.name}
+                        </h3>
+                        {project.description && (
+                          <p className="mt-1 line-clamp-2 text-sm text-slate-500">
+                            {project.description}
+                          </p>
+                        )}
+                        <p className="mt-3 text-xs text-slate-400">
+                          Updated {new Date(project.updated_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+                </Card>
+              );
+            })}
           </div>
         </>
       )}

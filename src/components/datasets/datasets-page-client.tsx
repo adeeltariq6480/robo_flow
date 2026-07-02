@@ -177,7 +177,8 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
             No datasets yet. Create one to start uploading files.
           </p>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <div className="max-h-[80vh] overflow-y-auto">
+            <ul className="divide-y divide-slate-100">
             {datasets.map((dataset) => (
               <li
                 key={dataset.id}
@@ -257,7 +258,8 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
                 </div>
               </li>
             ))}
-          </ul>
+            </ul>
+          </div>
         )}
       </Card>
     </div>

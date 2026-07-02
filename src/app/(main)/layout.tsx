@@ -2,15 +2,13 @@ import { Suspense } from "react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { NavigationProgress } from "@/components/layout/navigation-progress";
 
-export const dynamic = "force-dynamic";
-
 export default function MainLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-dvh overflow-hidden bg-slate-50">
+    <div className="flex h-dvh overflow-hidden bg-gradient-to-br from-slate-50 via-white to-slate-100">
       <Suspense fallback={null}>
         <NavigationProgress />
       </Suspense>
