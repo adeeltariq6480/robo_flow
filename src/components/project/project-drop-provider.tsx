@@ -149,11 +149,10 @@ export function ProjectDropProvider({
       }
 
       if (models.length > 0) {
-        const modelFile = models[0];
-        if (dispatchToHandler("model", [modelFile])) return;
+        if (dispatchToHandler("model", models)) return;
 
-        pendingRef.current = { kind: "model", files: [modelFile] };
-        setPending({ kind: "model", files: [modelFile] });
+        pendingRef.current = { kind: "model", files: models };
+        setPending({ kind: "model", files: models });
         router.push(`/projects/${projectId}/models/upload`);
         return;
       }

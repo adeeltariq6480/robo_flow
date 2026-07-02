@@ -19,73 +19,121 @@ interface ModelUploadFormProps {
   projectId: string;
 }
 
+interface QueuedModel {
+  file: File;
+  name: string;
+  format: ModelFormat;
+}
+
+function inferFormat(filename: string): ModelFormat {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (ext === "onnx") return "onnx";
+  if (ext === "pt" || ext === "pth") return "pytorch";
+  if (ext === "tflite") return "tflite";
+  if (ext === "pb" || ext === "h5") return "tensorflow";
+  return "other";
+}
+
+function inferModelName(filename: string): string {
+  return filename.replace(/\.[^.]+$/, "");
+}
+
+function toQueuedModel(file: File): QueuedModel {
+  return {
+    file,
+    name: inferModelName(file.name),
+    format: inferFormat(file.name),
+  };
+}
+
 export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
   const router = useRouter();
   const projectDrop = useProjectDrop();
-  const [file, setFile] = useState<File | null>(null);
-  const [name, setName] = useState("");
+  const [queue, setQueue] = useState<QueuedModel[]>([]);
   const [description, setDescription] = useState("");
-  const [format, setFormat] = useState<ModelFormat>("onnx");
   const [version, setVersion] = useState("1.0.0");
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [uploadLabel, setUploadLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [uploadedNames, setUploadedNames] = useState<string[]>([]);
 
-  const applyModelFile = useCallback((selected: File) => {
-    setFile(selected);
-    setName((prev) => {
-      if (prev) return prev;
-      return selected.name.replace(/\.[^.]+$/, "");
-    });
-    const ext = selected.name.split(".").pop()?.toLowerCase();
-    if (ext === "onnx") setFormat("onnx");
-    else if (ext === "pt" || ext === "pth") setFormat("pytorch");
-    else if (ext === "tflite") setFormat("tflite");
-    else if (ext === "pb" || ext === "h5") setFormat("tensorflow");
+  const addFiles = useCallback((files: File[]) => {
+    const models = files.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
+    if (models.length === 0) return;
+    setQueue((prev) => [...prev, ...models.map(toQueuedModel)]);
   }, []);
 
   useEffect(() => {
     if (!projectDrop) return;
-    const unregister = projectDrop.registerHandler("model", (files) => {
-      if (files[0]) applyModelFile(files[0]);
-    });
+    const unregister = projectDrop.registerHandler("model", addFiles);
     const pending = projectDrop.consumePending("model");
-    if (pending?.[0]) applyModelFile(pending[0]);
+    if (pending?.length) addFiles(pending);
     return unregister;
-  }, [projectDrop, applyModelFile]);
+  }, [projectDrop, addFiles]);
+
+  function removeFromQueue(index: number) {
+    setQueue((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateName(index: number, name: string) {
+    setQueue((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, name } : item))
+    );
+  }
+
+  function updateFormat(index: number, format: ModelFormat) {
+    setQueue((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, format } : item))
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file || !name.trim()) {
-      setError("Model name and file are required");
+    if (queue.length === 0) {
+      setError("Add at least one model file");
+      return;
+    }
+    if (queue.some((item) => !item.name.trim())) {
+      setError("Every model needs a name");
       return;
     }
 
     setUploading(true);
     setError(null);
     setProgress(0);
+    const names: string[] = [];
+    const ver = version.trim() || "1.0.0";
+    const desc = description.trim() || undefined;
 
     try {
-      await uploadModel(
-        projectId,
-        {
-          file,
-          modelName: name.trim(),
-          modelVersion: version.trim() || "1.0.0",
-          modelType: format,
-          description: description.trim() || undefined,
-        },
-        setProgress
-      );
+      for (let i = 0; i < queue.length; i++) {
+        const item = queue[i];
+        setUploadLabel(`Uploading ${i + 1} of ${queue.length}: ${item.file.name}`);
+        await uploadModel(
+          projectId,
+          {
+            file: item.file,
+            modelName: item.name.trim(),
+            modelVersion: ver,
+            modelType: item.format,
+            description: desc,
+          },
+          (p) => setProgress(Math.round(((i + p / 100) / queue.length) * 100))
+        );
+        names.push(`${item.name.trim()} v${ver}`);
+      }
 
       setProgress(100);
+      setUploadedNames(names);
       setDone(true);
       setUploading(false);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setUploading(false);
+      setUploadLabel("");
     }
   }
 
@@ -93,21 +141,26 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     return (
       <Card className="text-center">
         <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
-        <h2 className="mt-4 text-lg font-semibold">Model uploaded</h2>
-        <p className="mt-2 text-sm text-slate-500">
-          {name} v{version} is ready to use.
-        </p>
+        <h2 className="mt-4 text-lg font-semibold">
+          {uploadedNames.length === 1 ? "Model uploaded" : `${uploadedNames.length} models uploaded`}
+        </h2>
+        <ul className="mt-3 space-y-1 text-sm text-slate-500">
+          {uploadedNames.map((label) => (
+            <li key={label}>{label}</li>
+          ))}
+        </ul>
         <div className="mt-6 flex justify-center gap-3">
           <Button
             variant="secondary"
             onClick={() => {
               setDone(false);
-              setFile(null);
-              setName("");
+              setQueue([]);
               setDescription("");
+              setUploadedNames([]);
+              setUploadLabel("");
             }}
           >
-            Upload another
+            Upload more
           </Button>
           <Button onClick={() => router.push(`/projects/${projectId}/models`)}>
             View models
@@ -123,92 +176,118 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
 
       <Card>
         <CardHeader
-          title="Upload model"
-          description="Upload a trained model file (.onnx, .pt, .tflite, etc.)"
+          title="Upload models"
+          description="Upload one or more model files (.onnx, .pt, .tflite, etc.)"
         />
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {!file ? (
-            <FileDropZone
-              onFiles={(files) => files[0] && applyModelFile(files[0])}
-              multiple={false}
-              disabled={uploading}
-              accept=".onnx,.pt,.pth,.pb,.h5,.tflite,.zip"
-              hint="Click or drag & drop model file"
-              subhint="Up to 500 MB — .pt, .onnx, .tflite, etc."
-            />
-          ) : (
-            <div className="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <Box className="h-10 w-10 text-brand-600" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{file.name}</p>
-                <p className="text-sm text-slate-500">{formatBytes(file.size)}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setFile(null)}
-                className="text-slate-400 hover:text-red-500"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+          <FileDropZone
+            onFiles={addFiles}
+            multiple
+            disabled={uploading}
+            accept=".onnx,.pt,.pth,.pb,.h5,.tflite"
+            hint="Click or drag & drop model files"
+            subhint="Select multiple files — up to 500 MB each"
+          />
+
+          {queue.length > 0 && (
+            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+              {queue.map((item, index) => (
+                <li
+                  key={`${item.file.name}-${index}`}
+                  className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start"
+                >
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <div className="rounded-lg bg-amber-50 p-2">
+                      <Box className="h-5 w-5 text-amber-600" />
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <p className="truncate text-sm font-medium text-slate-700">
+                        {item.file.name}{" "}
+                        <span className="font-normal text-slate-400">
+                          ({formatBytes(item.file.size)})
+                        </span>
+                      </p>
+                      <Input
+                        label="Model name"
+                        value={item.name}
+                        onChange={(e) => updateName(index, e.target.value)}
+                        placeholder="e.g. defect-detector-v1"
+                        required
+                        disabled={uploading}
+                      />
+                      <div className="space-y-1">
+                        <label className="block text-sm font-medium text-slate-700">
+                          Format
+                        </label>
+                        <select
+                          value={item.format}
+                          onChange={(e) =>
+                            updateFormat(index, e.target.value as ModelFormat)
+                          }
+                          className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                          disabled={uploading}
+                        >
+                          {MODEL_FORMATS.map((f) => (
+                            <option key={f.value} value={f.value}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeFromQueue(index)}
+                    disabled={uploading}
+                    className="self-start text-slate-400 hover:text-red-500 disabled:opacity-50"
+                    title="Remove"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
 
-          <Input
-            label="Model name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. defect-detector-v1"
-            required
-          />
-
-          <Textarea
-            label="Description (optional)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={2}
-            placeholder="What does this model do?"
-          />
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-slate-700">
-                Format
-              </label>
-              <select
-                value={format}
-                onChange={(e) => setFormat(e.target.value as ModelFormat)}
-                className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          {queue.length > 0 && (
+            <>
+              <Textarea
+                label="Description (optional, applies to all)"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                placeholder="What do these models do?"
                 disabled={uploading}
-              >
-                {MODEL_FORMATS.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Input
-              label="Version"
-              value={version}
-              onChange={(e) => setVersion(e.target.value)}
-              placeholder="1.0.0"
-              disabled={uploading}
-            />
-          </div>
+              />
+
+              <Input
+                label="Version (applies to all)"
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+                placeholder="1.0.0"
+                disabled={uploading}
+              />
+            </>
+          )}
 
           {uploading && (
             <div className="flex justify-center py-4">
               <CircularProgress
                 value={progress}
-                label="Uploading model…"
+                label={uploadLabel || "Uploading models…"}
                 sublabel={`${progress}% complete`}
               />
             </div>
           )}
 
-          <Button type="submit" loading={uploading} disabled={!file}>
-            {uploading ? "Uploading…" : "Upload model"}
+          <Button type="submit" loading={uploading} disabled={queue.length === 0}>
+            {uploading
+              ? "Uploading…"
+              : queue.length <= 1
+                ? "Upload model"
+                : `Upload ${queue.length} models`}
           </Button>
         </form>
       </Card>
