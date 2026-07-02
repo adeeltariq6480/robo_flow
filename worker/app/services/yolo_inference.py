@@ -1,8 +1,11 @@
+import logging
 import time
 from pathlib import Path
 
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
+
+logger = logging.getLogger(__name__)
 
 _yolo_models: dict[str, object] = {}
 
@@ -17,8 +20,18 @@ def _get_yolo(model_path: Path):
             raise RuntimeError(
                 "ultralytics is not installed. Run: pip install ultralytics"
             ) from exc
+        logger.info("Loading YOLO weights from %s (CPU — may take 1–3 min)…", model_path)
+        started = time.perf_counter()
         _yolo_models[key] = YOLO(str(model_path))
+        logger.info("YOLO loaded in %.1fs", time.perf_counter() - started)
     return _yolo_models[key]
+
+
+def prewarm_yolo(model_path: Path) -> None:
+    """Load model into memory so the UI can show progress before the first image."""
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    _get_yolo(model_path)
 
 
 def run_yolo_inference(
@@ -42,6 +55,7 @@ def run_yolo_inference(
         conf=config.confidence,
         iou=config.iou,
         imgsz=getattr(config, "image_size", 640),
+        device="cpu",
         verbose=False,
     )
 
@@ -85,4 +99,6 @@ def run_yolo_inference(
 
 def unload_model(model_path: Path) -> None:
     key = str(model_path.resolve())
+    if key in _yolo_models:
+        logger.info("Unloading YOLO model %s", model_path.name)
     _yolo_models.pop(key, None)

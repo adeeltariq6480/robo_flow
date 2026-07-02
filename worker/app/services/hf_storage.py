@@ -245,18 +245,23 @@ def download_to_local(
     repo_type: str,
     local_name: str | None = None,
 ) -> Path:
-    """Download a file from HF Hub into the worker temp dir."""
-    cached = hf_hub_download(
-        repo_id=repo_id,
-        filename=path_in_repo,
-        repo_type=repo_type,
-        token=settings.hf_token or None,
+    """Download a file from HF Hub. Uses HF cache; optional copy to temp dir."""
+    logger.debug("HF download %s (%s) %s", repo_id, repo_type, path_in_repo)
+    cached = Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=path_in_repo,
+            repo_type=repo_type,
+            token=settings.hf_token or None,
+        )
     )
     if not local_name:
-        return Path(cached)
+        return cached
 
     dest = _temp_dir() / local_name
-    dest.write_bytes(Path(cached).read_bytes())
+    if dest.exists() and dest.stat().st_size == cached.stat().st_size:
+        return dest
+    dest.write_bytes(cached.read_bytes())
     return dest
 
 
