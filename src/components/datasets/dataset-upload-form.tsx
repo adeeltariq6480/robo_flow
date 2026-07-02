@@ -222,7 +222,11 @@ export function DatasetUploadForm({
           disabled={uploading}
           uploading={uploading}
           progress={progress}
-          progressLabel="Uploading files…"
+          progressLabel={
+            uploading && queue.length > 0
+              ? `Uploading batch… (${queue.length} file${queue.length !== 1 ? "s" : ""} total)`
+              : "Uploading files…"
+          }
           progressSublabel={`${progress}% complete`}
           multiple
           accept="image/*,.csv,.json,.txt,.zip"
