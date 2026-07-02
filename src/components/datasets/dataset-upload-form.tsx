@@ -49,14 +49,24 @@ export function DatasetUploadForm({
   } | null>(null);
 
   const addFilesToQueue = useCallback(
-    (files: File[]) => {
-      const newItems: QueuedFile[] = files.map((file) => ({
-        file,
-        classId: defaultClassId || ALL_CLASS_ID,
-        preview: file.type.startsWith("image/")
-          ? URL.createObjectURL(file)
-          : undefined,
-      }));
+    async (files: File[]) => {
+      const newItems: QueuedFile[] = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        newItems.push({
+          file,
+          classId: defaultClassId || ALL_CLASS_ID,
+          preview: file.type.startsWith("image/")
+            ? URL.createObjectURL(file)
+            : undefined,
+        });
+
+        if (i > 0 && i % 50 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
       setQueue((prev) => [...prev, ...newItems]);
     },
     [defaultClassId]
@@ -222,6 +232,8 @@ export function DatasetUploadForm({
           disabled={uploading}
           uploading={uploading}
           progress={progress}
+          prepareLabel="Adding files to queue…"
+          prepareSublabel="Preparing previews for selected images"
           progressLabel={
             uploading && queue.length > 0
               ? `Uploading batch… (${queue.length} file${queue.length !== 1 ? "s" : ""} total)`

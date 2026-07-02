@@ -5,7 +5,7 @@ import { Upload } from "lucide-react";
 import { CircularProgress } from "@/components/ui/circular-progress";
 
 interface FileDropZoneProps {
-  onFiles: (files: File[]) => void;
+  onFiles: (files: File[]) => void | Promise<void>;
   children?: ReactNode;
   disabled?: boolean;
   multiple?: boolean;
@@ -17,6 +17,8 @@ interface FileDropZoneProps {
   progress?: number;
   progressLabel?: string;
   progressSublabel?: string;
+  prepareLabel?: string;
+  prepareSublabel?: string;
 }
 
 export function FileDropZone({
@@ -32,21 +34,32 @@ export function FileDropZone({
   progress = 0,
   progressLabel,
   progressSublabel,
+  prepareLabel = "Preparing files…",
+  prepareSublabel,
 }: FileDropZoneProps) {
   const [dragging, setDragging] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const depthRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  function pickFiles(fileList: FileList | null) {
-    if (!fileList?.length || disabled || uploading) return;
-    const files = Array.from(fileList);
-    onFiles(multiple ? files : files.slice(0, 1));
+  const busy = disabled || uploading || preparing;
+
+  async function pickFiles(fileList: FileList | null) {
+    if (!fileList?.length || busy) return;
+    const files = multiple ? Array.from(fileList) : Array.from(fileList).slice(0, 1);
+
+    setPreparing(true);
+    try {
+      await Promise.resolve(onFiles(files));
+    } finally {
+      setPreparing(false);
+    }
   }
 
   function onDragEnter(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled || uploading) return;
+    if (busy) return;
     depthRef.current += 1;
     setDragging(true);
   }
@@ -54,7 +67,7 @@ export function FileDropZone({
   function onDragLeave(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled || uploading) return;
+    if (busy) return;
     depthRef.current -= 1;
     if (depthRef.current <= 0) {
       depthRef.current = 0;
@@ -65,7 +78,7 @@ export function FileDropZone({
   function onDragOver(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (!disabled && !uploading) e.dataTransfer.dropEffect = "copy";
+    if (!busy) e.dataTransfer.dropEffect = "copy";
   }
 
   function onDrop(e: React.DragEvent) {
@@ -73,8 +86,8 @@ export function FileDropZone({
     e.stopPropagation();
     depthRef.current = 0;
     setDragging(false);
-    if (disabled || uploading) return;
-    pickFiles(e.dataTransfer.files);
+    if (busy) return;
+    void pickFiles(e.dataTransfer.files);
   }
 
   return (
@@ -83,7 +96,7 @@ export function FileDropZone({
         dragging
           ? "border-brand-500 bg-brand-50/80"
           : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-brand-50/50"
-      } ${disabled ? "pointer-events-none opacity-60" : ""} ${uploading ? "pointer-events-none" : ""} ${className}`}
+      } ${busy ? "pointer-events-none opacity-90" : ""} ${className}`}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
@@ -104,20 +117,33 @@ export function FileDropZone({
             multiple={multiple}
             accept={accept}
             className="sr-only"
-            disabled={disabled || uploading}
+            disabled={busy}
             onChange={(e) => {
-              pickFiles(e.target.files);
+              void pickFiles(e.target.files);
               e.target.value = "";
             }}
           />
         </label>
       )}
 
-      {dragging && !uploading && (
+      {dragging && !uploading && !preparing && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-brand-500/10">
           <p className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-brand-700 shadow-sm">
             Drop to add files
           </p>
+        </div>
+      )}
+
+      {preparing && !uploading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-white/95 backdrop-blur-[2px]">
+          <CircularProgress
+            value={0}
+            indeterminate
+            label={prepareLabel}
+            sublabel={
+              prepareSublabel ?? "Reading selected files, please wait…"
+            }
+          />
         </div>
       )}
 
