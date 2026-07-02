@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { uploadModel } from "@/lib/api/uploads";
+import { revalidateProject } from "@/lib/actions/revalidate";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import type { ModelFormat } from "@/lib/types/database";
@@ -128,6 +129,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
       setUploadedNames(names);
       setDone(true);
       setUploading(false);
+      await revalidateProject(projectId);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");

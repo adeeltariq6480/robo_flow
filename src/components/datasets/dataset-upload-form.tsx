@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { uploadImages, uploadZip } from "@/lib/api/uploads";
+import { revalidateProject } from "@/lib/actions/revalidate";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
@@ -129,6 +130,7 @@ export function DatasetUploadForm({
     setUploadSummary(summary);
     setDone(true);
     setUploading(false);
+    await revalidateProject(projectId);
     router.refresh();
   }
 

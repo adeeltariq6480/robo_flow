@@ -1,7 +1,10 @@
 "use server";
 
 import * as datasetService from "@/lib/services/datasetService";
-import { revalidatePath } from "next/cache";
+import {
+  revalidateDataset,
+  revalidateProject,
+} from "@/lib/actions/revalidate";
 import { redirect } from "next/navigation";
 
 import type { ActionResult } from "@/lib/actions/types";
@@ -22,7 +25,7 @@ export async function createDataset(
     return { error: e instanceof Error ? e.message : "Failed to create dataset" };
   }
 
-  revalidatePath(`/projects/${projectId}/datasets`);
+  await revalidateProject(projectId);
   redirect(`/projects/${projectId}/datasets/${newId}/upload`);
 }
 
@@ -32,7 +35,7 @@ export async function deleteDataset(
 ): Promise<ActionResult> {
   try {
     await datasetService.deleteDataset(projectId, datasetId);
-    revalidatePath(`/projects/${projectId}/datasets`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete dataset" };
@@ -46,7 +49,7 @@ export async function deleteDatasets(
   try {
     if (datasetIds.length === 0) return { error: "No datasets selected" };
     await datasetService.deleteDatasets(projectId, datasetIds);
-    revalidatePath(`/projects/${projectId}/datasets`);
+    await revalidateProject(projectId);
     return { success: true, count: datasetIds.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete datasets" };
@@ -74,8 +77,7 @@ export async function deleteDatasetFiles(
   try {
     if (fileIds.length === 0) return { error: "No files selected" };
     await datasetService.deleteImages(projectId, datasetId, fileIds);
-    revalidatePath(`/projects/${projectId}/datasets`);
-    revalidatePath(`/projects/${projectId}/datasets/${datasetId}/review`);
+    await revalidateDataset(projectId, datasetId);
     return { success: true, count: fileIds.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete files" };

@@ -1,15 +1,12 @@
 "use server";
 
 import * as annotationService from "@/lib/services/annotationService";
+import { revalidateDataset } from "@/lib/actions/revalidate";
 import type {
   AnnotationBox,
   ReviewFilter,
   ReviewStatus,
 } from "@/lib/types/annotations";
-import { revalidatePath } from "next/cache";
-
-const reviewBase = (projectId: string, datasetId: string) =>
-  `/projects/${projectId}/datasets/${datasetId}/review`;
 
 export async function getDatasetReviewQueue(
   projectId: string,
@@ -64,8 +61,7 @@ export async function saveAnnotations(
     fileId,
     boxes
   );
-  revalidatePath(reviewBase(projectId, datasetId));
-  revalidatePath(`${reviewBase(projectId, datasetId)}/${fileId}`);
+  await revalidateDataset(projectId, datasetId);
   return result;
 }
 
@@ -83,8 +79,7 @@ export async function setReviewStatus(
     status,
     boxes
   );
-  revalidatePath(reviewBase(projectId, datasetId));
-  revalidatePath(`${reviewBase(projectId, datasetId)}/${fileId}`);
+  await revalidateDataset(projectId, datasetId);
   return result;
 }
 
@@ -100,7 +95,7 @@ export async function bulkSetReviewStatus(
     fileIds,
     status
   );
-  revalidatePath(reviewBase(projectId, datasetId));
+  await revalidateDataset(projectId, datasetId);
   return result;
 }
 

@@ -91,16 +91,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   const isForm = options.body instanceof FormData;
-  const method = (options.method ?? "GET").toUpperCase();
-  const isGet = method === "GET";
 
   let res: Response;
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
+      cache: "no-store",
       ...options,
       headers: apiHeaders(options.headers, isForm),
-      // Cache GETs briefly so sidebar navigation feels instant.
-      ...(isGet ? { next: { revalidate: 30 } } : { cache: "no-store" }),
     });
   } catch (err) {
     throw new BackendUnavailableError(backendUnreachableMessage(err));

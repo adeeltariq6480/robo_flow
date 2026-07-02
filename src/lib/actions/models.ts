@@ -1,7 +1,7 @@
 "use server";
 
 import * as modelService from "@/lib/services/modelService";
-import { revalidatePath } from "next/cache";
+import { revalidateProject } from "@/lib/actions/revalidate";
 
 import type { ActionResult } from "@/lib/actions/types";
 
@@ -11,7 +11,7 @@ export async function deleteModel(
 ): Promise<ActionResult> {
   try {
     await modelService.deleteModel(projectId, modelId);
-    revalidatePath(`/projects/${projectId}/models`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete model" };
@@ -25,7 +25,7 @@ export async function deleteModels(
   try {
     if (modelIds.length === 0) return { error: "No models selected" };
     await modelService.deleteModels(projectId, modelIds);
-    revalidatePath(`/projects/${projectId}/models`);
+    await revalidateProject(projectId);
     return { success: true, count: modelIds.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete models" };

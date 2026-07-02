@@ -1,7 +1,7 @@
 "use server";
 
 import * as projectService from "@/lib/services/projectService";
-import { revalidatePath } from "next/cache";
+import { revalidateProjectsList } from "@/lib/actions/revalidate";
 import { redirect } from "next/navigation";
 
 import type { ActionResult } from "@/lib/actions/types";
@@ -19,7 +19,7 @@ export async function createProject(formData: FormData): Promise<ActionResult | 
     return { error: e instanceof Error ? e.message : "Failed to create project" };
   }
 
-  revalidatePath("/");
+  await revalidateProjectsList();
   redirect(`/projects/${newId}`);
 }
 
@@ -30,7 +30,7 @@ export async function deleteProject(projectId: string): Promise<ActionResult | v
     return { error: e instanceof Error ? e.message : "Failed to delete project" };
   }
 
-  revalidatePath("/");
+  await revalidateProjectsList();
   redirect("/");
 }
 
@@ -38,7 +38,7 @@ export async function deleteProjects(projectIds: string[]): Promise<ActionResult
   try {
     if (projectIds.length === 0) return { error: "No projects selected" };
     await projectService.deleteProjects(projectIds);
-    revalidatePath("/");
+    await revalidateProjectsList();
     return { success: true, count: projectIds.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete projects" };

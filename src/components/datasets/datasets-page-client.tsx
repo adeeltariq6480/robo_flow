@@ -14,6 +14,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { LinkButton } from "@/components/ui/link-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
@@ -136,10 +137,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
               placeholder="What does this dataset contain?"
             />
             <div className="flex gap-2">
-              <Button type="submit" loading={loading}>
+              <SubmitButton pendingLabel="Creating…">
                 <Check className="h-4 w-4" />
                 Create & upload
-              </Button>
+              </SubmitButton>
               <Button
                 type="button"
                 variant="secondary"

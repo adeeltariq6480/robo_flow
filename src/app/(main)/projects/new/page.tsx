@@ -7,19 +7,17 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { Alert } from "@/components/ui/alert";
 
 export default function NewProjectPage() {
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
   async function handleSubmit(formData: FormData) {
-    setLoading(true);
     setError(null);
     const result = await createProject(formData);
     if (result?.error) {
       setError(result.error);
-      setLoading(false);
     }
   }
 
@@ -47,9 +45,7 @@ export default function NewProjectPage() {
           <Input label="Project name" name="name" placeholder="e.g. Assembly Line QC" required autoFocus />
           <Textarea label="Description (optional)" name="description" rows={3} />
           <div className="flex gap-3 pt-2">
-            <Button type="submit" loading={loading}>
-              {loading ? "Creating…" : "Create project"}
-            </Button>
+            <SubmitButton pendingLabel="Creating…">Create project</SubmitButton>
             <Link href="/">
               <Button type="button" variant="secondary">Cancel</Button>
             </Link>

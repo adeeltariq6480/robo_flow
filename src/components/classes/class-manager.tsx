@@ -19,6 +19,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { Pencil, Trash2, Plus, X, Check, ListPlus } from "lucide-react";
@@ -186,6 +187,10 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
         <FileDropZone
           onFiles={importClassFiles}
           disabled={loading}
+          uploading={loading}
+          progress={loading ? 50 : 0}
+          progressLabel="Importing classes…"
+          progressSublabel="Reading file and saving to project"
           multiple
           accept=".txt,.json,.csv"
           className="mb-6"
@@ -207,10 +212,10 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
               autoFocus
             />
             <div className="flex gap-2">
-              <Button type="submit" loading={loading}>
+              <SubmitButton pendingLabel="Adding…">
                 <Check className="h-4 w-4" />
                 Add all
-              </Button>
+              </SubmitButton>
               <Button
                 type="button"
                 variant="secondary"
@@ -230,10 +235,10 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
           >
             <ClassFormFields />
             <div className="flex gap-2">
-              <Button type="submit" loading={loading}>
+              <SubmitButton pendingLabel="Saving…">
                 <Check className="h-4 w-4" />
                 Save
-              </Button>
+              </SubmitButton>
               <Button
                 type="button"
                 variant="secondary"
@@ -278,9 +283,7 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
                       defaultColor={cls.color}
                     />
                     <div className="flex gap-2">
-                      <Button type="submit" loading={loading}>
-                        Save
-                      </Button>
+                      <SubmitButton pendingLabel="Saving…">Save</SubmitButton>
                       <Button
                         type="button"
                         variant="secondary"

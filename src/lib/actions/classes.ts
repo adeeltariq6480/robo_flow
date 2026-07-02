@@ -2,7 +2,7 @@
 
 import * as classService from "@/lib/services/classService";
 import { parseClassNamesInput } from "@/lib/classes/constants";
-import { revalidatePath } from "next/cache";
+import { revalidateProject } from "@/lib/actions/revalidate";
 import { CLASS_COLORS } from "@/lib/utils";
 
 import type { ActionResult } from "@/lib/actions/types";
@@ -26,7 +26,7 @@ export async function createClass(
       sortOrder: count,
     });
 
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to create class" };
@@ -56,7 +56,7 @@ export async function createClassesBulk(
     }));
 
     await classService.createClassesBulk(projectId, rows);
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true, count: names.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to import classes" };
@@ -76,7 +76,7 @@ export async function updateClass(
     if (!name) return { error: "Class name is required" };
 
     await classService.updateClass(projectId, classId, { name, description, color });
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to update class" };
@@ -89,7 +89,7 @@ export async function deleteClass(
 ): Promise<ActionResult> {
   try {
     await classService.deleteClass(projectId, classId);
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete class" };
@@ -103,7 +103,7 @@ export async function deleteClasses(
   try {
     if (classIds.length === 0) return { error: "No classes selected" };
     await classService.deleteClasses(projectId, classIds);
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true, count: classIds.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete classes" };
@@ -113,7 +113,7 @@ export async function deleteClasses(
 export async function deleteAllClasses(projectId: string): Promise<ActionResult> {
   try {
     await classService.deleteAllClasses(projectId);
-    revalidatePath(`/projects/${projectId}/classes`);
+    await revalidateProject(projectId);
     return { success: true };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to delete classes" };
