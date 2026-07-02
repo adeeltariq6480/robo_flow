@@ -12,11 +12,11 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
 
-from app.services import firestore_repo, hf_storage
+from app.services import supabase_repo, supabase_storage
 
 
 def _class_index_map(project_id: str) -> dict[str, int]:
-    classes = firestore_repo.list_classes(project_id)
+    classes = supabase_repo.list_classes(project_id)
     return {c["className"]: c.get("classIndex", i) for i, c in enumerate(classes)}
 
 
@@ -31,8 +31,8 @@ def _image_bytes(img: dict) -> bytes:
         raise ValueError(
             f"Image {img.get('fileName', img.get('id'))} has no Hugging Face location"
         )
-    return hf_storage.download_bytes(
-        repo, path, repo_type=hf_storage.REPO_TYPE_DATASET
+    return supabase_storage.download_bytes(
+        repo, path, repo_type=supabase_storage.REPO_TYPE_DATASET
     )
 
 
@@ -45,7 +45,7 @@ def _append_images(data: list[dict], files: dict[str, str | bytes]) -> None:
 def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
     """Return (zip_bytes, file_name)."""
     fmt = export_format.lower()
-    data = firestore_repo.get_approved_export_data(project_id)
+    data = supabase_repo.get_approved_export_data(project_id)
     if not data:
         raise ValueError("No approved images to export. Review and approve labels first.")
 

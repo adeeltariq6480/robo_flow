@@ -24,6 +24,18 @@ export function BackendSetupRequired({
         />
         <Alert variant="error">{message}</Alert>
         <div className="mt-6 space-y-3 text-left text-sm text-slate-600">
+          <p className="font-medium text-slate-800">On Railway (worker):</p>
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>
+              Set <code className="text-xs">SUPABASE_URL</code> and{" "}
+              <code className="text-xs">SUPABASE_SERVICE_ROLE_KEY</code> (see{" "}
+              <code className="text-xs">docs/supabase-setup.md</code>).
+            </li>
+            <li>
+              Run <code className="text-xs">supabase/schema_full.sql</code> in
+              your Supabase SQL Editor.
+            </li>
+          </ol>
           <p className="font-medium text-slate-800">On Vercel (production):</p>
           <ol className="list-decimal space-y-2 pl-5">
             <li>

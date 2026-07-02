@@ -6,7 +6,7 @@ from collections import defaultdict
 from app.core.jobs import update_job
 from app.models.schemas import DetectionBox, JobConfig
 from app.services.detection_merge import merge_detections
-from app.services.firestore_repo import (
+from app.services.supabase_repo import (
     classify_queue,
     detections_to_objects,
     list_dataset_images,

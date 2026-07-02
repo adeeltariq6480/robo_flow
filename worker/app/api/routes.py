@@ -38,9 +38,9 @@ from app.models.schemas import (
     ReviewAction,
     TestRunRequest,
 )
-from app.services import export_builder, hf_storage, image_preprocess
-from app.services import firestore_repo as repo
-from app.services.firebase_client import get_db
+from app.services import export_builder, image_preprocess
+from app.services import supabase_repo as repo
+from app.services import supabase_storage as file_storage
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +66,9 @@ async def db(fn, /, *args, **kwargs):
 def _check_upload_config() -> None:
     """Fail fast with a clear message when Railway env is incomplete."""
     missing: list[str] = []
-    if not settings.hf_token:
-        missing.append("HF_TOKEN")
-    if not settings.dataset_repo_id:
-        missing.append("HF_DATASET_REPO (or HF_USERNAME)")
-    has_firebase = bool(
-        settings.firebase_service_account_json.strip()
-        or settings.google_application_credentials.strip()
-    )
-    if not has_firebase:
-        missing.append("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not settings.supabase_configured:
+        missing.append("SUPABASE_URL")
+        missing.append("SUPABASE_SERVICE_ROLE_KEY")
     if missing:
         raise HTTPException(
             status_code=503,
@@ -158,7 +151,7 @@ async def _create_image_record(
     content_type: str | None,
     hf_repo: str,
 ) -> dict:
-    hf_path = hf_storage.dataset_image_path(project_id, dataset_id, filename)
+    hf_path = file_storage.dataset_image_path(project_id, dataset_id, filename)
     return await asyncio.to_thread(
         repo.create_image,
         project_id,
@@ -183,7 +176,7 @@ async def _store_dataset_image(
     content_type: str | None,
 ) -> dict:
     loc = await asyncio.to_thread(
-        hf_storage.upload_dataset_image,
+        file_storage.upload_dataset_image,
         project_id,
         dataset_id,
         filename,
@@ -307,7 +300,7 @@ async def get_classes(project_id: str, _: None = Depends(verify_api_key)):
 
 @api_router.post("/datasets")
 async def create_dataset(body: DatasetCreate, _: None = Depends(verify_api_key)):
-    return repo.create_dataset(body.project_id, body.name, hf_repo=settings.dataset_repo_id)
+    return repo.create_dataset(body.project_id, body.name)
 
 
 @api_router.get("/datasets/{project_id}")
@@ -357,7 +350,7 @@ async def delete_images(
 
 
 # ===========================================================================
-# Uploads → Hugging Face
+# Uploads → Supabase Storage
 # ===========================================================================
 
 @api_router.post("/upload-images")
@@ -463,7 +456,7 @@ async def upload_images(
 
         try:
             hf_info = await asyncio.to_thread(
-                hf_storage.upload_dataset_images_from_folder,
+                file_storage.upload_dataset_images_from_folder,
                 project_id,
                 dataset_id,
                 session["dir"],
@@ -477,7 +470,7 @@ async def upload_images(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         hf_repo = hf_info["hfRepo"]
-        fs_sem = asyncio.Semaphore(max(1, settings.upload_firestore_workers))
+        fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
 
         async def record_staged(item: dict):
             async with fs_sem:
@@ -488,7 +481,7 @@ async def upload_images(
                     {
                         "fileName": item["stored_name"],
                         "hfRepo": hf_repo,
-                        "hfPath": hf_storage.dataset_image_path(
+                        "hfPath": file_storage.dataset_image_path(
                             project_id, dataset_id, item["stored_name"]
                         ),
                         "width": item["width"],
@@ -504,7 +497,7 @@ async def upload_images(
         )
         for record in records:
             if isinstance(record, Exception):
-                logger.exception("Firestore image record failed (deferred)")
+                logger.exception("DB image record failed (deferred)")
                 raise HTTPException(status_code=500, detail=str(record)) from record
             created.append(record)
 
@@ -515,7 +508,7 @@ async def upload_images(
         hf_items = [(filename, result.data) for filename, result, _ in ready]
         try:
             hf_info = await asyncio.to_thread(
-                hf_storage.upload_dataset_images_batch,
+                file_storage.upload_dataset_images_batch,
                 project_id,
                 dataset_id,
                 hf_items,
@@ -531,7 +524,7 @@ async def upload_images(
         stored_names: list[str] = hf_info.get("localNames") or [
             name for name, _, _ in ready
         ]
-        fs_sem = asyncio.Semaphore(max(1, settings.upload_firestore_workers))
+        fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
 
         async def record_one(
             stored_name: str,
@@ -552,7 +545,7 @@ async def upload_images(
         )
         for record in records:
             if isinstance(record, Exception):
-                logger.exception("Firestore image record failed")
+                logger.exception("DB image record failed")
                 raise HTTPException(status_code=500, detail=str(record)) from record
             created.append(record)
 
@@ -573,7 +566,7 @@ async def upload_zip(
     _: None = Depends(verify_api_key),
 ):
     raw = await file.read()
-    hf_storage.upload_dataset_zip(project_id, dataset_id, file.filename, raw)
+    file_storage.upload_dataset_zip(project_id, dataset_id, file.filename, raw)
 
     created: list[dict] = []
     skipped: list[dict] = []
@@ -621,7 +614,7 @@ async def upload_zip(
                 hf_items = [(filename, result.data) for filename, result in ready]
                 try:
                     hf_info = await asyncio.to_thread(
-                        hf_storage.upload_dataset_images_batch,
+                        file_storage.upload_dataset_images_batch,
                         project_id,
                         dataset_id,
                         hf_items,
@@ -637,7 +630,7 @@ async def upload_zip(
                 stored_names: list[str] = hf_info.get("localNames") or [
                     name for name, _ in ready
                 ]
-                fs_sem = asyncio.Semaphore(max(1, settings.upload_firestore_workers))
+                fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
 
                 async def record_one(
                     stored_name: str,
@@ -662,7 +655,7 @@ async def upload_zip(
                 )
                 for record in records:
                     if isinstance(record, Exception):
-                        logger.exception("Firestore ZIP image record failed")
+                        logger.exception("ZIP image record failed")
                         raise HTTPException(status_code=500, detail=str(record)) from record
                     created.append(record)
     except zipfile.BadZipFile:
@@ -688,7 +681,7 @@ async def upload_model(
     _: None = Depends(verify_api_key),
 ):
     data = await file.read()
-    loc = hf_storage.upload_model_file(project_id, file.filename, data)
+    loc = file_storage.upload_model_file(project_id, file.filename, data)
     model = repo.create_model(project_id, {
         "modelName": model_name,
         "modelVersion": model_version,
@@ -713,7 +706,7 @@ async def delete_model(project_id: str, model_id: str, _: None = Depends(verify_
 
 
 # ===========================================================================
-# Image content proxy (HF repos are private)
+# Image content proxy (Supabase Storage)
 # ===========================================================================
 
 @api_router.get("/images/{project_id}/{image_id}/content")
@@ -721,8 +714,8 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
     img = repo.get_image(project_id, image_id)
     if not img or not img.get("hfRepo") or not img.get("hfPath"):
         raise HTTPException(status_code=404, detail="Image not found")
-    data = hf_storage.download_bytes(
-        img["hfRepo"], img["hfPath"], repo_type=hf_storage.REPO_TYPE_DATASET
+    data = file_storage.download_bytes(
+        img["hfRepo"], img["hfPath"], repo_type=file_storage.REPO_TYPE_DATASET
     )
     return Response(content=data, media_type=img.get("mimeType") or "image/jpeg")
 
@@ -809,8 +802,7 @@ def _job_to_response(project_id: str, job_id: str, d: dict) -> JobResponse:
 
 
 def _resolve_project_for_job(job_id: str) -> str | None:
-    doc = get_db().collection("jobRegistry").document(job_id).get()
-    return doc.to_dict().get("projectId") if doc.exists else None
+    return repo.get_job_registry_project(job_id)
 
 
 @jobs_router.get("/{job_id}", response_model=JobResponse)
@@ -902,7 +894,7 @@ async def reject_image(body: ReviewAction, _: None = Depends(verify_api_key)):
 
 
 # ===========================================================================
-# Export → Hugging Face
+# Export → Supabase Storage
 # ===========================================================================
 
 @api_router.post("/export")
@@ -912,7 +904,7 @@ async def export(body: ExportRequest, _: None = Depends(verify_api_key)):
         zip_bytes, file_name = await asyncio.to_thread(
             export_builder.build_export, body.project_id, body.export_format
         )
-        loc = hf_storage.upload_export(body.project_id, file_name, zip_bytes)
+        loc = file_storage.upload_export(body.project_id, file_name, zip_bytes)
         repo.complete_export_job(
             body.project_id, export_job_id, hf_repo=loc["hfRepo"], hf_path=loc["hfPath"]
         )

@@ -18,12 +18,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     queue_manager.set_processor(process_job)
     await queue_manager.start()
-    if not settings.hf_token:
-        logger.warning("HF_TOKEN is not set — uploads to Hugging Face will fail")
-    if not settings.dataset_repo_id:
-        logger.warning(
-            "HF_DATASET_REPO / HF_USERNAME is not set — dataset uploads will fail"
-        )
+    if not settings.supabase_configured:
+        logger.warning("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — API will fail")
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
     await queue_manager.stop()
@@ -32,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Axiom AI API",
-    description="Axiom AI backend: Firestore metadata, Hugging Face storage, YOLO auto-labelling",
+    description="Axiom AI backend: Supabase metadata + storage, YOLO auto-labelling",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -72,12 +68,6 @@ async def health():
         "status": "ok",
         "queues": queue_manager.queue_stats(),
         "config": {
-            "firebase": bool(
-                settings.firebase_service_account_json.strip()
-                or settings.google_application_credentials.strip()
-            ),
-            "hf_token": bool(settings.hf_token),
-            "hf_dataset_repo": bool(settings.dataset_repo_id),
-            "hf_model_repo": bool(settings.model_repo_id),
+            "supabase": settings.supabase_configured,
         },
     }

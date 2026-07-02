@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.core.jobs import update_job
 from app.models.schemas import JobConfig
-from app.services.firestore_repo import get_image
+from app.services.supabase_repo import get_image
 from app.services.storage import (
     build_class_name_map,
     download_image_row,

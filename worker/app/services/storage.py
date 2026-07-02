@@ -1,10 +1,10 @@
-"""Resolve model/image files by downloading them from Hugging Face Hub."""
+"""Resolve model/image files by downloading them from Supabase Storage."""
 
 import logging
 from pathlib import Path
 
-from app.services import hf_storage
-from app.services.firestore_repo import (
+from app.services import supabase_storage as file_storage
+from app.services.supabase_repo import (
     get_image,
     get_model,
     get_project_class_map as _class_map,
@@ -20,44 +20,22 @@ def download_model(model_id: str, project_id: str) -> Path:
     repo = row.get("hfRepo")
     path = row.get("hfPath")
     if not repo or not path:
-        raise ValueError(f"Model {model_id} has no Hugging Face location")
+        raise ValueError(f"Model {model_id} has no storage location")
     ext = Path(path).suffix or ".pt"
     logger.info("Downloading model %s from %s/%s", model_id, repo, path)
-    try:
-        return hf_storage.download_to_local(
-            repo,
-            path,
-            repo_type=hf_storage.REPO_TYPE_MODEL,
-            local_name=f"model_{model_id}{ext}",
-        )
-    except Exception as first_err:
-        logger.warning(
-            "Model download as repo_type=model failed (%s), retrying as dataset…",
-            first_err,
-        )
-        return hf_storage.download_to_local(
-            repo,
-            path,
-            repo_type=hf_storage.REPO_TYPE_DATASET,
-            local_name=f"model_{model_id}{ext}",
-        )
+    return file_storage.download_to_local(
+        repo,
+        path,
+        repo_type=file_storage.REPO_TYPE_MODEL,
+        local_name=f"model_{model_id}{ext}",
+    )
 
 
 def download_image(repo: str, path: str, image_id: str) -> Path:
     logger.debug("Downloading image %s from %s/%s", image_id, repo, path)
-    # Use HF cache path directly — avoids duplicating thousands of files on disk.
-    try:
-        return hf_storage.download_to_local(
-            repo, path, repo_type=hf_storage.REPO_TYPE_DATASET
-        )
-    except Exception as first_err:
-        logger.warning(
-            "Image download as dataset repo failed (%s), retrying as model repo…",
-            first_err,
-        )
-        return hf_storage.download_to_local(
-            repo, path, repo_type=hf_storage.REPO_TYPE_MODEL
-        )
+    return file_storage.download_to_local(
+        repo, path, repo_type=file_storage.REPO_TYPE_DATASET
+    )
 
 
 def download_image_by_id(project_id: str, image_id: str) -> Path:
@@ -66,14 +44,14 @@ def download_image_by_id(project_id: str, image_id: str) -> Path:
         raise ValueError(f"Image {image_id} not found")
     repo, path = row.get("hfRepo"), row.get("hfPath")
     if not repo or not path:
-        raise ValueError(f"Image {image_id} has no Hugging Face location")
+        raise ValueError(f"Image {image_id} has no storage location")
     return download_image(repo, path, image_id)
 
 
 def download_image_row(row: dict, image_id: str) -> Path:
     repo, path = row.get("hfRepo"), row.get("hfPath")
     if not repo or not path:
-        raise ValueError(f"Image {image_id} has no Hugging Face location")
+        raise ValueError(f"Image {image_id} has no storage location")
     return download_image(repo, path, image_id)
 
 

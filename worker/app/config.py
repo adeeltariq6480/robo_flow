@@ -9,11 +9,26 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Firebase (Firestore metadata only — no Firebase Storage) ---
+    # --- Supabase (Postgres metadata + Storage) ---
+    supabase_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"
+        ),
+    )
+    supabase_service_role_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY"
+        ),
+    )
+
+    # --- Legacy Firebase (optional — no longer used when Supabase is configured) ---
     firebase_project_id: str = Field(
+        default="",
         validation_alias=AliasChoices(
             "FIREBASE_PROJECT_ID", "NEXT_PUBLIC_FIREBASE_PROJECT_ID"
-        )
+        ),
     )
     firebase_service_account_json: str = Field(
         default="",
@@ -24,7 +39,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
     )
 
-    # --- Hugging Face Hub (file storage) ---
+    # --- Legacy Hugging Face (optional — superseded by Supabase Storage) ---
     hf_token: str = Field(default="", validation_alias=AliasChoices("HF_TOKEN"))
     hf_username: str = Field(default="", validation_alias=AliasChoices("HF_USERNAME"))
     hf_dataset_repo: str = Field(
@@ -97,10 +112,16 @@ class Settings(BaseSettings):
         default=6,
         validation_alias=AliasChoices("UPLOAD_PREPROCESS_WORKERS"),
     )
-    upload_firestore_workers: int = Field(
+    upload_db_workers: int = Field(
         default=12,
-        validation_alias=AliasChoices("UPLOAD_FIRESTORE_WORKERS"),
+        validation_alias=AliasChoices(
+            "UPLOAD_DB_WORKERS", "UPLOAD_FIRESTORE_WORKERS"
+        ),
     )
+
+    @property
+    def supabase_configured(self) -> bool:
+        return bool(self.supabase_url.strip() and self.supabase_service_role_key.strip())
 
     @property
     def dataset_repo_id(self) -> str:

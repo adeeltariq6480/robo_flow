@@ -2,9 +2,10 @@ import logging
 
 from app.core.queue import queue_manager
 from app.models.schemas import QUEUE_FOR_JOB_TYPE, JobConfig, JobQueue, JobStatus, JobType
-from app.services.firestore_repo import (
+from app.services.supabase_repo import (
     create_labelling_job,
     get_labelling_job,
+    get_job_registry_project,
     update_labelling_job,
 )
 
@@ -22,15 +23,10 @@ def get_job_project(job_id: str) -> str | None:
     if pid:
         return pid
 
-    from app.services.firebase_client import get_db
-
-    doc = get_db().collection("jobRegistry").document(job_id).get()
-    if doc.exists:
-        pid = (doc.to_dict() or {}).get("projectId")
-        if pid:
-            register_job_project(job_id, pid)
-            return pid
-    return None
+    pid = get_job_registry_project(job_id)
+    if pid:
+        register_job_project(job_id, pid)
+    return pid
 
 
 async def update_job(
