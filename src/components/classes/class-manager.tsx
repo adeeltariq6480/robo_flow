@@ -22,6 +22,9 @@ import { Button } from "@/components/ui/button";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
+import { SimpleToast } from "@/components/ui/simple-toast";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { setDeleteStatus } from "@/lib/delete-status";
 import { Pencil, Trash2, Plus, X, Check, ListPlus } from "lucide-react";
 
 interface ClassManagerProps {
@@ -38,6 +41,12 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ open: boolean; message: string; type: "success" | "error" }>({
+    open: false,
+    message: "",
+    type: "success",
+  });
+  const { confirm, dialog } = useConfirmDialog();
 
   const allSelected = classes.length > 0 && selected.size === classes.length;
 
@@ -120,32 +129,41 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
 
   async function handleDeleteSelected() {
     if (selected.size === 0) return;
-    if (!confirm(`Delete ${selected.size} selected class(es)?`)) return;
+    if (!(await confirm({ title: "Delete classes?", message: `Delete ${selected.size} selected class(es)?` }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting classes in background...");
     const result = await deleteClasses(projectId, Array.from(selected));
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "Classes deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteAll() {
-    if (!confirm("Delete ALL classes in this project?")) return;
+    if (!(await confirm({ title: "Delete all classes?", message: "Delete ALL classes in this project?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting all classes in background...");
     const result = await deleteAllClasses(projectId);
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "All classes deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteOne(classId: string) {
-    if (!confirm("Delete this class?")) return;
+    if (!(await confirm({ title: "Delete class?", message: "Delete this class?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting class in background...");
     const result = await deleteClass(projectId, classId);
     if (result?.error) setError(result.error);
     else {
@@ -155,12 +173,17 @@ export function ClassManager({ projectId, classes }: ClassManagerProps) {
         return next;
       });
       router.refresh();
+      setToast({ open: true, message: "Class deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   return (
     <div className="space-y-6">
+      <SimpleToast open={toast.open} message={toast.message} type={toast.type} />
+      {dialog}
       {error && <Alert variant="error">{error}</Alert>}
 
       <Card>

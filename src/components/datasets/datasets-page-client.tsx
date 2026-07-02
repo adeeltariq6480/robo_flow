@@ -18,6 +18,9 @@ import { SubmitButton } from "@/components/ui/submit-button";
 import { LinkButton } from "@/components/ui/link-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
+import { SimpleToast } from "@/components/ui/simple-toast";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { setDeleteStatus } from "@/lib/delete-status";
 import { Database, Plus, Upload, Trash2, X, Check, ClipboardCheck, Download, Tags } from "lucide-react";
 
 interface DatasetsPageClientProps {
@@ -32,6 +35,12 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ open: boolean; message: string; type: "success" | "error" }>({
+    open: false,
+    message: "",
+    type: "success",
+  });
+  const { confirm, dialog } = useConfirmDialog();
 
   const allSelected = datasets.length > 0 && selected.size === datasets.length;
 
@@ -61,32 +70,41 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
 
   async function handleDeleteSelected() {
     if (selected.size === 0) return;
-    if (!confirm(`Delete ${selected.size} selected dataset(s) and all their files?`)) return;
+    if (!(await confirm({ title: "Delete datasets?", message: `Delete ${selected.size} selected dataset(s) and all their files?` }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting datasets in background...");
     const result = await deleteDatasets(projectId, Array.from(selected));
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "Datasets deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteAll() {
-    if (!confirm("Delete ALL datasets in this project?")) return;
+    if (!(await confirm({ title: "Delete all datasets?", message: "Delete ALL datasets in this project?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting all datasets in background...");
     const result = await deleteAllDatasets(projectId);
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "All datasets deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteOne(datasetId: string) {
-    if (!confirm("Delete this dataset and all its files?")) return;
+    if (!(await confirm({ title: "Delete dataset?", message: "Delete this dataset and all its files?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting dataset in background...");
     const result = await deleteDataset(projectId, datasetId);
     if (result?.error) setError(result.error);
     else {
@@ -96,12 +114,17 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
         return next;
       });
       router.refresh();
+      setToast({ open: true, message: "Dataset deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   return (
     <div className="space-y-6">
+      <SimpleToast open={toast.open} message={toast.message} type={toast.type} />
+      {dialog}
       {error && <Alert variant="error">{error}</Alert>}
 
       <Card>

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { AxiomAILogo } from "@/components/layout/axiom-ai-logo";
 import { useNavigationPending } from "@/hooks/use-navigation-pending";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getDeleteStatus } from "@/lib/delete-status";
 import {
   FolderKanban,
   Plus,
@@ -14,7 +15,9 @@ import {
   Box,
   LayoutDashboard,
   Zap,
+  Sparkles,
 } from "lucide-react";
+import { readActiveInferenceJob } from "@/lib/inference/active-job";
 
 const LAST_PROJECT_KEY = "axiomai:lastProjectId";
 
@@ -43,6 +46,8 @@ export function AppSidebar() {
   const isNewProject = pathname === "/projects/new";
 
   const [lastProjectId, setLastProjectId] = useState<string | undefined>();
+  const [activeLabelHref, setActiveLabelHref] = useState<string | null>(null);
+  const [deleteBanner, setDeleteBanner] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeProjectId) {
@@ -61,6 +66,46 @@ export function AppSidebar() {
       }
     }
   }, [activeProjectId]);
+
+  useEffect(() => {
+    try {
+      const update = () => {
+        const active = readActiveInferenceJob();
+        if (!active) {
+          setActiveLabelHref(null);
+          return;
+        }
+        setActiveLabelHref(
+          `/projects/${active.projectId}/datasets/${active.datasetId}/label`
+        );
+      };
+      update();
+      window.addEventListener("focus", update);
+      window.addEventListener("storage", update);
+      return () => {
+        window.removeEventListener("focus", update);
+        window.removeEventListener("storage", update);
+      };
+    } catch {
+      setActiveLabelHref(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      const s = getDeleteStatus();
+      setDeleteBanner(s?.active ? s.label : null);
+    };
+    sync();
+    window.addEventListener("storage", sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("axiomai-delete-status", sync as EventListener);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("axiomai-delete-status", sync as EventListener);
+    };
+  }, []);
 
   const projectId = activeProjectId ?? lastProjectId;
 
@@ -136,7 +181,20 @@ export function AppSidebar() {
                 label
               );
             })}
+            {activeLabelHref &&
+              navLink(
+                activeLabelHref,
+                pathname.startsWith(activeLabelHref),
+                <Sparkles className="h-4 w-4" />,
+                "Labeling"
+              )}
           </>
+        )}
+
+        {deleteBanner && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {deleteBanner}
+          </div>
         )}
       </nav>
     </aside>

@@ -14,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/ui/link-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
+import { SimpleToast } from "@/components/ui/simple-toast";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { setDeleteStatus } from "@/lib/delete-status";
 import { Box, Plus, Upload, Trash2 } from "lucide-react";
 
 const FORMAT_LABELS: Record<string, string> = {
@@ -35,6 +38,12 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ open: boolean; message: string; type: "success" | "error" }>({
+    open: false,
+    message: "",
+    type: "success",
+  });
+  const { confirm, dialog } = useConfirmDialog();
 
   const allSelected = models.length > 0 && selected.size === models.length;
 
@@ -54,33 +63,42 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
 
   async function handleDeleteSelected() {
     if (selected.size === 0) return;
-    if (!confirm(`Delete ${selected.size} selected model(s)?`)) return;
+    if (!(await confirm({ title: "Delete models?", message: `Delete ${selected.size} selected model(s)?` }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting models in background...");
     const result = await deleteModels(projectId, Array.from(selected));
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "Models deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteAll() {
-    if (!confirm("Delete ALL models in this project?")) return;
+    if (!(await confirm({ title: "Delete all models?", message: "Delete ALL models in this project?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting all models in background...");
     const result = await deleteAllModels(projectId);
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "All models deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteOne(modelId: string) {
-    if (!confirm("Delete this model?")) return;
+    if (!(await confirm({ title: "Delete model?", message: "Delete this model?" }))) return;
     setLoading(true);
     setDeletingId(modelId);
+    setDeleteStatus(true, "Deleting model in background...");
     const result = await deleteModel(projectId, modelId);
     if (result?.error) setError(result.error);
     else {
@@ -90,13 +108,18 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
         return next;
       });
       router.refresh();
+      setToast({ open: true, message: "Model deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setDeletingId(null);
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   return (
     <div className="space-y-6">
+      <SimpleToast open={toast.open} message={toast.message} type={toast.type} />
+      {dialog}
       {error && <Alert variant="error">{error}</Alert>}
 
       <Card>

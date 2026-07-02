@@ -15,6 +15,9 @@ import { CardLoadingOverlay } from "@/components/ui/card-loading-overlay";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { useNavigationPending } from "@/hooks/use-navigation-pending";
+import { SimpleToast } from "@/components/ui/simple-toast";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { setDeleteStatus } from "@/lib/delete-status";
 import { FolderKanban, Loader2, Plus, Trash2 } from "lucide-react";
 
 interface ProjectsListClientProps {
@@ -28,6 +31,12 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ open: boolean; message: string; type: "success" | "error" }>({
+    open: false,
+    message: "",
+    type: "success",
+  });
+  const { confirm, dialog } = useConfirmDialog();
 
   const allSelected = projects.length > 0 && selected.size === projects.length;
 
@@ -47,45 +56,60 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
 
   async function handleDeleteSelected() {
     if (selected.size === 0) return;
-    if (!confirm(`Delete ${selected.size} selected project(s)?`)) return;
+    if (!(await confirm({ title: "Delete projects?", message: `Delete ${selected.size} selected project(s)?` }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting projects in background...");
     setError(null);
     const result = await deleteProjects(Array.from(selected));
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "Projects deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteAll() {
-    if (!confirm("Delete ALL projects?")) return;
+    if (!(await confirm({ title: "Delete all projects?", message: "Delete ALL projects?" }))) return;
     setLoading(true);
+    setDeleteStatus(true, "Deleting all projects in background...");
     setError(null);
     const result = await deleteAllProjects();
     if (result?.error) setError(result.error);
     else {
       setSelected(new Set());
       router.refresh();
+      setToast({ open: true, message: "All projects deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
     setLoading(false);
+    setDeleteStatus(false);
   }
 
   async function handleDeleteOne(projectId: string) {
-    if (!confirm("Delete this project and all its data?")) return;
+    if (!(await confirm({ title: "Delete project?", message: "Delete this project and all its data?" }))) return;
     setLoading(true);
     setDeletingId(projectId);
+    setDeleteStatus(true, "Deleting project in background...");
     const result = await deleteProject(projectId);
     if (result?.error) {
       setError(result.error);
       setDeletingId(null);
       setLoading(false);
+      setDeleteStatus(false);
+    } else {
+      setToast({ open: true, message: "Project deleted", type: "success" });
+      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
     }
   }
 
   return (
     <div className="animate-in">
+      <SimpleToast open={toast.open} message={toast.message} type={toast.type} />
+      {dialog}
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 bg-clip-text text-2xl font-bold text-transparent">

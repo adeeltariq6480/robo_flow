@@ -44,9 +44,10 @@ export function DatasetUploadForm({
   const [done, setDone] = useState(false);
   const [uploadSummary, setUploadSummary] = useState<{
     uploaded: number;
-    skipped: { fileName: string; message?: string }[];
+    skipped: { fileName: string; reason?: string; message?: string }[];
     adjusted: { fileName: string; message?: string }[];
   } | null>(null);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   const addFilesToQueue = useCallback(
     async (files: File[]) => {
@@ -109,7 +110,7 @@ export function DatasetUploadForm({
 
     const summary = {
       uploaded: 0,
-      skipped: [] as { fileName: string; message?: string }[],
+      skipped: [] as { fileName: string; reason?: string; message?: string }[],
       adjusted: [] as { fileName: string; message?: string }[],
     };
 
@@ -148,6 +149,7 @@ export function DatasetUploadForm({
     const skipped = uploadSummary?.skipped ?? [];
     const adjusted = uploadSummary?.adjusted ?? [];
     const uploaded = uploadSummary?.uploaded ?? 0;
+    const blurrySkipped = skipped.filter((item) => item.reason === "blurry").length;
 
     return (
       <Card className="text-center">
@@ -157,31 +159,19 @@ export function DatasetUploadForm({
           {uploaded} image{uploaded !== 1 ? "s" : ""} saved to {datasetName}
         </p>
 
-        {adjusted.length > 0 && (
-          <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-left text-sm text-blue-900">
-            <p className="font-medium">Auto-fixed orientation</p>
-            <ul className="mt-2 list-inside list-disc text-blue-800">
-              {adjusted.map((item) => (
-                <li key={item.fileName}>
-                  {item.fileName}
-                  {item.message ? ` — ${item.message}` : ""}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {skipped.length > 0 && (
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
-            <p className="font-medium">Skipped automatically</p>
-            <ul className="mt-2 list-inside list-disc text-amber-800">
-              {skipped.map((item) => (
-                <li key={item.fileName}>
-                  {item.fileName}
-                  {item.message ? ` — ${item.message}` : ""}
-                </li>
-              ))}
-            </ul>
+        {(adjusted.length > 0 || skipped.length > 0) && (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p>
+              {adjusted.length} rotated · {skipped.length} skipped
+              {blurrySkipped > 0 ? ` (${blurrySkipped} blurry)` : ""}
+            </p>
+            <Button
+              variant="secondary"
+              className="mt-3"
+              onClick={() => setShowReportModal(true)}
+            >
+              View upload report
+            </Button>
           </div>
         )}
 
@@ -193,6 +183,7 @@ export function DatasetUploadForm({
               setQueue([]);
               setProgress(0);
               setUploadSummary(null);
+              setShowReportModal(false);
             }}
           >
             Upload more
@@ -201,6 +192,59 @@ export function DatasetUploadForm({
             View datasets
           </Button>
         </div>
+
+        {showReportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <h3 className="text-base font-semibold text-slate-900">Upload report</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="max-h-[calc(80vh-64px)] space-y-4 overflow-y-auto p-5 text-left">
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                  <p className="font-medium">Auto-rotated ({adjusted.length})</p>
+                  {adjusted.length > 0 ? (
+                    <ul className="mt-2 list-inside list-disc text-blue-800">
+                      {adjusted.map((item) => (
+                        <li key={`adj-${item.fileName}`}>
+                          {item.fileName}
+                          {item.message ? ` — ${item.message}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-blue-800">No rotated images.</p>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <p className="font-medium">
+                    Skipped ({skipped.length}){blurrySkipped > 0 ? ` · Blurry: ${blurrySkipped}` : ""}
+                  </p>
+                  {skipped.length > 0 ? (
+                    <ul className="mt-2 list-inside list-disc text-amber-800">
+                      {skipped.map((item) => (
+                        <li key={`skip-${item.fileName}`}>
+                          {item.fileName}
+                          {item.reason ? ` [${item.reason}]` : ""}
+                          {item.message ? ` — ${item.message}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-amber-800">No skipped images.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
     );
   }

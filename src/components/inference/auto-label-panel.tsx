@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { startAutoLabel } from "@/lib/actions/inference";
 import type { JobResponse } from "@/lib/worker/client";
 import type { Model, Dataset } from "@/lib/types/database";
@@ -13,6 +13,11 @@ import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
 import { Tags, ArrowRight } from "lucide-react";
 import Link from "next/link";
+import {
+  clearActiveInferenceJob,
+  readActiveInferenceJob,
+  writeActiveInferenceJob,
+} from "@/lib/inference/active-job";
 
 interface AutoLabelPanelProps {
   projectId: string;
@@ -51,6 +56,21 @@ export function AutoLabelPanel({
   const [loading, setLoading] = useState(false);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
+  const selectedDatasetName = selectedDataset?.name ?? "dataset";
+  const hasRestoredJob = useMemo(() => !!jobId && !completedJob, [jobId, completedJob]);
+
+  useEffect(() => {
+    const active = readActiveInferenceJob();
+    if (!active) return;
+    if (active.projectId !== projectId) return;
+    if (active.jobType !== "auto_label") return;
+
+    const exists = datasets.some((d) => d.id === active.datasetId);
+    if (!exists) return;
+
+    setDatasetId(active.datasetId);
+    setJobId(active.jobId);
+  }, [projectId, datasets]);
 
   async function handleRun() {
     if (selectedModelIds.length === 0 || !datasetId) {
@@ -73,7 +93,16 @@ export function AutoLabelPanel({
       return;
     }
 
-    if ("job_id" in result) setJobId(result.job_id);
+    if ("job_id" in result) {
+      setJobId(result.job_id);
+      writeActiveInferenceJob({
+        projectId,
+        datasetId,
+        jobId: result.job_id,
+        jobType: "auto_label",
+        createdAt: Date.now(),
+      });
+    }
     setLoading(false);
   }
 
@@ -171,11 +200,21 @@ export function AutoLabelPanel({
           <code className="rounded bg-slate-100 px-1">cd worker && uvicorn main:app --reload</code>
         </p>
 
+        {hasRestoredJob && (
+          <Alert variant="info">
+            Labeling is running in background for <strong>{selectedDatasetName}</strong>.
+            You can change pages and come back anytime.
+          </Alert>
+        )}
+
         <JobProgress
           jobId={jobId}
           onComplete={(job) => {
             setCompletedJob(job);
-            if (job.status === "completed") setJobId(null);
+            if (job.status === "completed" || job.status === "failed") {
+              setJobId(null);
+              clearActiveInferenceJob();
+            }
           }}
         />
 
