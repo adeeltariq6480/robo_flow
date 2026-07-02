@@ -1,6 +1,6 @@
 "use client";
 
-import { type ButtonHTMLAttributes } from "react";
+import { useState, type ButtonHTMLAttributes, type MouseEvent } from "react";
 import { Loader2 } from "lucide-react";
 
 type Variant = "primary" | "secondary" | "danger" | "ghost";
@@ -25,16 +25,34 @@ export function Button({
   loading = false,
   disabled,
   children,
+  onClick,
   ...props
 }: ButtonProps) {
+  const [internalLoading, setInternalLoading] = useState(false);
+  const busy = loading || internalLoading;
+
+  async function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    if (!onClick) return;
+    const result = onClick(event) as void | Promise<unknown>;
+    if (result != null && typeof (result as Promise<unknown>).then === "function") {
+      setInternalLoading(true);
+      try {
+        await result;
+      } finally {
+        setInternalLoading(false);
+      }
+    }
+  }
+
   return (
     <button
       className={`relative inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
-      disabled={disabled || loading}
-      aria-busy={loading}
+      disabled={disabled || busy}
+      aria-busy={busy}
+      onClick={onClick ? handleClick : undefined}
       {...props}
     >
-      {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+      {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
       {children}
     </button>
   );

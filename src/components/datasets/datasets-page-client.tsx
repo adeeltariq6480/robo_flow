@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createDataset,
@@ -15,6 +14,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { Database, Plus, Upload, Trash2, X, Check, ClipboardCheck, Download, Tags } from "lucide-react";
@@ -209,46 +209,43 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
                   {hasModels && dataset.file_count > 0 ? (
-                    <Link
+                    <LinkButton
                       href={`/projects/${projectId}/datasets/${dataset.id}/label`}
                     >
-                      <Button>
-                        <Tags className="h-4 w-4" />
-                        Label all
-                      </Button>
-                    </Link>
+                      <Tags className="h-4 w-4" />
+                      Label all
+                    </LinkButton>
                   ) : (
-                    <Link href={`/projects/${projectId}/models/upload`}>
-                      <Button variant="secondary" title="Upload a model first">
-                        <Tags className="h-4 w-4" />
-                        Label all
-                      </Button>
-                    </Link>
+                    <LinkButton
+                      href={`/projects/${projectId}/models/upload`}
+                      variant="secondary"
+                      title="Upload a model first"
+                    >
+                      <Tags className="h-4 w-4" />
+                      Label all
+                    </LinkButton>
                   )}
-                  <Link
+                  <LinkButton
                     href={`/projects/${projectId}/datasets/${dataset.id}/export`}
+                    variant="secondary"
                   >
-                    <Button variant="secondary">
-                      <Download className="h-4 w-4" />
-                      Export
-                    </Button>
-                  </Link>
-                  <Link
+                    <Download className="h-4 w-4" />
+                    Export
+                  </LinkButton>
+                  <LinkButton
                     href={`/projects/${projectId}/datasets/${dataset.id}/review`}
+                    variant="secondary"
                   >
-                    <Button variant="secondary">
-                      <ClipboardCheck className="h-4 w-4" />
-                      Review
-                    </Button>
-                  </Link>
-                  <Link
+                    <ClipboardCheck className="h-4 w-4" />
+                    Review
+                  </LinkButton>
+                  <LinkButton
                     href={`/projects/${projectId}/datasets/${dataset.id}/upload`}
+                    variant="secondary"
                   >
-                    <Button variant="secondary">
-                      <Upload className="h-4 w-4" />
-                      Upload
-                    </Button>
-                  </Link>
+                    <Upload className="h-4 w-4" />
+                    Upload
+                  </LinkButton>
                   <Button
                     variant="ghost"
                     onClick={() => handleDeleteOne(dataset.id)}

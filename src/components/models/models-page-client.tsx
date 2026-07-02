@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   deleteModel,
@@ -12,6 +11,7 @@ import type { Model } from "@/lib/types/database";
 import { formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { Box, Plus, Upload, Trash2 } from "lucide-react";
@@ -33,6 +33,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const allSelected = models.length > 0 && selected.size === models.length;
@@ -79,6 +80,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
   async function handleDeleteOne(modelId: string) {
     if (!confirm("Delete this model?")) return;
     setLoading(true);
+    setDeletingId(modelId);
     const result = await deleteModel(projectId, modelId);
     if (result?.error) setError(result.error);
     else {
@@ -89,6 +91,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
       });
       router.refresh();
     }
+    setDeletingId(null);
     setLoading(false);
   }
 
@@ -101,13 +104,10 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
           title="Models"
           description="Uploaded model artifacts for inference and deployment."
           action={
-            <Link
-              href={`/projects/${projectId}/models/upload`}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700"
-            >
+            <LinkButton href={`/projects/${projectId}/models/upload`}>
               <Plus className="h-4 w-4" />
               Upload model
-            </Link>
+            </LinkButton>
           }
         />
 
@@ -129,13 +129,14 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
             <p className="mt-4 text-sm text-slate-500">
               No models uploaded yet.
             </p>
-            <Link
+            <LinkButton
               href={`/projects/${projectId}/models/upload`}
-              className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              variant="secondary"
+              className="mt-4"
             >
               <Upload className="h-4 w-4" />
               Upload your first model
-            </Link>
+            </LinkButton>
           </div>
         ) : (
           <ul className="divide-y divide-slate-100">
@@ -176,10 +177,11 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
                 <Button
                   variant="ghost"
                   onClick={() => handleDeleteOne(model.id)}
-                  loading={loading}
+                  loading={deletingId === model.id}
+                  disabled={loading && deletingId !== model.id}
                   className="text-red-600 hover:bg-red-50"
                 >
-                  {!loading && <Trash2 className="h-4 w-4" />}
+                  {deletingId !== model.id && <Trash2 className="h-4 w-4" />}
                 </Button>
               </li>
             ))}

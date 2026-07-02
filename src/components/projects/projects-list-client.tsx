@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { LinkButton } from "@/components/ui/link-button";
 import {
   deleteProject,
   deleteProjects,
@@ -10,7 +11,6 @@ import {
 } from "@/lib/actions/projects";
 import type { Project } from "@/lib/types/database";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { FolderKanban, Loader2, Plus, Trash2 } from "lucide-react";
@@ -24,6 +24,7 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [navigatingId, setNavigatingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const allSelected = projects.length > 0 && selected.size === projects.length;
@@ -90,12 +91,10 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
             Manage classes, datasets, and models — no login required
           </p>
         </div>
-        <Link href="/projects/new">
-          <Button>
-            <Plus className="h-4 w-4" />
-            New project
-          </Button>
-        </Link>
+        <LinkButton href="/projects/new">
+          <Plus className="h-4 w-4" />
+          New project
+        </LinkButton>
       </div>
 
       {error && (
@@ -111,12 +110,10 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
           <p className="mt-2 text-sm text-slate-500">
             Create your first project to get started.
           </p>
-          <Link href="/projects/new" className="mt-6 inline-block">
-            <Button>
-              <Plus className="h-4 w-4" />
-              Create project
-            </Button>
-          </Link>
+          <LinkButton href="/projects/new" className="mt-6">
+            <Plus className="h-4 w-4" />
+            Create project
+          </LinkButton>
         </Card>
       ) : (
         <>
@@ -158,7 +155,14 @@ export function ProjectsListClient({ projects }: ProjectsListClientProps) {
                     )}
                   </button>
                 </div>
-                <Link href={`/projects/${project.id}`} className="block">
+                <Link
+                  href={`/projects/${project.id}`}
+                  className="relative block"
+                  onClick={() => setNavigatingId(project.id)}
+                >
+                  {navigatingId === project.id && (
+                    <Loader2 className="absolute left-3 top-3 h-4 w-4 animate-spin text-brand-600" />
+                  )}
                   <div className="flex items-start gap-3 pr-16">
                     <div className="rounded-lg bg-brand-50 p-2">
                       <FolderKanban className="h-5 w-5 text-brand-600" />
