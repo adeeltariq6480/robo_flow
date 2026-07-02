@@ -58,6 +58,11 @@ async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="Invalid worker API key")
 
 
+async def db(fn, /, *args, **kwargs):
+    """Run blocking Firestore/repo calls off the asyncio event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 def _check_upload_config() -> None:
     """Fail fast with a clear message when Railway env is incomplete."""
     missing: list[str] = []
@@ -231,12 +236,12 @@ async def create_project(body: ProjectCreate, _: None = Depends(verify_api_key))
 
 @api_router.get("/projects")
 async def list_projects(_: None = Depends(verify_api_key)):
-    return repo.list_projects()
+    return await db(repo.list_projects)
 
 
 @api_router.get("/projects/{project_id}")
 async def get_project(project_id: str, _: None = Depends(verify_api_key)):
-    project = repo.get_project(project_id)
+    project = await db(repo.get_project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
@@ -244,7 +249,10 @@ async def get_project(project_id: str, _: None = Depends(verify_api_key)):
 
 @api_router.get("/projects/{project_id}/stats")
 async def get_project_stats(project_id: str, _: None = Depends(verify_api_key)):
-    return repo.get_project_stats(project_id)
+    try:
+        return await db(repo.get_project_stats, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @api_router.put("/projects/{project_id}")
@@ -285,12 +293,12 @@ async def save_classes(body: ClassesSave, _: None = Depends(verify_api_key)):
         }
         for i, c in enumerate(body.classes)
     ]
-    return repo.save_classes(body.project_id, classes)
+    return await db(repo.save_classes, body.project_id, classes)
 
 
 @api_router.get("/classes/{project_id}")
 async def get_classes(project_id: str, _: None = Depends(verify_api_key)):
-    return repo.list_classes(project_id)
+    return await db(repo.list_classes, project_id)
 
 
 # ===========================================================================
@@ -304,12 +312,12 @@ async def create_dataset(body: DatasetCreate, _: None = Depends(verify_api_key))
 
 @api_router.get("/datasets/{project_id}")
 async def list_datasets(project_id: str, _: None = Depends(verify_api_key)):
-    return repo.list_datasets(project_id)
+    return await db(repo.list_datasets, project_id)
 
 
 @api_router.get("/datasets/{project_id}/{dataset_id}")
 async def get_dataset(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
-    ds = repo.get_dataset(project_id, dataset_id)
+    ds = await db(repo.get_dataset, project_id, dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return ds
@@ -695,7 +703,7 @@ async def upload_model(
 
 @api_router.get("/models/{project_id}")
 async def list_models(project_id: str, _: None = Depends(verify_api_key)):
-    return repo.list_models(project_id)
+    return await db(repo.list_models, project_id)
 
 
 @api_router.delete("/models/{project_id}/{model_id}")
@@ -810,7 +818,7 @@ async def get_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
     project_id = _resolve_project_for_job(str(job_id))
     if not project_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    d = repo.get_labelling_job(project_id, str(job_id))
+    d = await db(repo.get_labelling_job, project_id, str(job_id))
     if not d:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_to_response(project_id, str(job_id), d)
@@ -820,7 +828,7 @@ async def get_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
 async def get_job_for_project(
     project_id: str, job_id: str, _: None = Depends(verify_api_key)
 ):
-    d = repo.get_labelling_job(project_id, str(job_id))
+    d = await db(repo.get_labelling_job, project_id, str(job_id))
     if not d:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_to_response(project_id, str(job_id), d)

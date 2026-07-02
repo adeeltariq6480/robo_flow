@@ -23,13 +23,32 @@ export function toProject(doc: FirestoreProject): Project {
 }
 
 export function toClass(projectId: string, doc: FirestoreClass): Class {
+  const rawName = doc.className as unknown;
+  const name = Array.isArray(rawName)
+    ? rawName.map((v) => String(v)).filter(Boolean).join(", ")
+    : String(rawName ?? "unknown");
+
+  const rawIndex = doc.classIndex as unknown;
+  let sortOrder = 0;
+  if (Array.isArray(rawIndex)) {
+    sortOrder = Number(rawIndex[0]) || 0;
+  } else {
+    sortOrder = Number(rawIndex ?? 0);
+    if (!Number.isFinite(sortOrder)) sortOrder = 0;
+  }
+
+  const rawDesc = doc.description as unknown;
+  const description = Array.isArray(rawDesc)
+    ? rawDesc.map((v) => String(v)).join(", ")
+    : doc.description ?? null;
+
   return {
     id: doc.id,
     project_id: projectId,
-    name: doc.className,
+    name,
     color: doc.color ?? "#6366f1",
-    description: doc.description ?? null,
-    sort_order: doc.classIndex,
+    description,
+    sort_order: sortOrder,
     created_at: doc.createdAt,
     updated_at: doc.updatedAt,
   };

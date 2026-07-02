@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class JobType(str, Enum):
@@ -159,6 +159,34 @@ class ClassItem(BaseModel):
     description: str | None = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("class_name", mode="before")
+    @classmethod
+    def coerce_name(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return ", ".join(str(v).strip() for v in value if str(v).strip())
+        return str(value).strip()
+
+    @field_validator("class_index", mode="before")
+    @classmethod
+    def coerce_index(cls, value: object) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, list) and value:
+            value = value[0]
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_name_alias(cls, data: object) -> object:
+        if isinstance(data, dict) and "className" not in data and "name" in data:
+            return {**data, "className": data["name"]}
+        return data
 
 
 class ClassesSave(BaseModel):

@@ -1,8 +1,11 @@
 """Firestore data access — metadata only. All binary files live in Hugging Face Hub."""
 
-from datetime import datetime, timezone
+import logging
+from datetime import date, datetime, timezone
 
 from app.services.firebase_client import get_db
+
+logger = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -21,8 +24,58 @@ def _sub(project_id: str, name: str):
     return _project_ref(project_id).collection(name)
 
 
+def _serialize_value(value):
+    """Convert Firestore field types to JSON-safe values."""
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(v) for v in value]
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    if hasattr(value, "path"):
+        return str(value.path)
+    if hasattr(value, "latitude") and hasattr(value, "longitude"):
+        return {"latitude": value.latitude, "longitude": value.longitude}
+    return str(value)
+
+
 def _doc_dict(doc) -> dict:
-    return {"id": doc.id, **(doc.to_dict() or {})}
+    raw = {"id": doc.id, **(doc.to_dict() or {})}
+    return _serialize_value(raw)
+
+
+def _stream_docs(query, *, label: str) -> list[dict]:
+    try:
+        return [_doc_dict(d) for d in query.stream()]
+    except Exception:
+        logger.exception("Firestore query failed: %s", label)
+        raise
+
+
+def _subcollection_count(proj, name: str) -> int:
+    col = proj.collection(name)
+    try:
+        return int(col.count().get()[0][0].value)
+    except Exception:
+        logger.warning("count() failed for %s, falling back to stream", name)
+        try:
+            return sum(1 for _ in col.stream())
+        except Exception:
+            logger.exception("stream count failed for %s", name)
+            return 0
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +97,11 @@ def create_project(name: str, description: str | None, annotation_type: str) -> 
 
 
 def list_projects() -> list[dict]:
-    snap = _db().collection("projects").order_by("updatedAt", direction="DESCENDING").stream()
-    return [_doc_dict(d) for d in snap]
+    col = _db().collection("projects")
+    try:
+        return _stream_docs(col.order_by("updatedAt", direction="DESCENDING"), label="list_projects")
+    except Exception:
+        return _stream_docs(col, label="list_projects_fallback")
 
 
 def get_project(project_id: str) -> dict | None:
@@ -79,11 +135,13 @@ def delete_project(project_id: str) -> None:
 
 def get_project_stats(project_id: str) -> dict:
     proj = _project_ref(project_id)
+    if not proj.get().exists:
+        raise ValueError(f"Project {project_id} not found")
     return {
-        "classCount": proj.collection("classes").count().get()[0][0].value,
-        "datasetCount": proj.collection("datasets").count().get()[0][0].value,
-        "modelCount": proj.collection("models").count().get()[0][0].value,
-        "imageCount": proj.collection("images").count().get()[0][0].value,
+        "classCount": _subcollection_count(proj, "classes"),
+        "datasetCount": _subcollection_count(proj, "datasets"),
+        "modelCount": _subcollection_count(proj, "models"),
+        "imageCount": _subcollection_count(proj, "images"),
     }
 
 
@@ -91,38 +149,113 @@ def get_project_stats(project_id: str) -> dict:
 # Classes
 # ---------------------------------------------------------------------------
 
+def _coerce_str(value, *, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        parts = [str(v).strip() for v in value if str(v).strip()]
+        return ", ".join(parts) if parts else fallback
+    return str(value).strip() or fallback
+
+
+def _coerce_int(value, *, fallback: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, list) and value:
+        return _coerce_int(value[0], fallback=fallback)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _normalize_class_record(doc: dict) -> dict:
+    """Repair legacy/corrupt class rows (e.g. array stored in className)."""
+    name = _coerce_str(
+        doc.get("className") or doc.get("name") or doc.get("class_name"),
+        fallback="unknown",
+    )
+    idx = _coerce_int(doc.get("classIndex", doc.get("class_index")), fallback=0)
+    color = doc.get("color")
+    if isinstance(color, list):
+        color = color[0] if color else None
+    description = doc.get("description")
+    if isinstance(description, list):
+        description = ", ".join(str(v) for v in description)
+    return {
+        **doc,
+        "className": name,
+        "classIndex": idx,
+        "color": color,
+        "description": description,
+    }
+
+
 def list_classes(project_id: str) -> list[dict]:
-    snap = _sub(project_id, "classes").order_by("classIndex").stream()
-    return [_doc_dict(d) for d in snap]
+    col = _sub(project_id, "classes")
+    try:
+        rows = _stream_docs(col.order_by("classIndex"), label="list_classes")
+    except Exception:
+        rows = _stream_docs(col, label="list_classes_fallback")
+    normalized = [_normalize_class_record(r) for r in rows]
+    return sorted(normalized, key=lambda r: r.get("classIndex", 0))
 
 
 def save_classes(project_id: str, classes: list[dict]) -> list[dict]:
     """Replace project classes with the provided list (import/bulk save)."""
     col = _sub(project_id, "classes")
     existing = list(col.stream())
-    batch = _db().batch()
-    for d in existing:
-        batch.delete(d.reference)
+
+    for i in range(0, len(existing), 400):
+        batch = _db().batch()
+        for d in existing[i : i + 400]:
+            batch.delete(d.reference)
+        batch.commit()
+
     now = now_iso()
     created: list[dict] = []
+    pending: list[dict] = []
+
     for idx, c in enumerate(classes):
-        ref = col.document()
-        data = {
-            "className": c.get("className") or c.get("name"),
-            "classIndex": c.get("classIndex", idx),
-            "color": c.get("color"),
-            "description": c.get("description"),
-            "createdAt": now,
-            "updatedAt": now,
-        }
-        batch.set(ref, data)
-        created.append({"id": ref.id, **data})
-    batch.commit()
+        data = _normalize_class_record(
+            {
+                "className": c.get("className") or c.get("name") or c.get("class_name"),
+                "classIndex": c.get("classIndex", c.get("class_index", idx)),
+                "color": c.get("color"),
+                "description": c.get("description"),
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+        pending.append(data)
+
+    for i in range(0, len(pending), 400):
+        batch = _db().batch()
+        chunk = pending[i : i + 400]
+        for data in chunk:
+            ref = col.document()
+            batch.set(ref, data)
+            created.append({"id": ref.id, **data})
+        batch.commit()
+
     return created
 
 
 def get_project_class_map(project_id: str) -> dict[str, str]:
-    return {c["className"]: c["id"] for c in list_classes(project_id)}
+    mapping: dict[str, str] = {}
+    for c in list_classes(project_id):
+        name = _coerce_str(c.get("className"), fallback="")
+        if not name:
+            continue
+        mapping[name] = c["id"]
+        mapping[name.strip().lower()] = c["id"]
+    return mapping
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +278,11 @@ def create_dataset(project_id: str, name: str, hf_repo: str | None = None) -> di
 
 
 def list_datasets(project_id: str) -> list[dict]:
-    snap = _sub(project_id, "datasets").order_by("updatedAt", direction="DESCENDING").stream()
-    return [_doc_dict(d) for d in snap]
+    col = _sub(project_id, "datasets")
+    try:
+        return _stream_docs(col.order_by("updatedAt", direction="DESCENDING"), label="list_datasets")
+    except Exception:
+        return _stream_docs(col, label="list_datasets_fallback")
 
 
 def get_dataset(project_id: str, dataset_id: str) -> dict | None:
@@ -281,8 +417,11 @@ def create_model(project_id: str, data: dict) -> dict:
 
 
 def list_models(project_id: str) -> list[dict]:
-    snap = _sub(project_id, "models").order_by("updatedAt", direction="DESCENDING").stream()
-    return [_doc_dict(d) for d in snap]
+    col = _sub(project_id, "models")
+    try:
+        return _stream_docs(col.order_by("updatedAt", direction="DESCENDING"), label="list_models")
+    except Exception:
+        return _stream_docs(col, label="list_models_fallback")
 
 
 def get_model(project_id: str, model_id: str) -> dict | None:

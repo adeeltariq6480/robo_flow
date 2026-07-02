@@ -25,10 +25,23 @@ async function saveAll(projectId: string, classes: ClassPayload[]) {
   await api.post("/api/classes", { projectId, classes });
 }
 
+function coerceClassName(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v).trim()).filter(Boolean).join(", ");
+  }
+  return String(value ?? "unknown").trim() || "unknown";
+}
+
+function coerceClassIndex(value: unknown, fallback = 0): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function toPayload(c: FirestoreClass): ClassPayload {
   return {
-    className: c.className,
-    classIndex: c.classIndex,
+    className: coerceClassName(c.className),
+    classIndex: coerceClassIndex(c.classIndex),
     color: c.color ?? null,
     description: c.description ?? null,
   };
@@ -37,8 +50,8 @@ function toPayload(c: FirestoreClass): ClassPayload {
 export const listClasses = cache(async (projectId: string): Promise<Class[]> => {
   const rows = await fetchRaw(projectId);
   return rows
-    .sort((a, b) => a.classIndex - b.classIndex)
-    .map((r) => toClass(projectId, r));
+    .map((r) => toClass(projectId, r))
+    .sort((a, b) => a.sort_order - b.sort_order);
 });
 
 export const getClassCount = cache(async (projectId: string): Promise<number> => {
