@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { ReviewFilter } from "@/lib/types/annotations";
 import { ArrowLeft, Download } from "lucide-react";
 import { notFound } from "next/navigation";
+import { backendErrorPage, runBackendPage } from "@/lib/server/backend-page";
 
 const VALID_FILTERS: ReviewFilter[] = [
   "all",
@@ -38,43 +39,49 @@ async function ReviewContent({
   datasetId: string;
   filter: ReviewFilter;
 }) {
-  const dataset = await datasetService.getDataset(projectId, datasetId);
-  if (!dataset) notFound();
+  try {
+    const dataset = await datasetService.getDataset(projectId, datasetId);
+    if (!dataset) notFound();
 
-  const [queueResult, countsResult, classes] = await Promise.all([
-    getDatasetReviewQueue(projectId, datasetId, filter),
-    getReviewCounts(projectId, datasetId),
-    classService.listClasses(projectId),
-  ]);
+    const [queueResult, countsResult, classes] = await Promise.all([
+      getDatasetReviewQueue(projectId, datasetId, filter),
+      getReviewCounts(projectId, datasetId),
+      classService.listClasses(projectId),
+    ]);
 
-  if (queueResult.error) {
+    if (queueResult.error) {
+      return (
+        <p className="text-sm text-red-600">
+          Failed to load review queue: {queueResult.error}
+        </p>
+      );
+    }
+
+    const counts = countsResult.counts ?? {
+      all: 0,
+      needs_review: 0,
+      unannotated: 0,
+      annotated: 0,
+      approved: 0,
+      rejected: 0,
+    };
+
     return (
-      <p className="text-sm text-red-600">
-        Failed to load review queue: {queueResult.error}
-      </p>
+      <AnnotationReviewQueue
+        projectId={projectId}
+        datasetId={datasetId}
+        datasetName={dataset.name}
+        classes={classes}
+        files={queueResult.files ?? []}
+        counts={counts}
+        activeFilter={filter}
+      />
     );
+  } catch (err) {
+    const page = backendErrorPage(err);
+    if (page) return page;
+    throw err;
   }
-
-  const counts = countsResult.counts ?? {
-    all: 0,
-    needs_review: 0,
-    unannotated: 0,
-    annotated: 0,
-    approved: 0,
-    rejected: 0,
-  };
-
-  return (
-    <AnnotationReviewQueue
-      projectId={projectId}
-      datasetId={datasetId}
-      datasetName={dataset.name}
-      classes={classes}
-      files={queueResult.files ?? []}
-      counts={counts}
-      activeFilter={filter}
-    />
-  );
 }
 
 export default async function DatasetReviewPage({
@@ -86,40 +93,42 @@ export default async function DatasetReviewPage({
 }) {
   const { id: projectId, datasetId } = await params;
   const { filter: filterParam } = await searchParams;
-  await getProject(projectId);
-
   const filter = parseFilter(filterParam);
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Link href={`/projects/${projectId}/datasets`}>
-          <Button variant="secondary">
-            <ArrowLeft className="h-4 w-4" />
-            Datasets
-          </Button>
-        </Link>
-        <Link href={`/projects/${projectId}/datasets/${datasetId}/export`}>
-          <Button variant="secondary">
-            <Download className="h-4 w-4" />
-            Export approved
-          </Button>
-        </Link>
-      </div>
+  return runBackendPage(async () => {
+    await getProject(projectId);
 
-      <Suspense
-        fallback={
-          <p className="text-sm text-slate-500">Loading review queue…</p>
-        }
-      >
-        <div className="mt-4">
-          <ReviewContent
-            projectId={projectId}
-            datasetId={datasetId}
-            filter={filter}
-          />
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href={`/projects/${projectId}/datasets`}>
+            <Button variant="secondary">
+              <ArrowLeft className="h-4 w-4" />
+              Datasets
+            </Button>
+          </Link>
+          <Link href={`/projects/${projectId}/datasets/${datasetId}/export`}>
+            <Button variant="secondary">
+              <Download className="h-4 w-4" />
+              Export approved
+            </Button>
+          </Link>
         </div>
-      </Suspense>
-    </div>
-  );
+
+        <Suspense
+          fallback={
+            <p className="text-sm text-slate-500">Loading review queue…</p>
+          }
+        >
+          <div className="mt-4">
+            <ReviewContent
+              projectId={projectId}
+              datasetId={datasetId}
+              filter={filter}
+            />
+          </div>
+        </Suspense>
+      </div>
+    );
+  });
 }

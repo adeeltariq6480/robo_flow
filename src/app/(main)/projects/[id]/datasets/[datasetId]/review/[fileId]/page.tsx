@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
+import { runBackendPage } from "@/lib/server/backend-page";
 
 const VALID_FILTERS: ReviewFilter[] = [
   "all",
@@ -37,64 +38,66 @@ export default async function DatasetFileReviewPage({
 }) {
   const { id: projectId, datasetId, fileId } = await params;
   const { filter: filterParam } = await searchParams;
-  await getProject(projectId);
-
   const filter = parseFilter(filterParam);
 
-  const dataset = await datasetService.getDataset(projectId, datasetId);
-  if (!dataset) notFound();
+  return runBackendPage(async () => {
+    await getProject(projectId);
 
-  const classes = await classService.listClasses(projectId);
+    const dataset = await datasetService.getDataset(projectId, datasetId);
+    if (!dataset) notFound();
 
-  const fileResult = await getDatasetFileForReview(
-    projectId,
-    datasetId,
-    fileId
-  );
+    const classes = await classService.listClasses(projectId);
 
-  if (fileResult.error || !fileResult.file || !fileResult.imageUrl) {
-    return (
-      <div className="space-y-4">
-        <Link href={`/projects/${projectId}/datasets/${datasetId}/review`}>
-          <Button variant="secondary">
-            <ArrowLeft className="h-4 w-4" />
-            Back
-          </Button>
-        </Link>
-        <p className="text-sm text-red-600">
-          {fileResult.error ?? "Could not load file"}
-        </p>
-      </div>
+    const fileResult = await getDatasetFileForReview(
+      projectId,
+      datasetId,
+      fileId
     );
-  }
 
-  const queueResult = await getDatasetReviewQueue(
-    projectId,
-    datasetId,
-    filter
-  );
-  const queueFiles = queueResult.files ?? [];
-  const currentIndex = queueFiles.findIndex((f) => f.id === fileId);
-  const prevFileId =
-    currentIndex > 0 ? queueFiles[currentIndex - 1]?.id ?? null : null;
-  const nextFileId =
-    currentIndex >= 0 && currentIndex < queueFiles.length - 1
-      ? queueFiles[currentIndex + 1]?.id ?? null
-      : null;
+    if (fileResult.error || !fileResult.file || !fileResult.imageUrl) {
+      return (
+        <div className="space-y-4">
+          <Link href={`/projects/${projectId}/datasets/${datasetId}/review`}>
+            <Button variant="secondary">
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </Button>
+          </Link>
+          <p className="text-sm text-red-600">
+            {fileResult.error ?? "Could not load file"}
+          </p>
+        </div>
+      );
+    }
 
-  return (
-    <AnnotationEditorClient
-      projectId={projectId}
-      datasetId={datasetId}
-      datasetName={dataset.name}
-      fileId={fileId}
-      fileName={fileResult.file.file_name}
-      imageUrl={fileResult.imageUrl}
-      initialBoxes={fileResult.file.annotations}
-      classes={classes}
-      filter={filter}
-      prevFileId={prevFileId}
-      nextFileId={nextFileId}
-    />
-  );
+    const queueResult = await getDatasetReviewQueue(
+      projectId,
+      datasetId,
+      filter
+    );
+    const queueFiles = queueResult.files ?? [];
+    const currentIndex = queueFiles.findIndex((f) => f.id === fileId);
+    const prevFileId =
+      currentIndex > 0 ? queueFiles[currentIndex - 1]?.id ?? null : null;
+    const nextFileId =
+      currentIndex >= 0 && currentIndex < queueFiles.length - 1
+        ? queueFiles[currentIndex + 1]?.id ?? null
+        : null;
+
+    return (
+      <AnnotationEditorClient
+        projectId={projectId}
+        datasetId={datasetId}
+        datasetName={dataset.name}
+        fileId={fileId}
+        fileName={fileResult.file.file_name}
+        imageUrl={fileResult.imageUrl}
+        initialBoxes={fileResult.file.annotations}
+        classes={classes}
+        filter={filter}
+        prevFileId={prevFileId}
+        nextFileId={nextFileId}
+      />
+    );
+  });
 }
