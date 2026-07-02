@@ -310,7 +310,7 @@ export async function uploadModel(
   );
 
   const model = await api.post<{ id: string; modelName: string }>(
-    "/api/models/register",
+    "/api/register-model",
     {
       project_id: projectId,
       model_name: data.modelName,

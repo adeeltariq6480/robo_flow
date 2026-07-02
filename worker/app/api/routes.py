@@ -698,7 +698,7 @@ async def upload_model(
     return model
 
 
-@api_router.post("/models/register")
+@api_router.post("/register-model")
 async def register_model(body: ModelRegister, _: None = Depends(verify_api_key)):
     """Register model metadata after browser uploaded file to Supabase Storage."""
     if not body.hf_path.strip():
