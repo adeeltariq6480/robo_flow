@@ -162,6 +162,19 @@ async def run_auto_label(
         job_id, processed_items=total, project_id=project_id
     )
 
+    if labeled == 0 and failed > 0:
+        samples = [
+            str(r.get("error", "unknown"))
+            for r in all_results
+            if r.get("error")
+        ][:3]
+        hint = "; ".join(samples) if samples else "unknown error"
+        raise ValueError(
+            f"All {failed} image(s) failed to label. Common causes: missing Hugging Face "
+            f"path on images, HF_TOKEN/HF_MODEL_REPO not set on Railway, or YOLO model error. "
+            f"Examples: {hint}"
+        )
+
     return {
         "job_type": "auto_label",
         "dataset_id": dataset_id,

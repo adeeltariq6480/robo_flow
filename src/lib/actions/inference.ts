@@ -66,9 +66,9 @@ export async function startModelCompare(
   }
 }
 
-export async function fetchJobStatus(jobId: string) {
+export async function fetchJobStatus(jobId: string, projectId?: string) {
   try {
-    return await getJob(jobId);
+    return await getJob(jobId, projectId);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Worker unavailable" };
   }

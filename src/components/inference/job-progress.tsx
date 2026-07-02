@@ -8,10 +8,11 @@ import { Loader2, CheckCircle, XCircle } from "lucide-react";
 
 interface JobProgressProps {
   jobId: string | null;
+  projectId?: string;
   onComplete?: (job: JobResponse) => void;
 }
 
-export function JobProgress({ jobId, onComplete }: JobProgressProps) {
+export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const onCompleteRef = useRef(onComplete);
@@ -26,7 +27,7 @@ export function JobProgress({ jobId, onComplete }: JobProgressProps) {
     let cancelled = false;
 
     async function poll() {
-      const result = await fetchJobStatus(jobId!);
+      const result = await fetchJobStatus(jobId!, projectId);
       if (cancelled) return;
 
       if ("error" in result && result.error) {
@@ -50,7 +51,7 @@ export function JobProgress({ jobId, onComplete }: JobProgressProps) {
     return () => {
       cancelled = true;
     };
-  }, [jobId]);
+  }, [jobId, projectId]);
 
   if (!jobId) return null;
 
@@ -102,6 +103,37 @@ export function JobProgress({ jobId, onComplete }: JobProgressProps) {
       {isFailed && job.error_message && (
         <p className="mt-2 text-sm text-red-600">{job.error_message}</p>
       )}
+      {job.status === "completed" &&
+        job.result &&
+        typeof job.result === "object" &&
+        ((job.result as { failed?: number }).failed ?? 0) > 0 && (
+          <FileFailureSummary result={job.result as Record<string, unknown>} />
+        )}
+    </div>
+  );
+}
+
+function FileFailureSummary({ result }: { result: Record<string, unknown> }) {
+  const files = Array.isArray(result.files) ? result.files : [];
+  const errors = files
+    .filter((f): f is { file_id?: string; error: string } =>
+      typeof f === "object" && f !== null && "error" in f && typeof (f as { error: unknown }).error === "string"
+    )
+    .slice(0, 5);
+
+  if (errors.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+      <p className="font-medium">Some images failed:</p>
+      <ul className="mt-1 list-disc space-y-1 pl-4">
+        {errors.map((f, i) => (
+          <li key={f.file_id ?? i}>
+            {f.file_id ? `${f.file_id.slice(0, 8)}…: ` : ""}
+            {f.error}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

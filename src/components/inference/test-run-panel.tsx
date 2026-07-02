@@ -127,6 +127,7 @@ export function TestRunPanel({ projectId, models, files }: TestRunPanelProps) {
 
         <JobProgress
           jobId={jobId}
+          projectId={projectId}
           onComplete={(job) => {
             setCompletedJob(job);
             if (job.status === "completed") setJobId(null);

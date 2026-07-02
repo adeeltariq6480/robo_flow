@@ -1,8 +1,11 @@
-const WORKER_URL =
-  process.env.NEXT_PUBLIC_WORKER_API_URL ??
-  process.env.WORKER_URL ??
-  "http://localhost:8000";
-const WORKER_API_KEY = process.env.WORKER_API_KEY ?? "dev-worker-key";
+/**
+ * Server-side fetch for /jobs/* inference endpoints.
+ * Uses the same API key rules as the main API client (no hardcoded default).
+ */
+
+import { API_BASE_URL } from "@/lib/api/client";
+
+const WORKER_API_KEY = process.env.WORKER_API_KEY ?? "";
 
 type JobType = "test_run" | "auto_label" | "model_compare";
 
@@ -27,22 +30,49 @@ export interface JobResponse {
   error_message?: string;
 }
 
+function workerHeaders(extra?: HeadersInit): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(extra as Record<string, string>),
+  };
+  if (WORKER_API_KEY) {
+    headers["X-Worker-Key"] = WORKER_API_KEY;
+  }
+  return headers;
+}
+
+async function parseWorkerError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (typeof data?.detail === "string") return data.detail;
+    if (Array.isArray(data?.detail)) {
+      return data.detail.map((d: { msg?: string }) => d.msg).join(", ");
+    }
+    return JSON.stringify(data);
+  } catch {
+    return (await res.text()) || `Worker error ${res.status}`;
+  }
+}
+
 async function workerFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${WORKER_URL}${path}`, {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Worker-Key": WORKER_API_KEY,
-      ...options.headers,
-    },
+    cache: "no-store",
+    headers: workerHeaders(options.headers),
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || `Worker error ${res.status}`);
+    const message = await parseWorkerError(res);
+    if (res.status === 401) {
+      throw new Error(
+        "Backend rejected the API key (401). Set WORKER_API_KEY on Vercel to match Railway, " +
+          "or remove WORKER_API_KEY on Railway for no-auth mode."
+      );
+    }
+    throw new Error(message || `Worker error ${res.status}`);
   }
 
   return res.json() as Promise<T>;
@@ -87,12 +117,19 @@ export async function submitModelCompare(body: {
   );
 }
 
-export async function getJob(jobId: string): Promise<JobResponse> {
+/** Poll job status — prefers project-scoped route (more reliable than global registry). */
+export async function getJob(
+  jobId: string,
+  projectId?: string
+): Promise<JobResponse> {
+  if (projectId) {
+    return workerFetch<JobResponse>(`/api/jobs/${projectId}/${jobId}`);
+  }
   return workerFetch<JobResponse>(`/jobs/${jobId}`);
 }
 
 export async function getQueueStats() {
-  return workerFetch<Record<string, { pending: number; running: number; max_workers: number }>>(
-    "/jobs/queues/stats"
-  );
+  return workerFetch<
+    Record<string, { pending: number; running: number; max_workers: number }>
+  >("/jobs/queues/stats");
 }

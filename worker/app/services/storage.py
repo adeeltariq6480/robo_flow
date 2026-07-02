@@ -51,7 +51,11 @@ def download_image_row(row: dict, image_id: str) -> Path:
 
 
 def get_project_class_map(project_id: str) -> dict[str, str]:
-    return _class_map(project_id)
+    base = _class_map(project_id)
+    mapping: dict[str, str] = dict(base)
+    for name, class_id in base.items():
+        mapping[name.strip().lower()] = class_id
+    return mapping
 
 
 def build_class_name_map(project_id: str, user_map: dict[str, str]) -> dict[str, str]:

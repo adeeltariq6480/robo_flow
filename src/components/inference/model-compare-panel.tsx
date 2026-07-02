@@ -147,6 +147,7 @@ export function ModelComparePanel({ projectId, models, files }: ModelComparePane
 
         <JobProgress
           jobId={jobId}
+          projectId={projectId}
           onComplete={(job) => {
             setCompletedJob(job);
             if (job.status === "completed") setJobId(null);

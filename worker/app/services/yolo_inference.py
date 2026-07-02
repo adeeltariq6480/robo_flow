@@ -58,7 +58,10 @@ def run_yolo_inference(
                 cls_idx = int(box.cls[0])
                 class_name = names.get(cls_idx, str(cls_idx))
                 mapped_name = config.class_name_map.get(class_name, class_name)
-                project_class_id = (class_id_map or {}).get(mapped_name)
+                lookup = (class_id_map or {}).get(mapped_name)
+                if lookup is None:
+                    lookup = (class_id_map or {}).get(mapped_name.strip().lower())
+                project_class_id = lookup
 
                 xywhn = box.xywhn[0].tolist()
                 detections.append(

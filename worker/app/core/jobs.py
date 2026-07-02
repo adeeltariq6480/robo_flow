@@ -18,7 +18,19 @@ def register_job_project(job_id: str, project_id: str) -> None:
 
 
 def get_job_project(job_id: str) -> str | None:
-    return _job_project_map.get(job_id)
+    pid = _job_project_map.get(job_id)
+    if pid:
+        return pid
+
+    from app.services.firebase_client import get_db
+
+    doc = get_db().collection("jobRegistry").document(job_id).get()
+    if doc.exists:
+        pid = (doc.to_dict() or {}).get("projectId")
+        if pid:
+            register_job_project(job_id, pid)
+            return pid
+    return None
 
 
 async def update_job(
@@ -83,7 +95,7 @@ async def create_job_record(
 async def process_job(job_id: str) -> None:
     project_id = get_job_project(job_id)
     if not project_id:
-        logger.error("Job %s missing project mapping", job_id)
+        logger.error("Job %s missing project mapping (jobRegistry lookup failed)", job_id)
         return
 
     job = get_labelling_job(project_id, job_id)

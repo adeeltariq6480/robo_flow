@@ -209,6 +209,7 @@ export function AutoLabelPanel({
 
         <JobProgress
           jobId={jobId}
+          projectId={projectId}
           onComplete={(job) => {
             setCompletedJob(job);
             if (job.status === "completed" || job.status === "failed") {
