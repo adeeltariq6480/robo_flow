@@ -113,6 +113,32 @@ def upload_dataset_image(
     )
 
 
+def upload_dataset_images_batch(
+    project_id: str,
+    dataset_id: str,
+    items: list[tuple[str, bytes]],
+) -> dict:
+    """Upload many images in one Hugging Face commit (much faster than one-by-one)."""
+    if not items:
+        raise ValueError("No images to upload")
+
+    repo_id = settings.dataset_repo_id
+    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+
+    files = [
+        (dataset_image_path(project_id, dataset_id, file_name), data)
+        for file_name, data in items
+    ]
+
+    _api().upload_files(
+        repo_id=repo_id,
+        repo_type=REPO_TYPE_DATASET,
+        files=files,
+        commit_message=f"Upload {len(files)} images to dataset {dataset_id}",
+    )
+    return {"hfRepo": repo_id, "count": len(files)}
+
+
 def upload_dataset_zip(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:

@@ -8,8 +8,10 @@
 
 import { API_BASE_URL } from "@/lib/api/client";
 
-/** Images per request — keeps payloads small and avoids proxy timeouts. */
-const UPLOAD_BATCH_SIZE = 15;
+/** Images per HTTP request. */
+const UPLOAD_BATCH_SIZE = 25;
+/** Parallel upload requests from the browser. */
+const UPLOAD_CONCURRENCY = 4;
 const UPLOAD_MAX_RETRIES = 2;
 const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -64,7 +66,7 @@ function uploadForm<T>(
     xhr.onerror = () =>
       reject(
         new Error(
-          "Upload failed — connection error. If you see CORS in the console, the request may be too large or timed out. Images are uploaded in small batches automatically; retry or check Railway CORS_ORIGINS includes your site URL."
+          "Upload failed — connection error. If you see CORS in the console, the request may be too large or timed out."
         )
       );
 
@@ -117,6 +119,37 @@ function uploadImagesBatch(
   return uploadForm("/api/upload-images", form, onProgress);
 }
 
+async function uploadBatchWithRetry(
+  projectId: string,
+  datasetId: string,
+  batch: File[]
+): Promise<UploadImagesResult> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+    try {
+      return await uploadImagesBatch(projectId, datasetId, batch);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error("Upload failed");
+      if (attempt < UPLOAD_MAX_RETRIES) {
+        await sleep(800 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Upload failed");
+}
+
+function mergeResults(
+  target: UploadImagesResult,
+  source: UploadImagesResult
+) {
+  target.uploaded += source.uploaded;
+  target.images.push(...(source.images ?? []));
+  target.skipped!.push(...(source.skipped ?? []));
+  target.adjusted!.push(...(source.adjusted ?? []));
+}
+
 export async function uploadImages(
   projectId: string,
   datasetId: string,
@@ -135,40 +168,30 @@ export async function uploadImages(
   };
 
   const batches = chunk(files, UPLOAD_BATCH_SIZE);
+  let nextBatch = 0;
+  let completedFiles = 0;
+  const totalFiles = files.length;
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    let lastError: Error | null = null;
+  const reportProgress = () => {
+    if (!onProgress) return;
+    onProgress(Math.min(99, Math.round((completedFiles / totalFiles) * 100)));
+  };
 
-    for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
-      try {
-        const result = await uploadImagesBatch(
-          projectId,
-          datasetId,
-          batch,
-          (batchPct) => {
-            if (!onProgress) return;
-            const overall = ((i + batchPct / 100) / batches.length) * 100;
-            onProgress(Math.min(99, Math.round(overall)));
-          }
-        );
+  async function worker() {
+    while (true) {
+      const index = nextBatch++;
+      if (index >= batches.length) break;
 
-        combined.uploaded += result.uploaded;
-        combined.images.push(...(result.images ?? []));
-        combined.skipped!.push(...(result.skipped ?? []));
-        combined.adjusted!.push(...(result.adjusted ?? []));
-        lastError = null;
-        break;
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error("Upload failed");
-        if (attempt < UPLOAD_MAX_RETRIES) {
-          await sleep(1200 * (attempt + 1));
-        }
-      }
+      const batch = batches[index];
+      const result = await uploadBatchWithRetry(projectId, datasetId, batch);
+      mergeResults(combined, result);
+      completedFiles += batch.length;
+      reportProgress();
     }
-
-    if (lastError) throw lastError;
   }
+
+  const workers = Math.min(UPLOAD_CONCURRENCY, batches.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
 
   return combined;
 }

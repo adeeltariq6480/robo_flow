@@ -93,6 +93,14 @@ class Settings(BaseSettings):
         default=800,
         validation_alias=AliasChoices("UPLOAD_BLUR_MAX_SIDE"),
     )
+    upload_preprocess_workers: int = Field(
+        default=6,
+        validation_alias=AliasChoices("UPLOAD_PREPROCESS_WORKERS"),
+    )
+    upload_firestore_workers: int = Field(
+        default=12,
+        validation_alias=AliasChoices("UPLOAD_FIRESTORE_WORKERS"),
+    )
 
     @property
     def dataset_repo_id(self) -> str:

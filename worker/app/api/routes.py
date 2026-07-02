@@ -122,6 +122,31 @@ def _preprocess_upload_item(
     return result, None, adjust_info
 
 
+async def _create_image_record(
+    project_id: str,
+    dataset_id: str,
+    filename: str,
+    result: image_preprocess.PreprocessResult,
+    content_type: str | None,
+    hf_repo: str,
+) -> dict:
+    hf_path = hf_storage.dataset_image_path(project_id, dataset_id, filename)
+    return await asyncio.to_thread(
+        repo.create_image,
+        project_id,
+        dataset_id,
+        {
+            "fileName": filename,
+            "hfRepo": hf_repo,
+            "hfPath": hf_path,
+            "width": result.width,
+            "height": result.height,
+            "mimeType": result.mime_type or content_type,
+            "fileSize": len(result.data),
+        },
+    )
+
+
 async def _store_dataset_image(
     project_id: str,
     dataset_id: str,
@@ -315,33 +340,87 @@ async def upload_images(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
-    created = []
-    skipped = []
-    adjusted = []
+    created: list[dict] = []
+    skipped: list[dict] = []
+    adjusted: list[dict] = []
+
+    raw_files: list[tuple[UploadFile, bytes]] = []
     for f in files:
         data = await f.read()
-        if not data:
-            continue
-        filename = _safe_filename(f.filename)
-        try:
-            image, skip_info, adjust_info = await _upload_one_image(
-                project_id, dataset_id, filename, data, f.content_type
-            )
-        except HTTPException:
-            raise
-        except RuntimeError as exc:
-            logger.exception("HF upload failed for %s", filename)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.exception("upload-images failed for %s", filename)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if data:
+            raw_files.append((f, data))
 
+    prep_sem = asyncio.Semaphore(max(1, settings.upload_preprocess_workers))
+
+    async def prepare_one(upload: UploadFile, data: bytes):
+        filename = _safe_filename(upload.filename)
+        async with prep_sem:
+            result, skip_info, adjust_info = await asyncio.to_thread(
+                _preprocess_upload_item, data, filename
+            )
+        return filename, upload.content_type, result, skip_info, adjust_info
+
+    prep_results = await asyncio.gather(
+        *[prepare_one(f, data) for f, data in raw_files],
+        return_exceptions=True,
+    )
+
+    ready: list[tuple[str, image_preprocess.PreprocessResult, str | None]] = []
+    for outcome in prep_results:
+        if isinstance(outcome, Exception):
+            logger.exception("preprocess failed")
+            raise HTTPException(status_code=500, detail=str(outcome)) from outcome
+
+        filename, content_type, result, skip_info, adjust_info = outcome
         if skip_info:
             skipped.append(skip_info)
             continue
         if adjust_info:
             adjusted.append(adjust_info)
-        created.append(image)
+        if result is not None:
+            ready.append((filename, result, content_type))
+
+    if ready:
+        hf_items = [(filename, result.data) for filename, result, _ in ready]
+        try:
+            hf_info = await asyncio.to_thread(
+                hf_storage.upload_dataset_images_batch,
+                project_id,
+                dataset_id,
+                hf_items,
+            )
+        except RuntimeError as exc:
+            logger.exception("HF batch upload failed")
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("HF batch upload failed")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        hf_repo = hf_info["hfRepo"]
+        fs_sem = asyncio.Semaphore(max(1, settings.upload_firestore_workers))
+
+        async def record_one(
+            filename: str,
+            result: image_preprocess.PreprocessResult,
+            content_type: str | None,
+        ):
+            async with fs_sem:
+                return await _create_image_record(
+                    project_id, dataset_id, filename, result, content_type, hf_repo
+                )
+
+        records = await asyncio.gather(
+            *[
+                record_one(filename, result, content_type)
+                for filename, result, content_type in ready
+            ],
+            return_exceptions=True,
+        )
+        for record in records:
+            if isinstance(record, Exception):
+                logger.exception("Firestore image record failed")
+                raise HTTPException(status_code=500, detail=str(record)) from record
+            created.append(record)
 
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     return {
