@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { getProjectById as fetchProjectById } from "@/lib/services/projectService";
-import { BackendUnavailableError } from "@/lib/api/client";
+import { isBackendUnavailableError, isNextRedirect } from "@/lib/api/errors";
 import { redirect } from "next/navigation";
 
 /**
@@ -14,7 +14,8 @@ export const getProject = cache(async (projectId: string) => {
     if (!project) redirect("/");
     return project;
   } catch (err) {
-    if (err instanceof BackendUnavailableError) {
+    if (isNextRedirect(err)) throw err;
+    if (isBackendUnavailableError(err)) {
       redirect("/");
     }
     throw err;

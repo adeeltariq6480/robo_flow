@@ -4,9 +4,13 @@ import { toProject } from "@/lib/firebase/adapters";
 import type { FirestoreProject } from "@/lib/types/firestore";
 import type { Project } from "@/lib/types/database";
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export const listProjects = cache(async (): Promise<Project[]> => {
   const rows = await api.get<FirestoreProject[]>("/api/projects");
-  return rows.map((r) => toProject(r));
+  return asArray<FirestoreProject>(rows).map((r) => toProject(r));
 });
 
 export const getProjectById = cache(async (projectId: string): Promise<Project | null> => {

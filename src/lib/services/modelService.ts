@@ -4,9 +4,13 @@ import { toModel } from "@/lib/firebase/adapters";
 import type { FirestoreModel } from "@/lib/types/firestore";
 import type { Model } from "@/lib/types/database";
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export const listModels = cache(async (projectId: string): Promise<Model[]> => {
   const rows = await api.get<FirestoreModel[]>(`/api/models/${projectId}`);
-  return rows.map((r) => toModel(projectId, r));
+  return asArray<FirestoreModel>(rows).map((r) => toModel(projectId, r));
 });
 
 export const getModelCount = cache(async (projectId: string): Promise<number> => {
