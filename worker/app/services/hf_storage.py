@@ -116,13 +116,20 @@ def upload_bytes(
     )
     _ensure_repo(repo_id, repo_type)
     with _hf_commit_lock:
-        _api().upload_file(
-            path_or_fileobj=data,
-            path_in_repo=path_in_repo,
-            repo_id=repo_id,
-            repo_type=repo_type,
-            commit_message=commit_message or f"Upload {path_in_repo}",
-        )
+        try:
+            _api().upload_file(
+                path_or_fileobj=data,
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                repo_type=repo_type,
+                commit_message=commit_message or f"Upload {path_in_repo}",
+            )
+        except HfHubHTTPError as exc:
+            detail = str(exc).lower()
+            if "no files have been modified" in detail or "empty commit" in detail:
+                logger.info("HF file unchanged at %s — reusing existing blob", path_in_repo)
+            else:
+                raise
     return {"hfRepo": repo_id, "hfPath": path_in_repo, "repoType": repo_type}
 
 

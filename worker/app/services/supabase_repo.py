@@ -531,25 +531,28 @@ def dataset_review_files(project_id: str, dataset_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def create_model(project_id: str, data: dict) -> dict:
+    """Insert or replace model row when the same model_name already exists in the project."""
+    payload = {
+        "project_id": project_id,
+        "model_name": data["modelName"],
+        "model_version": data.get("modelVersion", "1.0.0"),
+        "model_type": data.get("modelType", "pytorch"),
+        "hf_repo": data.get("hfRepo", "models"),
+        "hf_path": data["hfPath"],
+        "class_mapping": data.get("classMapping") or {},
+        "file_size": data.get("fileSize"),
+        "description": data.get("description"),
+    }
     res = (
         _sb()
         .table("models")
-        .insert(
-            {
-                "project_id": project_id,
-                "model_name": data["modelName"],
-                "model_version": data.get("modelVersion", "1.0.0"),
-                "model_type": data.get("modelType", "pytorch"),
-                "hf_repo": data.get("hfRepo", "models"),
-                "hf_path": data["hfPath"],
-                "class_mapping": data.get("classMapping") or {},
-                "file_size": data.get("fileSize"),
-                "description": data.get("description"),
-            }
-        )
+        .upsert(payload, on_conflict="project_id,model_name")
         .execute()
     )
-    return _model_row(res.data[0])
+    rows = res.data or []
+    if not rows:
+        raise RuntimeError("Model upsert returned no rows")
+    return _model_row(rows[0])
 
 
 def list_models(project_id: str) -> list[dict]:
