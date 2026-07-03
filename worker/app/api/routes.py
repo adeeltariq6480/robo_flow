@@ -45,6 +45,7 @@ from app.services import supabase_repo as repo
 from app.services import model_chunk_upload
 from app.services.storage import resolve_model_local_path
 from app.services.yolo_inference import describe_model_status
+from app.services.model_validator import detect_model_type, validate_model_file
 
 logger = logging.getLogger(__name__)
 
@@ -901,6 +902,53 @@ async def memory_status(
         "model_loaded": model_loaded,
         "model_path": model_path,
     }
+
+
+@api_router.get("/models/{project_id}/{model_id}/validate")
+async def validate_model_endpoint(
+    project_id: str,
+    model_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """Validate a model by ID and return detection info."""
+    try:
+        model_path = resolve_model_local_path(model_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    detection_info = detect_model_type(str(model_path))
+    return {
+        "model_id": model_id,
+        "model_path": str(model_path),
+        "detection": detection_info,
+    }
+
+
+@api_router.post("/models/validate-file")
+async def validate_model_file_endpoint(
+    file: UploadFile = File(...),
+    _: None = Depends(verify_api_key),
+):
+    """Validate an uploaded model file without saving it."""
+    import tempfile
+
+    # Save to temp file for validation
+    with tempfile.NamedTemporaryFile(suffix=Path(file.filename or "model.pt").suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        tmp.write(await file.read())
+
+    try:
+        detection_info = validate_model_file(tmp_path)
+        return {
+            "filename": file.filename,
+            "detection": detection_info,
+        }
+    finally:
+        # Clean up temp file
+        try:
+            Path(tmp_path).unlink()
+        except Exception:
+            pass
 
 
 # ===========================================================================
