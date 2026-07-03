@@ -274,3 +274,19 @@ def download_to_local(
 
 def download_bytes(repo_id: str, path_in_repo: str, *, repo_type: str) -> bytes:
     return download_to_local(repo_id, path_in_repo, repo_type=repo_type).read_bytes()
+
+
+def delete_from_repo(repo_id: str, path_in_repo: str, *, repo_type: str) -> None:
+    logger.debug("HF delete %s (%s) %s", repo_id, repo_type, path_in_repo)
+    try:
+        _api().delete_file(
+            repo_id=repo_id,
+            path_in_repo=path_in_repo,
+            repo_type=repo_type,
+            commit_message=f"Delete {path_in_repo}",
+        )
+    except HfHubHTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.info("HF file already missing at %s — skipping delete", path_in_repo)
+            return
+        raise

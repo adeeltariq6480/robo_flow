@@ -129,10 +129,23 @@ async def run_auto_label(
     # Lazy image paths — download each image once when first needed (no bulk pre-download).
     image_paths: dict[str, object] = {}
     prep_failures: dict[str, str] = {}
+    model_failures: dict[str, str] = {}
     file_by_id: dict[str, dict] = {str(f["id"]): f for f in file_list}
 
     per_image_dets: dict[str, list[DetectionBox]] = defaultdict(list)
     per_image_models: dict[str, dict[str, int]] = defaultdict(dict)
+
+    loaded_models: list[tuple[str, object]] = []
+
+    def _prep_progress(step_index: int) -> int:
+        if num_models <= 0:
+            return 35
+        return int(10 + (step_index / num_models) * 25)
+
+    def _inference_progress(step_index: int, step_total: int, base: int = 35) -> int:
+        if step_total <= 0:
+            return base
+        return int(base + (step_index / step_total) * 55)
 
     async def ensure_image(file_id: str) -> bool:
         if file_id in image_paths:
@@ -165,7 +178,7 @@ async def run_auto_label(
         logger.info("Job %s: model %d/%d id=%s — downloading from HF", job_id, mi + 1, num_models, model_id)
         await update_job(
             job_id,
-            progress=int(10 + (done_units / work_units) * 75),
+            progress=_prep_progress(mi),
             progress_message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
             processed_items=done_units,
             project_id=project_id,
@@ -175,12 +188,13 @@ async def run_auto_label(
             model_path = await asyncio.to_thread(download_model, model_id, project_id)
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
-            raise ValueError(f"Could not download model {model_id}: {exc}") from exc
+            model_failures[model_id] = f"download failed: {exc}"
+            continue
 
         logger.info("Job %s: model %s file ready at %s", job_id, model_id, model_path)
         await update_job(
             job_id,
-            progress=int(10 + (done_units / work_units) * 75),
+            progress=_prep_progress(mi) + 5,
             progress_message=(
                 f"Model {mi + 1}/{num_models}: loading YOLO into memory "
                 f"(first time can take 1–3 min on CPU)…"
@@ -194,18 +208,29 @@ async def run_auto_label(
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
-            raise ValueError(f"Could not load YOLO model {model_id}: {exc}") from exc
+            model_failures[model_id] = f"load failed: {exc}"
+            continue
+
+        loaded_models.append((model_id, model_path))
 
         logger.info("Job %s: model %s loaded, starting inference", job_id, model_id)
         await update_job(
             job_id,
-            progress=int(10 + (done_units / work_units) * 75),
+            progress=_prep_progress(mi + 1),
             progress_message=f"Model {mi + 1}/{num_models}: labeling image 1/{total}…",
             processed_items=done_units,
             project_id=project_id,
         )
 
-        try:
+    if not loaded_models:
+        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
+        hint = "; ".join(samples) if samples else "unknown model error"
+        raise ValueError(f"No models could be loaded. Examples: {hint}")
+
+    work_units = max(len(ready_ids) * len(loaded_models), 1)
+
+    try:
+        for mi, (model_id, model_path) in enumerate(loaded_models):
             for idx, file_row in enumerate(file_list):
                 file_id = str(file_row["id"])
                 if file_id in prep_failures:
@@ -215,12 +240,12 @@ async def run_auto_label(
                     continue
 
                 if idx % progress_step == 0 or idx == total - 1:
-                    pct = int(10 + (done_units / work_units) * 75)
+                    pct = _inference_progress(done_units, work_units)
                     await update_job(
                         job_id,
                         progress=pct,
                         progress_message=(
-                            f"Model {mi + 1}/{num_models} · "
+                            f"Model {mi + 1}/{len(loaded_models)} · "
                             f"image {idx + 1}/{total}"
                         ),
                         processed_items=done_units,
@@ -250,9 +275,10 @@ async def run_auto_label(
                         prep_failures[file_id] = f"Inference error: {exc}"
 
                 done_units += 1
-        finally:
+    finally:
+        for _, model_path in loaded_models:
             await asyncio.to_thread(unload_model, model_path)
-            gc.collect()
+        gc.collect()
 
     # --- Merge detections and save to Firestore ---
     labeled = 0
@@ -317,6 +343,14 @@ async def run_auto_label(
     await update_job(job_id, processed_items=total, project_id=project_id)
     logger.info("Job %s done: labeled=%d failed=%d", job_id, labeled, failed)
 
+    if model_failures:
+        logger.warning(
+            "Job %s completed with %d model failure(s): %s",
+            job_id,
+            len(model_failures),
+            "; ".join(f"{mid}: {err}" for mid, err in model_failures.items()),
+        )
+
     if labeled == 0 and failed > 0:
         samples = [str(r.get("error", "unknown")) for r in all_results if r.get("error")][:3]
         hint = "; ".join(samples) if samples else "unknown error"
@@ -327,7 +361,7 @@ async def run_auto_label(
 
     return _compact_job_result(
         dataset_id=dataset_id,
-        model_ids=model_ids,
+        model_ids=[model_id for model_id, _ in loaded_models],
         total=total,
         labeled=labeled,
         failed=failed,

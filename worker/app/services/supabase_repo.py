@@ -3,6 +3,8 @@
 import logging
 from datetime import datetime, timezone
 
+from app.services import hf_storage as file_storage
+
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -482,6 +484,17 @@ def delete_images(project_id: str, dataset_id: str, image_ids: list[str]) -> Non
         if not img or img.get("datasetId") != dataset_id:
             continue
         _delete_image_annotations(project_id, image_id)
+        repo_id = img.get("hfRepo")
+        path_in_repo = img.get("hfPath")
+        if repo_id and path_in_repo:
+            try:
+                file_storage.delete_from_repo(
+                    repo_id,
+                    path_in_repo,
+                    repo_type=file_storage.REPO_TYPE_DATASET,
+                )
+            except Exception as exc:
+                logger.warning("HF image delete failed %s: %s", image_id, exc)
         _sb().table("images").delete().eq("id", image_id).execute()
     recount_dataset_images(project_id, dataset_id)
 
@@ -490,6 +503,17 @@ def delete_dataset(project_id: str, dataset_id: str) -> None:
     imgs = list_dataset_images(project_id, dataset_id)
     for img in imgs:
         _delete_image_annotations(project_id, img["id"])
+        repo_id = img.get("hfRepo")
+        path_in_repo = img.get("hfPath")
+        if repo_id and path_in_repo:
+            try:
+                file_storage.delete_from_repo(
+                    repo_id,
+                    path_in_repo,
+                    repo_type=file_storage.REPO_TYPE_DATASET,
+                )
+            except Exception as exc:
+                logger.warning("HF dataset image delete failed %s: %s", img["id"], exc)
     _sb().table("images").delete().eq("dataset_id", dataset_id).execute()
     _sb().table("datasets").delete().eq("id", dataset_id).eq("project_id", project_id).execute()
 
