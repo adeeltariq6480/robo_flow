@@ -149,10 +149,11 @@ export interface UploadImagesResult {
   images: UploadedImage[];
   skipped?: UploadSkipInfo[];
   adjusted?: UploadAdjustInfo[];
+  processing?: boolean;
 }
 
 function emptyResult(): UploadImagesResult {
-  return { uploaded: 0, images: [], skipped: [], adjusted: [] };
+  return { uploaded: 0, images: [], skipped: [], adjusted: [], processing: false };
 }
 
 function mergeResults(

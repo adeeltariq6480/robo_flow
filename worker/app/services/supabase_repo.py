@@ -436,6 +436,10 @@ def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
     return _image_row(res.data[0])
 
 
+def update_image_status(project_id: str, image_id: str, status: str) -> None:
+    _sb().table("images").update({"status": status}).eq("id", image_id).eq("project_id", project_id).execute()
+
+
 def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
     res = (
         _sb()

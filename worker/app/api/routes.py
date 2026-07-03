@@ -51,6 +51,8 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 _upload_sessions: dict[str, dict] = {}
 _upload_sessions_lock = threading.Lock()
+_UPLOAD_BATCH_SIZE = 20
+_UPLOAD_FLUSH_DELAY_SECONDS = 4.0
 
 
 async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
@@ -223,6 +225,125 @@ async def _upload_one_image(
         project_id, dataset_id, filename, result, content_type
     )
     return image, None, adjust_info
+
+
+async def _flush_upload_session(session_id: str, *, initial_delay: float) -> None:
+    delay = max(0.0, initial_delay)
+    while True:
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        with _upload_sessions_lock:
+            session = _upload_sessions.get(session_id)
+            if not session:
+                return
+            if session.get("uploading"):
+                return
+
+            items = session["items"][:_UPLOAD_BATCH_SIZE]
+            if not items:
+                session["flush_task"] = None
+                return
+
+            del session["items"][: len(items)]
+            session["uploading"] = True
+            batch_root = Path(session["dir"]) / f"batch-{uuid4().hex}"
+            batch_root.mkdir(parents=True, exist_ok=True)
+            for item in items:
+                src = Path(item["local_path"])
+                (batch_root / item["stored_name"]).write_bytes(src.read_bytes())
+
+        logger.info(
+            "Batch upload started session=%s project=%s dataset=%s count=%d",
+            session_id,
+            session["project_id"],
+            session["dataset_id"],
+            len(items),
+        )
+
+        try:
+            await asyncio.to_thread(
+                file_storage.upload_dataset_images_from_folder,
+                session["project_id"],
+                session["dataset_id"],
+                str(batch_root),
+                len(items),
+            )
+            logger.info(
+                "Hugging Face upload success session=%s count=%d",
+                session_id,
+                len(items),
+            )
+            for item in items:
+                await asyncio.to_thread(
+                    repo.update_image_status,
+                    session["project_id"],
+                    item["image_id"],
+                    "uploaded",
+                )
+        except Exception as exc:
+            logger.exception(
+                "Upload failed after retries session=%s count=%d: %s",
+                session_id,
+                len(items),
+                exc,
+            )
+            for item in items:
+                await asyncio.to_thread(
+                    repo.update_image_status,
+                    session["project_id"],
+                    item["image_id"],
+                    "failed",
+                )
+        finally:
+            shutil.rmtree(batch_root, ignore_errors=True)
+            with _upload_sessions_lock:
+                session = _upload_sessions.get(session_id)
+                if not session:
+                    return
+                session["uploading"] = False
+                remaining = len(session["items"])
+                finalize_requested = bool(session.get("finalize_requested"))
+                if remaining == 0:
+                    session["flush_task"] = None
+                    if finalize_requested:
+                        session["finalized"] = True
+                    return
+
+        delay = 0.0 if remaining >= _UPLOAD_BATCH_SIZE or finalize_requested else _UPLOAD_FLUSH_DELAY_SECONDS
+
+
+def _ensure_upload_session(project_id: str, dataset_id: str, session_id: str) -> dict:
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if session is None:
+            session_dir = tempfile.mkdtemp(prefix=f"upload-session-{session_id}-")
+            session = {
+                "project_id": project_id,
+                "dataset_id": dataset_id,
+                "dir": session_dir,
+                "items": [],
+                "used_names": set(),
+                "uploading": False,
+                "finalize_requested": False,
+                "flush_task": None,
+                "finalized": False,
+            }
+            _upload_sessions[session_id] = session
+        elif session["project_id"] != project_id or session["dataset_id"] != dataset_id:
+            raise HTTPException(status_code=400, detail="Invalid upload session context")
+        return session
+
+
+def _schedule_upload_flush(session_id: str, *, immediate: bool) -> None:
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if not session or session.get("flush_task") is not None:
+            return
+        delay = 0.0 if immediate else _UPLOAD_FLUSH_DELAY_SECONDS
+        session["flush_task"] = asyncio.create_task(
+            _flush_upload_session(session_id, initial_delay=delay)
+        )
 
 
 # ===========================================================================
@@ -413,186 +534,103 @@ async def upload_images(
         if result is not None:
             ready.append((filename, result, content_type))
 
-    # Deferred single-commit mode across multiple HTTP batches.
-    if upload_session_id:
-        session_id = upload_session_id.strip()
-        if not session_id:
-            session_id = uuid4().hex
+    if not ready:
+        return {
+            "uploaded": 0,
+            "images": [],
+            "queued": 0,
+            "skipped": skipped,
+            "adjusted": adjusted,
+        }
 
-        wait_for_session = False
+    session_id = (upload_session_id or uuid4().hex).strip() or uuid4().hex
+    session = _ensure_upload_session(project_id, dataset_id, session_id)
+
+    fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
+
+    async def stage_one(
+        filename: str,
+        result: image_preprocess.PreprocessResult,
+        content_type: str | None,
+    ):
         with _upload_sessions_lock:
-            session = _upload_sessions.get(session_id)
-            if session is None:
-                session_dir = tempfile.mkdtemp(prefix=f"upload-session-{session_id}-")
-                session = {
-                    "project_id": project_id,
-                    "dataset_id": dataset_id,
-                    "dir": session_dir,
-                    "items": [],
-                    "used_names": set(),
-                    "finalizing": False,
-                }
-                _upload_sessions[session_id] = session
-            elif (
-                session["project_id"] != project_id
-                or session["dataset_id"] != dataset_id
-            ):
-                raise HTTPException(status_code=400, detail="Invalid upload session context")
-            elif session.get("finalized_result") is not None:
-                return session["finalized_result"]
-            elif session.get("finalizing"):
-                wait_for_session = True
-
-            if not wait_for_session:
-                for filename, result, content_type in ready:
-                    stored_name = _safe_local_name(filename, session["used_names"])
-                    local_path = Path(session["dir"]) / stored_name
-                    local_path.write_bytes(result.data)
-                    session["items"].append(
-                        {
-                            "stored_name": stored_name,
-                            "width": result.width,
-                            "height": result.height,
-                            "mime_type": result.mime_type or content_type,
-                            "file_size": len(result.data),
-                        }
-                    )
-                if finalize_session:
-                    session["finalizing"] = True
-
-        if wait_for_session:
-            for _ in range(600):
-                with _upload_sessions_lock:
-                    if session.get("finalized_result") is not None:
-                        return session["finalized_result"]
-                    if session.get("finalize_error"):
-                        raise HTTPException(status_code=500, detail=session["finalize_error"])
-                await asyncio.sleep(0.5)
-            raise HTTPException(status_code=409, detail="Upload finalization is still running")
-
-        if not finalize_session:
-            return {
-                "uploadSessionId": session_id,
-                "uploaded": 0,
-                "images": [],
-                "queued": len(session["items"]),
-                "skipped": skipped,
-                "adjusted": adjusted,
-            }
-
-        try:
-            hf_info = await asyncio.to_thread(
-                file_storage.upload_dataset_images_from_folder,
+            session_state = _upload_sessions.get(session_id)
+            if session_state is None:
+                raise HTTPException(status_code=500, detail="Upload session expired")
+            stored_name = _safe_local_name(filename, session_state["used_names"])
+        local_path = Path(session["dir"]) / stored_name
+        local_path.write_bytes(result.data)
+        logger.info(
+            "Image received session=%s file=%s stored=%s",
+            session_id,
+            filename,
+            stored_name,
+        )
+        async with fs_sem:
+            record = await asyncio.to_thread(
+                repo.create_image,
                 project_id,
                 dataset_id,
-                session["dir"],
-                len(session["items"]),
+                {
+                    "fileName": stored_name,
+                    "hfRepo": settings.dataset_repo_id,
+                    "hfPath": file_storage.dataset_image_path(
+                        project_id, dataset_id, stored_name
+                    ),
+                    "width": result.width,
+                    "height": result.height,
+                    "mimeType": result.mime_type or content_type,
+                    "fileSize": len(result.data),
+                    "status": "queued",
+                },
             )
-        except RuntimeError as exc:
-            logger.exception("HF deferred session upload failed")
-            with _upload_sessions_lock:
-                session["finalizing"] = False
-                session["finalize_error"] = str(exc)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.exception("HF deferred session upload failed")
-            with _upload_sessions_lock:
-                session["finalizing"] = False
-                session["finalize_error"] = str(exc)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        hf_repo = hf_info["hfRepo"]
-        fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
-
-        async def record_staged(item: dict):
-            async with fs_sem:
-                return await asyncio.to_thread(
-                    repo.create_image,
-                    project_id,
-                    dataset_id,
+        with _upload_sessions_lock:
+            session_state = _upload_sessions.get(session_id)
+            if session_state is not None:
+                session_state["items"].append(
                     {
-                        "fileName": item["stored_name"],
-                        "hfRepo": hf_repo,
-                        "hfPath": file_storage.dataset_image_path(
-                            project_id, dataset_id, item["stored_name"]
-                        ),
-                        "width": item["width"],
-                        "height": item["height"],
-                        "mimeType": item["mime_type"],
-                        "fileSize": item["file_size"],
-                    },
+                        "image_id": record["id"],
+                        "stored_name": stored_name,
+                        "local_path": str(local_path),
+                    }
                 )
+        logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
+        return record
 
-        records = await asyncio.gather(
-            *[record_staged(item) for item in session["items"]],
-            return_exceptions=True,
-        )
-        for record in records:
-            if isinstance(record, Exception):
-                logger.exception("DB image record failed (deferred)")
-                with _upload_sessions_lock:
-                    session["finalizing"] = False
-                    session["finalize_error"] = str(record)
-                raise HTTPException(status_code=500, detail=str(record)) from record
-            created.append(record)
+    records = await asyncio.gather(
+        *[stage_one(filename, result, content_type) for filename, result, content_type in ready],
+        return_exceptions=True,
+    )
+    for record in records:
+        if isinstance(record, Exception):
+            logger.exception("DB image record failed")
+            raise HTTPException(status_code=500, detail=str(record)) from record
+        created.append(record)
 
-        shutil.rmtree(session["dir"], ignore_errors=True)
-    elif ready:
-        hf_items = [(filename, result.data) for filename, result, _ in ready]
-        try:
-            hf_info = await asyncio.to_thread(
-                file_storage.upload_dataset_images_batch,
-                project_id,
-                dataset_id,
-                hf_items,
-            )
-        except RuntimeError as exc:
-            logger.exception("HF batch upload failed")
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.exception("HF batch upload failed")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if session is not None:
+            if finalize_session:
+                session["finalize_requested"] = True
+            immediate = finalize_session or len(session["items"]) >= _UPLOAD_BATCH_SIZE
+            should_schedule = session.get("flush_task") is None and session["items"]
+        else:
+            immediate = False
+            should_schedule = False
 
-        hf_repo = hf_info["hfRepo"]
-        stored_names: list[str] = hf_info.get("localNames") or [
-            name for name, _, _ in ready
-        ]
-        fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
+    if should_schedule:
+        _schedule_upload_flush(session_id, immediate=immediate)
 
-        async def record_one(
-            stored_name: str,
-            result: image_preprocess.PreprocessResult,
-            content_type: str | None,
-        ):
-            async with fs_sem:
-                return await _create_image_record(
-                    project_id, dataset_id, stored_name, result, content_type, hf_repo
-                )
-
-        records = await asyncio.gather(
-            *[
-                record_one(stored_names[i], result, content_type)
-                for i, (_, result, content_type) in enumerate(ready)
-            ],
-            return_exceptions=True,
-        )
-        for record in records:
-            if isinstance(record, Exception):
-                logger.exception("DB image record failed")
-                raise HTTPException(status_code=500, detail=str(record)) from record
-            created.append(record)
-
-    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     result_payload = {
+        "uploadSessionId": session_id,
         "uploaded": len(created),
         "images": created,
+        "queued": len(created),
         "skipped": skipped,
         "adjusted": adjusted,
+        "processing": True,
     }
-    if upload_session_id and finalize_session:
-        with _upload_sessions_lock:
-            session["finalizing"] = False
-            session["finalized_result"] = result_payload
+    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     return result_payload
 
 

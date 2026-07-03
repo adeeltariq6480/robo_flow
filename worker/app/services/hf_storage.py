@@ -15,6 +15,7 @@ Model repo (HF model):
 import logging
 import tempfile
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -45,12 +46,19 @@ def _ensure_repo(repo_id: str, repo_type: str) -> None:
             f"Missing Hugging Face {repo_type} repo. Set HF_DATASET_REPO / "
             "HF_MODEL_REPO (or HF_USERNAME) in the backend env."
         )
-    _api().create_repo(
-        repo_id=repo_id,
-        repo_type=repo_type,
-        private=True,
-        exist_ok=True,
-    )
+
+    try:
+        _api().create_repo(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            private=True,
+            exist_ok=True,
+        )
+    except HfHubHTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 409:
+            logger.info("HF repo already exists at %s — continuing", repo_id)
+            return
+        raise
 
 
 def _temp_dir() -> Path:
@@ -73,6 +81,63 @@ def _safe_local_name(file_name: str, used: set[str]) -> str:
             used.add(candidate)
             return candidate
         n += 1
+
+
+def _upload_with_retry(operation_name: str, fn):
+    max_attempts = 5
+    delay = 2.0
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except HfHubHTTPError as exc:
+            last_exc = exc
+            status = exc.response.status_code if exc.response is not None else None
+            detail = str(exc).lower()
+            if status == 429:
+                wait_for = min(165, delay)
+                logger.warning(
+                    "HF rate limit retry for %s (attempt %d/%d): waiting %.0fs",
+                    operation_name,
+                    attempt + 1,
+                    max_attempts,
+                    wait_for,
+                )
+                time.sleep(wait_for)
+                delay *= 2
+                continue
+            if status in {500, 502, 503, 504} or "temporary" in detail:
+                wait_for = min(60, delay)
+                logger.warning(
+                    "HF transient retry for %s (attempt %d/%d): waiting %.0fs",
+                    operation_name,
+                    attempt + 1,
+                    max_attempts,
+                    wait_for,
+                )
+                time.sleep(wait_for)
+                delay *= 2
+                continue
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                wait_for = min(60, delay)
+                logger.warning(
+                    "HF retry for %s (attempt %d/%d): waiting %.0fs",
+                    operation_name,
+                    attempt + 1,
+                    max_attempts,
+                    wait_for,
+                )
+                time.sleep(wait_for)
+                delay *= 2
+                continue
+            raise
+
+    assert last_exc is not None
+    logger.error("HF upload failed after retries for %s: %s", operation_name, last_exc)
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +181,7 @@ def upload_bytes(
     )
     _ensure_repo(repo_id, repo_type)
     with _hf_commit_lock:
-        try:
+        def _do_upload():
             _api().upload_file(
                 path_or_fileobj=data,
                 path_in_repo=path_in_repo,
@@ -124,6 +189,9 @@ def upload_bytes(
                 repo_type=repo_type,
                 commit_message=commit_message or f"Upload {path_in_repo}",
             )
+
+        try:
+            _upload_with_retry(f"upload_file:{path_in_repo}", _do_upload)
         except HfHubHTTPError as exc:
             detail = str(exc).lower()
             if "no files have been modified" in detail or "empty commit" in detail:
@@ -167,7 +235,7 @@ def upload_dataset_images_batch(
             (tmp_path / local_name).write_bytes(data)
 
         with _hf_commit_lock:
-            try:
+            def _do_upload():
                 _api().upload_folder(
                     folder_path=str(tmp_path),
                     repo_id=repo_id,
@@ -175,6 +243,9 @@ def upload_dataset_images_batch(
                     path_in_repo=repo_folder,
                     commit_message=f"Upload {len(items)} images to dataset {dataset_id}",
                 )
+
+            try:
+                _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
             except HfHubHTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 429:
                     raise RuntimeError(
@@ -197,7 +268,7 @@ def upload_dataset_images_from_folder(
     _ensure_repo(repo_id, REPO_TYPE_DATASET)
     repo_folder = f"datasets/{project_id}/{dataset_id}/images"
     with _hf_commit_lock:
-        try:
+        def _do_upload():
             _api().upload_folder(
                 folder_path=folder_path,
                 repo_id=repo_id,
@@ -205,6 +276,9 @@ def upload_dataset_images_from_folder(
                 path_in_repo=repo_folder,
                 commit_message=f"Upload {count} images to dataset {dataset_id}",
             )
+
+        try:
+            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
         except HfHubHTTPError as exc:
             if exc.response is not None and exc.response.status_code == 429:
                 raise RuntimeError(

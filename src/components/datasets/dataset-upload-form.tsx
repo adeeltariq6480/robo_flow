@@ -42,6 +42,7 @@ export function DatasetUploadForm({
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [uploadSummary, setUploadSummary] = useState<{
     uploaded: number;
     skipped: { fileName: string; reason?: string; message?: string }[];
@@ -100,6 +101,8 @@ export function DatasetUploadForm({
     setUploading(true);
     setError(null);
     setProgress(0);
+    setProcessing(false);
+    let queuedBackgroundUpload = false;
 
     const zips = queue
       .map((q) => q.file)
@@ -122,6 +125,7 @@ export function DatasetUploadForm({
         summary.uploaded += result.uploaded;
         summary.skipped.push(...(result.skipped ?? []));
         summary.adjusted.push(...(result.adjusted ?? []));
+        queuedBackgroundUpload = Boolean(result.processing);
       }
       for (const zip of zips) {
         const result = await uploadZip(projectId, datasetId, zip, (p) =>
@@ -141,8 +145,16 @@ export function DatasetUploadForm({
     setUploadSummary(summary);
     setDone(true);
     setUploading(false);
-    await revalidateProject(projectId);
-    router.refresh();
+    setProcessing(queuedBackgroundUpload);
+    if (!queuedBackgroundUpload) {
+      await revalidateProject(projectId);
+      router.refresh();
+    } else {
+      setTimeout(async () => {
+        await revalidateProject(projectId);
+        router.refresh();
+      }, 7000);
+    }
   }
 
   if (done) {
@@ -153,11 +165,18 @@ export function DatasetUploadForm({
 
     return (
       <Card className="text-center">
-        <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
-        <h2 className="mt-4 text-lg font-semibold">Upload complete</h2>
+        <CheckCircle className={`mx-auto h-12 w-12 ${processing ? "text-amber-500" : "text-green-500"}`} />
+        <h2 className="mt-4 text-lg font-semibold">
+          {processing ? "Upload queued" : "Upload complete"}
+        </h2>
         <p className="mt-2 text-sm text-slate-500">
           {uploaded} image{uploaded !== 1 ? "s" : ""} saved to {datasetName}
         </p>
+        {processing && (
+          <p className="mt-2 text-sm text-amber-700">
+            Files are saved locally and queued. Hugging Face upload is finishing in the background.
+          </p>
+        )}
 
         {(adjusted.length > 0 || skipped.length > 0) && (
           <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
@@ -180,6 +199,7 @@ export function DatasetUploadForm({
             variant="secondary"
             onClick={() => {
               setDone(false);
+              setProcessing(false);
               setQueue([]);
               setProgress(0);
               setUploadSummary(null);
