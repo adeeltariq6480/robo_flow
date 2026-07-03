@@ -114,7 +114,9 @@ async def process_job(job_id: str) -> None:
     data = {
         "project_id": project_id,
         "model_id": job.get("modelId"),
-        "model_ids": job.get("modelIds") or [],
+        "model_ids": job.get("modelIds")
+        or (job.get("inputPayload") or {}).get("model_ids")
+        or [],
         "dataset_id": job.get("datasetId"),
         "input_payload": job.get("inputPayload") or {},
     }

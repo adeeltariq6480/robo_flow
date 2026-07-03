@@ -30,7 +30,10 @@ def _resolve_model_ids(data: dict) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
 
-    for raw in data.get("model_ids") or []:
+    payload = data.get("input_payload") or {}
+    raw_ids = data.get("model_ids") or payload.get("model_ids") or []
+
+    for raw in raw_ids:
         key = str(raw)
         if key not in seen:
             seen.add(key)

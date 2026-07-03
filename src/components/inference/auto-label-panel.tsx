@@ -47,7 +47,7 @@ export function AutoLabelPanel({
       ? defaultDatasetId
       : datasets[0]?.id ?? "";
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>(
-    models[0] ? [models[0].id] : []
+    () => models.map((m) => m.id)
   );
   const [datasetId, setDatasetId] = useState(initialDatasetId);
   const [confidence, setConfidence] = useState(0.25);
@@ -66,6 +66,14 @@ export function AutoLabelPanel({
     !!reviewHref &&
     completedJob &&
     (completedJob.status === "completed" || labeled > 0);
+
+  useEffect(() => {
+    setSelectedModelIds((prev) => {
+      const valid = prev.filter((id) => models.some((m) => m.id === id));
+      if (valid.length > 0) return valid;
+      return models.map((m) => m.id);
+    });
+  }, [models]);
 
   useEffect(() => {
     const active = readActiveInferenceJob();
