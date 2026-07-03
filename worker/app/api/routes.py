@@ -8,6 +8,7 @@ import threading
 from uuid import uuid4
 from pathlib import Path
 
+import psutil
 from fastapi import (
     APIRouter,
     Depends,
@@ -500,66 +501,31 @@ async def upload_images(
     skipped: list[dict] = []
     adjusted: list[dict] = []
 
-    raw_files: list[tuple[UploadFile, bytes]] = []
+    session_id = (upload_session_id or uuid4().hex).strip() or uuid4().hex
+    session = _ensure_upload_session(project_id, dataset_id, session_id)
+
     for f in files:
         data = await f.read()
-        if data:
-            raw_files.append((f, data))
+        if not data:
+            continue
 
-    prep_sem = asyncio.Semaphore(max(1, settings.upload_preprocess_workers))
-
-    async def prepare_one(upload: UploadFile, data: bytes):
-        filename = _safe_filename(upload.filename)
-        async with prep_sem:
-            result, skip_info, adjust_info = await asyncio.to_thread(
-                _preprocess_upload_item, data, filename
-            )
-        return filename, upload.content_type, result, skip_info, adjust_info
-
-    prep_results = await asyncio.gather(
-        *[prepare_one(f, data) for f, data in raw_files],
-        return_exceptions=True,
-    )
-
-    ready: list[tuple[str, image_preprocess.PreprocessResult, str | None]] = []
-    for outcome in prep_results:
-        if isinstance(outcome, Exception):
-            logger.exception("preprocess failed")
-            raise HTTPException(status_code=500, detail=str(outcome)) from outcome
-
-        filename, content_type, result, skip_info, adjust_info = outcome
+        filename = _safe_filename(f.filename)
+        result, skip_info, adjust_info = await asyncio.to_thread(
+            _preprocess_upload_item, data, filename
+        )
         if skip_info:
             skipped.append(skip_info)
             continue
         if adjust_info:
             adjusted.append(adjust_info)
-        if result is not None:
-            ready.append((filename, result, content_type))
+        assert result is not None
 
-    if not ready:
-        return {
-            "uploaded": 0,
-            "images": [],
-            "queued": 0,
-            "skipped": skipped,
-            "adjusted": adjusted,
-        }
-
-    session_id = (upload_session_id or uuid4().hex).strip() or uuid4().hex
-    session = _ensure_upload_session(project_id, dataset_id, session_id)
-
-    fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
-
-    async def stage_one(
-        filename: str,
-        result: image_preprocess.PreprocessResult,
-        content_type: str | None,
-    ):
         with _upload_sessions_lock:
             session_state = _upload_sessions.get(session_id)
             if session_state is None:
                 raise HTTPException(status_code=500, detail="Upload session expired")
             stored_name = _safe_local_name(filename, session_state["used_names"])
+
         local_path = Path(session["dir"]) / stored_name
         local_path.write_bytes(result.data)
         logger.info(
@@ -568,24 +534,25 @@ async def upload_images(
             filename,
             stored_name,
         )
-        async with fs_sem:
-            record = await asyncio.to_thread(
-                repo.create_image,
-                project_id,
-                dataset_id,
-                {
-                    "fileName": stored_name,
-                    "hfRepo": settings.dataset_repo_id,
-                    "hfPath": file_storage.dataset_image_path(
-                        project_id, dataset_id, stored_name
-                    ),
-                    "width": result.width,
-                    "height": result.height,
-                    "mimeType": result.mime_type or content_type,
-                    "fileSize": len(result.data),
-                    "status": "queued",
-                },
-            )
+
+        record = await asyncio.to_thread(
+            repo.create_image,
+            project_id,
+            dataset_id,
+            {
+                "fileName": stored_name,
+                "hfRepo": settings.dataset_repo_id,
+                "hfPath": file_storage.dataset_image_path(
+                    project_id, dataset_id, stored_name
+                ),
+                "width": result.width,
+                "height": result.height,
+                "mimeType": result.mime_type or f.content_type,
+                "fileSize": len(result.data),
+                "status": "queued",
+            },
+        )
+
         with _upload_sessions_lock:
             session_state = _upload_sessions.get(session_id)
             if session_state is not None:
@@ -596,18 +563,43 @@ async def upload_images(
                         "local_path": str(local_path),
                     }
                 )
-        logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
-        return record
 
-    records = await asyncio.gather(
-        *[stage_one(filename, result, content_type) for filename, result, content_type in ready],
-        return_exceptions=True,
-    )
-    for record in records:
-        if isinstance(record, Exception):
-            logger.exception("DB image record failed")
-            raise HTTPException(status_code=500, detail=str(record)) from record
         created.append(record)
+        logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
+
+    if not created:
+        return {
+            "uploaded": 0,
+            "images": [],
+            "queued": 0,
+            "skipped": skipped,
+            "adjusted": adjusted,
+        }
+
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if session is not None:
+            if finalize_session:
+                session["finalize_requested"] = True
+            immediate = finalize_session or len(session["items"]) >= _UPLOAD_BATCH_SIZE
+            should_schedule = session.get("flush_task") is None and session["items"]
+        else:
+            immediate = False
+            should_schedule = False
+
+    if should_schedule:
+        _schedule_upload_flush(session_id, immediate=immediate)
+
+    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
+    return {
+        "uploadSessionId": session_id,
+        "uploaded": len(created),
+        "images": created,
+        "queued": len(created),
+        "skipped": skipped,
+        "adjusted": adjusted,
+        "processing": True,
+    }
 
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
@@ -644,106 +636,98 @@ async def upload_zip(
     _: None = Depends(verify_api_key),
 ):
     _check_upload_config()
-    raw = await file.read()
     created: list[dict] = []
     skipped: list[dict] = []
     adjusted: list[dict] = []
+
+    session_id = uuid4().hex
+    session = _ensure_upload_session(project_id, dataset_id, session_id)
+
     try:
-        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            raw_files: list[tuple[str, bytes]] = []
+        with zipfile.ZipFile(file.file) as zf:
             for name in zf.namelist():
                 if name.endswith("/") or not name.lower().endswith(IMAGE_EXTS):
                     continue
                 data = zf.read(name)
-                base = name.rsplit("/", 1)[-1]
-                raw_files.append((base, data))
-
-            prep_sem = asyncio.Semaphore(max(1, settings.upload_preprocess_workers))
-
-            async def prepare_one(filename: str, data: bytes):
-                async with prep_sem:
-                    result, skip_info, adjust_info = await asyncio.to_thread(
-                        _preprocess_upload_item, data, filename
-                    )
-                return filename, result, skip_info, adjust_info
-
-            prep_results = await asyncio.gather(
-                *[prepare_one(filename, data) for filename, data in raw_files],
-                return_exceptions=True,
-            )
-
-            ready: list[tuple[str, image_preprocess.PreprocessResult]] = []
-            for outcome in prep_results:
-                if isinstance(outcome, Exception):
-                    logger.exception("zip preprocess failed")
-                    raise HTTPException(status_code=500, detail=str(outcome)) from outcome
-
-                filename, result, skip_info, adjust_info = outcome
+                filename = _safe_filename(name.rsplit("/", 1)[-1])
+                result, skip_info, adjust_info = await asyncio.to_thread(
+                    _preprocess_upload_item, data, filename
+                )
                 if skip_info:
                     skipped.append(skip_info)
                     continue
                 if adjust_info:
                     adjusted.append(adjust_info)
-                if result is not None:
-                    ready.append((filename, result))
+                assert result is not None
 
-            if ready:
-                hf_items = [(filename, result.data) for filename, result in ready]
-                try:
-                    hf_info = await asyncio.to_thread(
-                        file_storage.upload_dataset_images_batch,
-                        project_id,
-                        dataset_id,
-                        hf_items,
-                    )
-                except RuntimeError as exc:
-                    logger.exception("HF zip batch upload failed")
-                    raise HTTPException(status_code=503, detail=str(exc)) from exc
-                except Exception as exc:
-                    logger.exception("HF zip batch upload failed")
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                with _upload_sessions_lock:
+                    session_state = _upload_sessions.get(session_id)
+                    if session_state is None:
+                        raise HTTPException(status_code=500, detail="Upload session expired")
+                    stored_name = _safe_local_name(filename, session_state["used_names"])
 
-                hf_repo = hf_info["hfRepo"]
-                stored_names: list[str] = hf_info.get("localNames") or [
-                    name for name, _ in ready
-                ]
-                fs_sem = asyncio.Semaphore(max(1, settings.upload_db_workers))
+                local_path = Path(session["dir"]) / stored_name
+                local_path.write_bytes(result.data)
 
-                async def record_one(
-                    stored_name: str,
-                    result: image_preprocess.PreprocessResult,
-                ):
-                    async with fs_sem:
-                        return await _create_image_record(
-                            project_id,
-                            dataset_id,
-                            stored_name,
-                            result,
-                            result.mime_type,
-                            hf_repo,
+                record = await asyncio.to_thread(
+                    repo.create_image,
+                    project_id,
+                    dataset_id,
+                    {
+                        "fileName": stored_name,
+                        "hfRepo": settings.dataset_repo_id,
+                        "hfPath": file_storage.dataset_image_path(
+                            project_id, dataset_id, stored_name
+                        ),
+                        "width": result.width,
+                        "height": result.height,
+                        "mimeType": result.mime_type or file.content_type,
+                        "fileSize": len(result.data),
+                        "status": "queued",
+                    },
+                )
+
+                with _upload_sessions_lock:
+                    session_state = _upload_sessions.get(session_id)
+                    if session_state is not None:
+                        session_state["items"].append(
+                            {
+                                "image_id": record["id"],
+                                "stored_name": stored_name,
+                                "local_path": str(local_path),
+                            }
                         )
 
-                records = await asyncio.gather(
-                    *[
-                        record_one(stored_names[i], result)
-                        for i, (_, result) in enumerate(ready)
-                    ],
-                    return_exceptions=True,
+                created.append(record)
+                logger.info(
+                    "ZIP image staged session=%s file=%s stored=%s",
+                    session_id,
+                    filename,
+                    stored_name,
                 )
-                for record in records:
-                    if isinstance(record, Exception):
-                        logger.exception("ZIP image record failed")
-                        raise HTTPException(status_code=500, detail=str(record)) from record
-                    created.append(record)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if session is not None:
+            immediate = len(session["items"]) >= _UPLOAD_BATCH_SIZE
+            should_schedule = session.get("flush_task") is None and session["items"]
+        else:
+            should_schedule = False
+
+    if should_schedule:
+        _schedule_upload_flush(session_id, immediate=immediate)
+
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     return {
+        "uploadSessionId": session_id,
         "uploaded": len(created),
         "images": created,
         "skipped": skipped,
         "adjusted": adjusted,
+        "queued": len(created),
+        "processing": True,
     }
 
 
@@ -892,6 +876,31 @@ async def model_status(
         }
     )
     return status
+
+
+@api_router.get("/memory-status")
+async def memory_status(
+    project_id: str | None = None,
+    model_id: str | None = None,
+    _: None = Depends(verify_api_key),
+):
+    process = psutil.Process()
+    memory_mb = process.memory_info().rss / 1024 / 1024
+    model_loaded = False
+    model_path = None
+    if project_id and model_id:
+        try:
+            model_path = str(resolve_model_local_path(model_id, project_id))
+            status = describe_model_status(Path(model_path))
+            model_loaded = status.get("model_loaded", False)
+        except ValueError:
+            model_path = None
+
+    return {
+        "ram_usage_mb": round(memory_mb, 2),
+        "model_loaded": model_loaded,
+        "model_path": model_path,
+    }
 
 
 # ===========================================================================

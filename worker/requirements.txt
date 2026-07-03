@@ -8,3 +8,4 @@ huggingface_hub>=0.26.0
 python-multipart>=0.0.12
 Pillow>=10.4.0
 numpy>=1.26.0
+psutil>=6.1.0

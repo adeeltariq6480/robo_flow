@@ -1,7 +1,11 @@
 import logging
+import gc
 import threading
 import time
 from pathlib import Path
+
+import psutil
+from PIL import Image, ImageOps
 
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
@@ -10,6 +14,14 @@ logger = logging.getLogger(__name__)
 
 _yolo_models: dict[str, object] = {}
 _yolo_lock = threading.Lock()
+
+
+def get_process_memory_mb() -> float:
+    return psutil.Process().memory_info().rss / 1024 / 1024
+
+
+def _log_memory(label: str) -> None:
+    logger.info("%s: %.1f MB RSS", label, get_process_memory_mb())
 
 
 def get_model(model_path: Path):
@@ -30,15 +42,18 @@ def get_model(model_path: Path):
             ) from exc
 
         logger.info("Model loading started: %s", model_path)
+        _log_memory("Memory before model load")
         started = time.perf_counter()
         try:
             model = YOLO(str(model_path))
+            model.to("cpu")
         except Exception as exc:
             logger.exception("Model loading failed with full error: %s", model_path)
             raise RuntimeError(f"Model loading failed for {model_path}: {exc}") from exc
 
         _yolo_models[key] = model
         logger.info("Model loaded successfully in %.1fs: %s", time.perf_counter() - started, model_path)
+        _log_memory("Memory after model load")
     return _yolo_models[key]
 
 
@@ -65,11 +80,27 @@ def run_yolo_inference(
     model = get_model(model_path)
     start = time.perf_counter()
 
+    _log_memory("Memory before image processing")
+    prepared_image: Image.Image | None = None
+    with Image.open(image_path) as opened:
+        prepared_image = ImageOps.exif_transpose(opened)
+        if prepared_image.mode != "RGB":
+            prepared_image = prepared_image.convert("RGB")
+        max_side = max(
+            1,
+            min(settings.max_image_size, getattr(config, "image_size", settings.max_image_size)),
+        )
+        if prepared_image.width > max_side or prepared_image.height > max_side:
+            prepared_image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        prepared_image = prepared_image.copy()
+
+    _log_memory("Memory after image processing")
+
     results = model.predict(
-        source=str(image_path),
+        source=prepared_image,
         conf=config.confidence,
         iou=config.iou,
-        imgsz=getattr(config, "image_size", 640),
+        imgsz=min(getattr(config, "image_size", 640), settings.max_image_size),
         device="cpu",
         verbose=False,
     )
@@ -104,6 +135,15 @@ def run_yolo_inference(
                         height=round(xywhn[3], 6),
                     )
                 )
+
+    if prepared_image is not None:
+        try:
+            prepared_image.close()
+        except Exception:
+            pass
+    del results
+    gc.collect()
+    _log_memory("Memory after cleanup")
 
     return InferenceResult(
         detections=detections,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import gc
 import logging
 from dataclasses import dataclass
 
@@ -51,20 +52,10 @@ def _laplacian_variance(gray: Image.Image) -> float:
 
 def _encode_image(img: Image.Image, original_format: str | None) -> tuple[bytes, str]:
     buf = io.BytesIO()
-    fmt = (original_format or "JPEG").upper()
-    if fmt == "JPG":
-        fmt = "JPEG"
-    if fmt not in MIME_FOR_FORMAT:
-        fmt = "JPEG"
-    save_kwargs: dict = {}
-    if fmt == "JPEG":
-        save_kwargs["quality"] = 92
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-    elif img.mode not in ("RGB", "RGBA", "L"):
+    if img.mode != "RGB":
         img = img.convert("RGB")
-    img.save(buf, format=fmt, **save_kwargs)
-    return buf.getvalue(), MIME_FOR_FORMAT[fmt]
+    img.save(buf, format="JPEG", quality=88, optimize=True)
+    return buf.getvalue(), MIME_FOR_FORMAT["JPEG"]
 
 
 def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
@@ -80,10 +71,17 @@ def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
             img = ImageOps.exif_transpose(opened)
             exif_corrected = img.size != before_size
 
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
             rotated = False
             if settings.upload_auto_portrait and img.width > img.height:
                 img = img.transpose(Image.ROTATE_90)
                 rotated = True
+
+            max_side = max(1, int(getattr(settings, "max_image_size", 1280) or 1280))
+            if img.width > max_side or img.height > max_side:
+                img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
 
             if settings.upload_reject_blurry:
                 score = _laplacian_variance(img.convert("L"))
@@ -103,16 +101,17 @@ def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
                         skip_reason="blurry",
                     )
 
-            if exif_corrected or rotated:
-                out_bytes, mime = _encode_image(img, original_format)
-            else:
-                out_bytes, mime = data, _guess_mime(original_format, file_name)
+            width = img.width
+            height = img.height
+            out_bytes, mime = _encode_image(img, original_format)
+            del img
+            gc.collect()
 
             return PreprocessResult(
                 accepted=True,
                 data=out_bytes,
-                width=img.width,
-                height=img.height,
+                width=width,
+                height=height,
                 mime_type=mime,
                 rotated_to_portrait=rotated,
                 exif_corrected=exif_corrected,

@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     hf_model_repo: str = Field(
         default="", validation_alias=AliasChoices("HF_MODEL_REPO")
     )
+    model_dir: str = Field(default="", validation_alias=AliasChoices("MODEL_DIR"))
+    hf_home: str = Field(default="", validation_alias=AliasChoices("HF_HOME"))
+    hf_hub_cache: str = Field(
+        default="", validation_alias=AliasChoices("HF_HUB_CACHE")
+    )
+    transformers_cache: str = Field(
+        default="", validation_alias=AliasChoices("TRANSFORMERS_CACHE")
+    )
+    torch_home: str = Field(default="", validation_alias=AliasChoices("TORCH_HOME"))
     railway_volume_mount_path: str = Field(
         default="",
         validation_alias=AliasChoices("RAILWAY_VOLUME_MOUNT_PATH"),
@@ -125,6 +134,10 @@ class Settings(BaseSettings):
             "UPLOAD_DB_WORKERS", "UPLOAD_FIRESTORE_WORKERS"
         ),
     )
+    max_image_size: int = Field(
+        default=1280,
+        validation_alias=AliasChoices("MAX_IMAGE_SIZE"),
+    )
     hf_hub_disable_xet: bool = Field(
         default=True,
         validation_alias=AliasChoices("HF_HUB_DISABLE_XET"),
@@ -169,25 +182,34 @@ class Settings(BaseSettings):
 
     @property
     def model_files_dir(self) -> Path:
-        return self.storage_base_path / "models"
+        raw = self.model_dir.strip()
+        return Path(raw) if raw else self.storage_base_path / "models"
 
     @property
     def hf_cache_dir(self) -> Path:
-        return self.storage_base_path / "huggingface"
+        raw = self.hf_home.strip()
+        return Path(raw) if raw else self.storage_base_path / "huggingface"
+
+    @property
+    def hf_hub_cache_dir(self) -> Path:
+        raw = self.hf_hub_cache.strip()
+        return Path(raw) if raw else self.hf_cache_dir / "hub"
 
     @property
     def torch_home_dir(self) -> Path:
-        return self.storage_base_path / "torch"
+        raw = self.torch_home.strip()
+        return Path(raw) if raw else self.storage_base_path / "torch"
 
     @property
     def transformers_cache_dir(self) -> Path:
-        return self.storage_base_path / "transformers"
+        raw = self.transformers_cache.strip()
+        return Path(raw) if raw else self.hf_cache_dir
 
 
 settings = Settings()
 
 os.environ.setdefault("HF_HOME", str(settings.hf_cache_dir))
-os.environ.setdefault("HF_HUB_CACHE", str(settings.hf_cache_dir / "hub"))
+os.environ.setdefault("HF_HUB_CACHE", str(settings.hf_hub_cache_dir))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(settings.transformers_cache_dir))
 os.environ.setdefault("TORCH_HOME", str(settings.torch_home_dir))
 if settings.hf_hub_disable_xet:
