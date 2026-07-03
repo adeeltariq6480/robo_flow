@@ -24,6 +24,8 @@ from app.services.yolo_inference import prewarm_yolo, run_yolo_inference, unload
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+MODEL_DOWNLOAD_TIMEOUT_SECONDS = 600
+MODEL_WARMUP_TIMEOUT_SECONDS = 600
 
 
 def _resolve_model_ids(data: dict) -> list[str]:
@@ -135,8 +137,6 @@ async def run_auto_label(
     per_image_dets: dict[str, list[DetectionBox]] = defaultdict(list)
     per_image_models: dict[str, dict[str, int]] = defaultdict(dict)
 
-    loaded_models: list[tuple[str, object]] = []
-
     def _prep_progress(step_index: int) -> int:
         if num_models <= 0:
             return 35
@@ -187,34 +187,49 @@ async def run_auto_label(
     ready_ids = [str(f["id"]) for f in file_list if str(f["id"]) not in prep_failures]
     work_units = max(len(ready_ids) * num_models, 1)
     done_units = 0
+    model_phase_progress = 10
 
-    # --- Run each model across all images (one model in RAM at a time) ---
+    # --- Run each model end-to-end before moving to the next one ---
     for mi, model_id in enumerate(model_ids):
+        phase_start = max(model_phase_progress, 10)
+        download_end = min(phase_start + 5, 35)
+        load_end = min(phase_start + 25, 60)
+        inference_start = max(load_end, 35)
+        inference_end = min(inference_start + 20, 85)
+
         logger.info("Job %s: model %d/%d id=%s — downloading from HF", job_id, mi + 1, num_models, model_id)
         await update_job(
             job_id,
-            progress=_prep_progress(mi),
+            progress=phase_start,
             progress_message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
             processed_items=done_units,
             project_id=project_id,
         )
 
         try:
-            model_path = await _run_with_heartbeat(
-                f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
-                asyncio.to_thread(download_model, model_id, project_id),
-                start_progress=_prep_progress(mi),
-                end_progress=_prep_progress(mi) + 5,
+            model_path = await asyncio.wait_for(
+                _run_with_heartbeat(
+                    f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
+                    asyncio.to_thread(download_model, model_id, project_id),
+                    start_progress=phase_start,
+                    end_progress=download_end,
+                ),
+                timeout=MODEL_DOWNLOAD_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
-            model_failures[model_id] = f"download failed: {exc}"
+            if isinstance(exc, TimeoutError):
+                model_failures[model_id] = (
+                    f"download timed out after {MODEL_DOWNLOAD_TIMEOUT_SECONDS}s"
+                )
+            else:
+                model_failures[model_id] = f"download failed: {exc}"
             continue
 
         logger.info("Job %s: model %s file ready at %s", job_id, model_id, model_path)
         await update_job(
             job_id,
-            progress=_prep_progress(mi) + 5,
+            progress=download_end,
             progress_message=(
                 f"Model {mi + 1}/{num_models}: loading YOLO into memory "
                 f"(first time can take 1–3 min on CPU)…"
@@ -224,38 +239,37 @@ async def run_auto_label(
         )
 
         try:
-            await _run_with_heartbeat(
-                f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU warmup)…",
-                asyncio.to_thread(prewarm_yolo, model_path),
-                start_progress=_prep_progress(mi) + 5,
-                end_progress=_prep_progress(mi + 1),
+            await asyncio.wait_for(
+                _run_with_heartbeat(
+                    f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU warmup)…",
+                    asyncio.to_thread(prewarm_yolo, model_path),
+                    start_progress=download_end,
+                    end_progress=load_end,
+                ),
+                timeout=MODEL_WARMUP_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
-            model_failures[model_id] = f"load failed: {exc}"
+            if isinstance(exc, TimeoutError):
+                model_failures[model_id] = (
+                    f"load timed out after {MODEL_WARMUP_TIMEOUT_SECONDS}s"
+                )
+            else:
+                model_failures[model_id] = f"load failed: {exc}"
             continue
-
-        loaded_models.append((model_id, model_path))
 
         logger.info("Job %s: model %s loaded, starting inference", job_id, model_id)
         await update_job(
             job_id,
-            progress=_prep_progress(mi + 1),
+            progress=inference_start,
             progress_message=f"Model {mi + 1}/{num_models}: labeling image 1/{total}…",
             processed_items=done_units,
             project_id=project_id,
         )
+        model_phase_progress = inference_start
 
-    if not loaded_models:
-        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
-        hint = "; ".join(samples) if samples else "unknown model error"
-        raise ValueError(f"No models could be loaded. Examples: {hint}")
-
-    work_units = max(len(ready_ids) * len(loaded_models), 1)
-
-    try:
-        for mi, (model_id, model_path) in enumerate(loaded_models):
+        try:
             for idx, file_row in enumerate(file_list):
                 file_id = str(file_row["id"])
                 if file_id in prep_failures:
@@ -265,13 +279,12 @@ async def run_auto_label(
                     continue
 
                 if idx % progress_step == 0 or idx == total - 1:
-                    pct = _inference_progress(done_units, work_units)
+                    pct = _inference_progress(done_units, work_units, inference_start)
                     await update_job(
                         job_id,
                         progress=pct,
                         progress_message=(
-                            f"Model {mi + 1}/{len(loaded_models)} · "
-                            f"image {idx + 1}/{total}"
+                            f"Model {mi + 1}/{num_models} · image {idx + 1}/{total}"
                         ),
                         processed_items=done_units,
                         project_id=project_id,
@@ -300,10 +313,25 @@ async def run_auto_label(
                         prep_failures[file_id] = f"Inference error: {exc}"
 
                 done_units += 1
-    finally:
-        for _, model_path in loaded_models:
+        finally:
             await asyncio.to_thread(unload_model, model_path)
-        gc.collect()
+            gc.collect()
+
+        model_phase_progress = max(model_phase_progress, inference_end)
+        await update_job(
+            job_id,
+            progress=model_phase_progress,
+            progress_message=f"Model {mi + 1}/{num_models}: complete",
+            processed_items=done_units,
+            project_id=project_id,
+        )
+
+    loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
+
+    if not loaded_model_ids:
+        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
+        hint = "; ".join(samples) if samples else "unknown model error"
+        raise ValueError(f"No models could be loaded. Examples: {hint}")
 
     # --- Merge detections and save to Firestore ---
     labeled = 0
@@ -386,7 +414,7 @@ async def run_auto_label(
 
     return _compact_job_result(
         dataset_id=dataset_id,
-        model_ids=[model_id for model_id, _ in loaded_models],
+        model_ids=loaded_model_ids,
         total=total,
         labeled=labeled,
         failed=failed,

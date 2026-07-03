@@ -83,6 +83,15 @@ def _safe_local_name(file_name: str, used: set[str]) -> str:
         n += 1
 
 
+def model_cache_local_name_from_path(path_in_repo: str) -> str:
+    base = path_in_repo.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not base:
+        return "model.pt"
+    if Path(base).suffix:
+        return base
+    return f"{base}.pt"
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
