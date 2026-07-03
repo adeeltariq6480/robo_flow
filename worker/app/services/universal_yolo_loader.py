@@ -96,30 +96,46 @@ class UniversalYOLOModel:
 
             logger.info("YOLOv5 runtime loading for model: %s", self.model_path)
 
-            # Set torch.hub cache dir if available
             if settings.torch_home_dir:
                 os.environ["TORCH_HOME"] = str(settings.torch_home_dir)
 
-            # Load YOLOv5 model
-            try:
-                # Pass trust_repo=True to avoid interactive trust prompt in non-interactive environments
-                self.model = torch.hub.load(
-                    "ultralytics/yolov5",
-                    "custom",
-                    path=self.model_path,
-                    force_reload=False,
-                    trust_repo=True,
-                )
-            except Exception as exc:
-                error_msg = str(exc).lower()
-                if "urlopen" in error_msg or "connection" in error_msg or "internet" in error_msg:
-                    raise RuntimeError(
-                        "YOLOv5 runtime not available. Add local YOLOv5 runtime or "
-                        "enable internet during first startup."
-                    ) from exc
-                raise
+            repo = os.getenv("YOLOV5_REPO", "ultralytics/yolov5")
+            ref = os.getenv("YOLOV5_REPO_REF", "v5.0")
+            repo_spec = f"{repo}:{ref}"
+            logger.info("YOLOv5 repo ref used: %s", repo_spec)
 
-            # Force CPU
+            versions = [ref, "v5.0", "v6.0", "v6.2", "v7.0"]
+            if "mp" in str(self.model_path).lower() or "can't get attribute 'mp'" in str(self.model_path).lower():
+                versions = ["v5.0", "v6.0", *versions]
+            for attempt_ref in versions:
+                if attempt_ref == ref:
+                    repo_spec = f"{repo}:{attempt_ref}"
+                else:
+                    repo_spec = f"{repo}:{attempt_ref}"
+                try:
+                    self.model = torch.hub.load(
+                        repo_spec,
+                        "custom",
+                        path=self.model_path,
+                        force_reload=False,
+                        trust_repo=True,
+                        device="cpu",
+                    )
+                    break
+                except Exception as exc:
+                    error_msg = str(exc).lower()
+                    if "urlopen" in error_msg or "connection" in error_msg or "internet" in error_msg:
+                        raise RuntimeError(
+                            "YOLOv5 runtime not available. Add local YOLOv5 runtime or enable internet during first startup."
+                        ) from exc
+                    if attempt_ref != versions[-1]:
+                        logger.warning("YOLOv5 load attempt failed for %s: %s", repo_spec, exc)
+                        continue
+                    raise
+
+            if self.model is None:
+                raise RuntimeError("YOLOv5 model did not load")
+
             self.model.to("cpu")
             self.model.eval()
             logger.info("YOLOv5 model loaded successfully")

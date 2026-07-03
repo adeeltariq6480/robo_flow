@@ -72,6 +72,9 @@ def _image_row(row: dict) -> dict:
         "fileName": row["file_name"],
         "hfRepo": row.get("hf_repo", "datasets"),
         "hfPath": row["hf_path"],
+        "localPath": row.get("local_path"),
+        "storageStatus": row.get("storage_status", "local_ready" if row.get("local_path") else "pending"),
+        "hfSyncStatus": row.get("hf_sync_status", "pending"),
         "mimeType": row.get("mime_type"),
         "fileSize": row.get("file_size", 0),
         "width": row.get("width"),
@@ -412,32 +415,69 @@ def recount_dataset_images(project_id: str, dataset_id: str) -> int:
 # Images
 # ---------------------------------------------------------------------------
 
+def _build_image_insert_payload(project_id: str, dataset_id: str, data: dict) -> dict:
+    payload = {
+        "project_id": project_id,
+        "dataset_id": dataset_id,
+        "file_name": data["fileName"],
+        "hf_repo": data.get("hfRepo", "datasets"),
+        "hf_path": data["hfPath"],
+        "width": data.get("width"),
+        "height": data.get("height"),
+        "mime_type": data.get("mimeType"),
+        "file_size": data.get("fileSize", 0),
+        "status": data.get("status", "uploaded"),
+        "queue_type": data.get("queueType", "unassigned"),
+    }
+    if data.get("localPath") is not None:
+        payload["local_path"] = data["localPath"]
+    if data.get("storageStatus") is not None:
+        payload["storage_status"] = data["storageStatus"]
+    if data.get("hfSyncStatus") is not None:
+        payload["hf_sync_status"] = data["hfSyncStatus"]
+    return payload
+
+
 def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
-    res = (
-        _sb()
-        .table("images")
-        .insert(
-            {
-                "project_id": project_id,
-                "dataset_id": dataset_id,
-                "file_name": data["fileName"],
-                "hf_repo": data.get("hfRepo", "datasets"),
-                "hf_path": data["hfPath"],
-                "width": data.get("width"),
-                "height": data.get("height"),
-                "mime_type": data.get("mimeType"),
-                "file_size": data.get("fileSize", 0),
-                "status": data.get("status", "uploaded"),
-                "queue_type": data.get("queueType", "unassigned"),
-            }
-        )
-        .execute()
-    )
+    payload = _build_image_insert_payload(project_id, dataset_id, data)
+    try:
+        res = _sb().table("images").insert(payload).execute()
+    except Exception as exc:
+        message = str(exc).lower()
+        if "column" in message and "does not exist" in message:
+            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status"}}
+            res = _sb().table("images").insert(fallback).execute()
+        else:
+            raise
     return _image_row(res.data[0])
 
 
 def update_image_status(project_id: str, image_id: str, status: str) -> None:
     _sb().table("images").update({"status": status}).eq("id", image_id).eq("project_id", project_id).execute()
+
+
+def update_image_storage_fields(project_id: str, image_id: str, data: dict) -> None:
+    payload = {}
+    if "status" in data:
+        payload["status"] = data["status"]
+    if "local_path" in data:
+        payload["local_path"] = data["local_path"]
+    if "storage_status" in data:
+        payload["storage_status"] = data["storage_status"]
+    if "hf_sync_status" in data:
+        payload["hf_sync_status"] = data["hf_sync_status"]
+    if not payload:
+        return
+    try:
+        _sb().table("images").update(payload).eq("id", image_id).eq("project_id", project_id).execute()
+    except Exception as exc:
+        message = str(exc).lower()
+        if "column" in message and "does not exist" in message:
+            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status"}}
+            if fallback:
+                _sb().table("images").update(fallback).eq("id", image_id).eq("project_id", project_id).execute()
+        else:
+            raise
 
 
 def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:

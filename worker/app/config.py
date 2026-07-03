@@ -52,6 +52,10 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("HF_MODEL_REPO")
     )
     model_dir: str = Field(default="", validation_alias=AliasChoices("MODEL_DIR"))
+    dataset_local_dir: str = Field(
+        default="",
+        validation_alias=AliasChoices("DATASET_LOCAL_DIR"),
+    )
     hf_home: str = Field(default="", validation_alias=AliasChoices("HF_HOME"))
     hf_hub_cache: str = Field(
         default="", validation_alias=AliasChoices("HF_HUB_CACHE")
@@ -142,6 +146,14 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("HF_HUB_DISABLE_XET"),
     )
+    auto_label_use_local_images: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AUTO_LABEL_USE_LOCAL_IMAGES"),
+    )
+    hf_upload_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("HF_UPLOAD_ENABLED"),
+    )
 
     @property
     def supabase_configured(self) -> bool:
@@ -184,6 +196,11 @@ class Settings(BaseSettings):
     def model_files_dir(self) -> Path:
         raw = self.model_dir.strip()
         return Path(raw) if raw else self.storage_base_path / "models"
+
+    @property
+    def dataset_files_dir(self) -> Path:
+        raw = self.dataset_local_dir.strip()
+        return Path(raw) if raw else self.storage_base_path / "datasets"
 
     @property
     def hf_cache_dir(self) -> Path:

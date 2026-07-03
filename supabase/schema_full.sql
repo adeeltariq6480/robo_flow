@@ -75,20 +75,23 @@ create index if not exists idx_datasets_project on public.datasets (project_id);
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.images (
-  id          uuid primary key default gen_random_uuid(),
-  project_id  uuid not null references public.projects (id) on delete cascade,
-  dataset_id  uuid not null references public.datasets (id) on delete cascade,
-  file_name   text not null,
-  hf_repo     text not null default 'datasets',
-  hf_path     text not null,
-  mime_type   text,
-  file_size   bigint not null default 0,
-  width       integer,
-  height      integer,
-  status      text not null default 'uploaded',
-  queue_type  text not null default 'unassigned',
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  id              uuid primary key default gen_random_uuid(),
+  project_id      uuid not null references public.projects (id) on delete cascade,
+  dataset_id      uuid not null references public.datasets (id) on delete cascade,
+  file_name       text not null,
+  hf_repo         text not null default 'datasets',
+  hf_path         text not null,
+  local_path      text,
+  storage_status  text,
+  hf_sync_status  text,
+  mime_type       text,
+  file_size       bigint not null default 0,
+  width           integer,
+  height          integer,
+  status          text not null default 'uploaded',
+  queue_type      text not null default 'unassigned',
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
 create index if not exists idx_images_dataset on public.images (dataset_id);

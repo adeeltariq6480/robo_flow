@@ -43,7 +43,7 @@ from app.models.schemas import (
 from app.services import export_builder, hf_storage as file_storage, image_preprocess
 from app.services import supabase_repo as repo
 from app.services import model_chunk_upload
-from app.services.storage import resolve_model_local_path
+from app.services.storage import persist_model_bytes_locally, resolve_model_local_path
 from app.services.yolo_inference import describe_model_status
 from app.services.model_validator import detect_model_type, validate_model_file
 
@@ -71,17 +71,18 @@ async def db(fn, /, *args, **kwargs):
 
 
 def _check_upload_config() -> None:
-    """Fail fast when Supabase (metadata) or Hugging Face (files) is not configured."""
+    """Fail fast when Supabase metadata is not configured."""
     missing: list[str] = []
     if not settings.supabase_configured:
         missing.append("SUPABASE_URL")
         missing.append("SUPABASE_SERVICE_ROLE_KEY")
-    if not settings.hf_token:
-        missing.append("HF_TOKEN")
-    if not settings.dataset_repo_id:
-        missing.append("HF_DATASET_REPO (or HF_USERNAME)")
-    if not settings.model_repo_id:
-        missing.append("HF_MODEL_REPO (or HF_USERNAME)")
+    if settings.hf_upload_enabled:
+        if not settings.hf_token:
+            missing.append("HF_TOKEN")
+        if not settings.dataset_repo_id:
+            missing.append("HF_DATASET_REPO (or HF_USERNAME)")
+        if not settings.model_repo_id:
+            missing.append("HF_MODEL_REPO (or HF_USERNAME)")
     if missing:
         raise HTTPException(
             status_code=503,
@@ -112,6 +113,20 @@ def _safe_local_name(name: str, used: set[str]) -> str:
             used.add(candidate)
             return candidate
         i += 1
+
+
+def _dataset_image_local_dir(project_id: str, dataset_id: str) -> Path:
+    base = settings.dataset_files_dir / project_id / dataset_id / "images"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _persist_dataset_image_locally(project_id: str, dataset_id: str, file_name: str, data: bytes) -> Path:
+    target_dir = _dataset_image_local_dir(project_id, dataset_id)
+    target_path = target_dir / file_name
+    target_path.write_bytes(data)
+    logger.info("Image saved locally project=%s dataset=%s path=%s", project_id, dataset_id, target_path)
+    return target_path
 
 
 def _image_dimensions(data: bytes) -> tuple[int | None, int | None]:
@@ -266,25 +281,43 @@ async def _flush_upload_session(session_id: str, *, initial_delay: float) -> Non
         )
 
         try:
-            await asyncio.to_thread(
-                file_storage.upload_dataset_images_from_folder,
-                session["project_id"],
-                session["dataset_id"],
-                str(batch_root),
-                len(items),
-            )
-            logger.info(
-                "Hugging Face upload success session=%s count=%d",
-                session_id,
-                len(items),
-            )
-            for item in items:
+            if not file_storage.hf_upload_enabled():
+                logger.info("HF upload disabled; skipping remote sync session=%s count=%d", session_id, len(items))
+                for item in items:
+                    await asyncio.to_thread(
+                        repo.update_image_storage_fields,
+                        session["project_id"],
+                        item["image_id"],
+                        {
+                            "status": "local_ready",
+                            "storage_status": "local_ready",
+                            "hf_sync_status": "skipped",
+                        },
+                    )
+            else:
                 await asyncio.to_thread(
-                    repo.update_image_status,
+                    file_storage.upload_dataset_images_from_folder,
                     session["project_id"],
-                    item["image_id"],
-                    "uploaded",
+                    session["dataset_id"],
+                    str(batch_root),
+                    len(items),
                 )
+                logger.info(
+                    "Hugging Face upload success session=%s count=%d",
+                    session_id,
+                    len(items),
+                )
+                for item in items:
+                    await asyncio.to_thread(
+                        repo.update_image_storage_fields,
+                        session["project_id"],
+                        item["image_id"],
+                        {
+                            "status": "uploaded",
+                            "storage_status": "local_ready",
+                            "hf_sync_status": "synced",
+                        },
+                    )
         except Exception as exc:
             logger.exception(
                 "Upload failed after retries session=%s count=%d: %s",
@@ -294,10 +327,14 @@ async def _flush_upload_session(session_id: str, *, initial_delay: float) -> Non
             )
             for item in items:
                 await asyncio.to_thread(
-                    repo.update_image_status,
+                    repo.update_image_storage_fields,
                     session["project_id"],
                     item["image_id"],
-                    "failed",
+                    {
+                        "status": "pending_hf_sync",
+                        "storage_status": "local_ready",
+                        "hf_sync_status": "pending_hf_sync",
+                    },
                 )
         finally:
             shutil.rmtree(batch_root, ignore_errors=True)
@@ -527,13 +564,13 @@ async def upload_images(
                 raise HTTPException(status_code=500, detail="Upload session expired")
             stored_name = _safe_local_name(filename, session_state["used_names"])
 
-        local_path = Path(session["dir"]) / stored_name
-        local_path.write_bytes(result.data)
+        local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
         logger.info(
-            "Image received session=%s file=%s stored=%s",
+            "Image received session=%s file=%s stored=%s local=%s",
             session_id,
             filename,
             stored_name,
+            local_path,
         )
 
         record = await asyncio.to_thread(
@@ -551,6 +588,9 @@ async def upload_images(
                 "mimeType": result.mime_type or f.content_type,
                 "fileSize": len(result.data),
                 "status": "queued",
+                "localPath": str(local_path),
+                "storageStatus": "local_ready",
+                "hfSyncStatus": "queued" if file_storage.hf_upload_enabled() else "skipped",
             },
         )
 
@@ -667,8 +707,7 @@ async def upload_zip(
                         raise HTTPException(status_code=500, detail="Upload session expired")
                     stored_name = _safe_local_name(filename, session_state["used_names"])
 
-                local_path = Path(session["dir"]) / stored_name
-                local_path.write_bytes(result.data)
+                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
 
                 record = await asyncio.to_thread(
                     repo.create_image,
@@ -685,6 +724,9 @@ async def upload_zip(
                         "mimeType": result.mime_type or file.content_type,
                         "fileSize": len(result.data),
                         "status": "queued",
+                        "localPath": str(local_path),
+                        "storageStatus": "local_ready",
+                        "hfSyncStatus": "queued" if file_storage.hf_upload_enabled() else "skipped",
                     },
                 )
 
@@ -812,9 +854,13 @@ async def upload_model(
     """Upload model file via worker → Hugging Face Hub + DB record."""
     _check_upload_config()
     data = await file.read()
-    loc = await asyncio.to_thread(
-        file_storage.upload_model_file, project_id, file.filename, data
-    )
+    local_path = await asyncio.to_thread(persist_model_bytes_locally, project_id, file.filename, data)
+    if settings.hf_upload_enabled:
+        loc = await asyncio.to_thread(
+            file_storage.upload_model_file, project_id, file.filename, data
+        )
+    else:
+        loc = {"hfRepo": settings.model_repo_id, "hfPath": file_storage.model_path(project_id, file.filename)}
     model = repo.create_model(project_id, {
         "modelName": model_name,
         "modelVersion": model_version,

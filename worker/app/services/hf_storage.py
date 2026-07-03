@@ -98,6 +98,19 @@ def model_local_cache_path(local_name: str) -> Path:
     return path / local_name
 
 
+def persist_model_bytes_locally(project_id: str, file_name: str, data: bytes) -> Path:
+    target_dir = settings.model_files_dir / project_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / file_name
+    target_path.write_bytes(data)
+    logger.info("Model saved locally project=%s path=%s", project_id, target_path)
+    return target_path
+
+
+def hf_upload_enabled() -> bool:
+    return bool(settings.hf_upload_enabled and settings.hf_token and settings.dataset_repo_id)
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
@@ -219,6 +232,9 @@ def upload_bytes(
 def upload_dataset_image(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:
+    if not hf_upload_enabled():
+        logger.info("HF upload disabled; skipping image upload %s", file_name)
+        return {"hfRepo": settings.dataset_repo_id, "hfPath": dataset_image_path(project_id, dataset_id, file_name), "repoType": REPO_TYPE_DATASET}
     return upload_bytes(
         data,
         repo_type=REPO_TYPE_DATASET,
@@ -279,6 +295,9 @@ def upload_dataset_images_from_folder(
     count: int,
 ) -> dict:
     """Upload an existing local folder in a single commit."""
+    if not hf_upload_enabled():
+        logger.info("HF upload disabled; skipping batch upload for dataset %s", dataset_id)
+        return {"hfRepo": settings.dataset_repo_id, "count": count}
     repo_id = settings.dataset_repo_id
     _ensure_repo(repo_id, REPO_TYPE_DATASET)
     repo_folder = f"datasets/{project_id}/{dataset_id}/images"
@@ -315,6 +334,9 @@ def upload_dataset_zip(
 
 
 def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
+    if not hf_upload_enabled():
+        logger.info("HF upload disabled; skipping model upload %s", file_name)
+        return {"hfRepo": settings.model_repo_id, "hfPath": model_path(project_id, file_name), "repoType": REPO_TYPE_MODEL}
     return upload_bytes(
         data,
         repo_type=REPO_TYPE_MODEL,

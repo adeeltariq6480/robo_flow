@@ -12,6 +12,7 @@ from app.services.supabase_repo import (
     list_dataset_images,
     save_image_annotations,
     update_image_queue,
+    update_image_storage_fields,
 )
 from app.services.storage import (
     build_class_name_map,
@@ -107,6 +108,9 @@ async def run_auto_label(
     if total == 0:
         raise ValueError("Dataset has no files to label")
 
+    if not file_list:
+        raise ValueError("No local images found and remote Hugging Face images are missing. Re-upload dataset or run HF sync.")
+
     low_threshold = int(getattr(config, "low_label_threshold", 1) or 1)
     num_models = len(model_ids)
     progress_step = _progress_interval(total)
@@ -180,7 +184,16 @@ async def run_auto_label(
             )
             return True
         except Exception as exc:
-            logger.warning("Image download failed %s: %s", file_id, exc)
+            logger.warning("Image preparation failed %s: %s", file_id, exc)
+            if row.get("hfPath") and ("404" in str(exc) or "not found" in str(exc).lower()):
+                update_image_storage_fields(
+                    project_id,
+                    file_id,
+                    {
+                        "storage_status": "missing_remote",
+                        "hf_sync_status": "missing_remote",
+                    },
+                )
             prep_failures[file_id] = str(exc)
             return False
 
@@ -197,7 +210,7 @@ async def run_auto_label(
         inference_start = max(load_end, 35)
         inference_end = min(inference_start + 20, 85)
 
-        logger.info("Job %s: model %d/%d id=%s — downloading from HF", job_id, mi + 1, num_models, model_id)
+        logger.info("Job %s: model %d/%d id=%s — using local model path if available", job_id, mi + 1, num_models, model_id)
         await update_job(
             job_id,
             progress=phase_start,
@@ -325,6 +338,9 @@ async def run_auto_label(
             processed_items=done_units,
             project_id=project_id,
         )
+
+    if len(prep_failures) == total:
+        raise ValueError("No local images found and remote Hugging Face images are missing. Re-upload dataset or run HF sync.")
 
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
 
