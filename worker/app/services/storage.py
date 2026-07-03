@@ -21,13 +21,12 @@ def download_model(model_id: str, project_id: str) -> Path:
     path = row.get("hfPath")
     if not repo or not path:
         raise ValueError(f"Model {model_id} has no storage location")
-    ext = Path(path).suffix or ".pt"
     logger.info("Downloading model %s from %s/%s", model_id, repo, path)
     return file_storage.download_to_local(
         repo,
         path,
         repo_type=file_storage.REPO_TYPE_MODEL,
-        local_name=f"model_{model_id}{ext}",
+        local_name=file_storage.model_cache_local_name_from_path(path),
     )
 
 

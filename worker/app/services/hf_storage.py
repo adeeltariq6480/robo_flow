@@ -99,6 +99,18 @@ def model_path(project_id: str, file_name: str) -> str:
     return f"models/{project_id}/{file_name}"
 
 
+def model_cache_local_name_from_path(path_in_repo: str) -> str:
+    parts = path_in_repo.replace("\\", "/").split("/")
+    if len(parts) >= 3 and parts[0] == "models":
+        project_id = parts[1]
+        file_name = parts[-1]
+    else:
+        project_id = "unknown"
+        file_name = parts[-1] if parts else "model.pt"
+    safe_file = file_name.replace("\\", "_").replace("/", "_")
+    return f"model_{project_id}_{safe_file}"
+
+
 # ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------
@@ -226,11 +238,16 @@ def upload_dataset_zip(
 
 
 def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
-    return upload_bytes(
+    loc = upload_bytes(
         data,
         repo_type=REPO_TYPE_MODEL,
         path_in_repo=model_path(project_id, file_name),
     )
+    cache_path = _temp_dir() / model_cache_local_name_from_path(loc["hfPath"])
+    if not cache_path.exists() or cache_path.stat().st_size != len(data):
+        cache_path.write_bytes(data)
+        logger.info("Cached uploaded model locally at %s", cache_path)
+    return loc
 
 
 def upload_export(project_id: str, file_name: str, data: bytes) -> dict:
