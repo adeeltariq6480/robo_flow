@@ -42,6 +42,8 @@ from app.models.schemas import (
 from app.services import export_builder, hf_storage as file_storage, image_preprocess
 from app.services import supabase_repo as repo
 from app.services import model_chunk_upload
+from app.services.storage import resolve_model_local_path
+from app.services.yolo_inference import describe_model_status
 
 logger = logging.getLogger(__name__)
 
@@ -869,6 +871,27 @@ async def list_models(project_id: str, _: None = Depends(verify_api_key)):
 async def delete_model(project_id: str, model_id: str, _: None = Depends(verify_api_key)):
     repo.delete_model(project_id, model_id)
     return {"ok": True}
+
+
+@api_router.get("/model-status")
+async def model_status(
+    project_id: str,
+    model_id: str,
+    _: None = Depends(verify_api_key),
+):
+    try:
+        model_path = resolve_model_local_path(model_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    status = describe_model_status(model_path)
+    status.update(
+        {
+            "selected_model_directory": str(model_path.parent),
+            "cache_path": str(settings.hf_cache_dir),
+        }
+    )
+    return status
 
 
 # ===========================================================================

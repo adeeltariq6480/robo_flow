@@ -92,6 +92,12 @@ def model_cache_local_name_from_path(path_in_repo: str) -> str:
     return f"{base}.pt"
 
 
+def model_local_cache_path(local_name: str) -> Path:
+    path = settings.model_files_dir
+    path.mkdir(parents=True, exist_ok=True)
+    return path / local_name
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
@@ -335,24 +341,44 @@ def download_to_local(
     repo_type: str,
     local_name: str | None = None,
 ) -> Path:
-    """Download a file from HF Hub. Uses HF cache; optional copy to temp dir."""
+    """Download a file from HF Hub with a persistent local cache copy."""
     logger.debug("HF download %s (%s) %s", repo_id, repo_type, path_in_repo)
-    cached = Path(
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=path_in_repo,
-            repo_type=repo_type,
-            token=settings.hf_token or None,
-        )
-    )
-    if not local_name:
-        return cached
 
-    dest = _temp_dir() / local_name
-    if dest.exists() and dest.stat().st_size == cached.stat().st_size:
+    if repo_type == REPO_TYPE_MODEL:
+        cache_root = settings.model_files_dir
+    else:
+        cache_root = settings.hf_cache_dir
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    file_name = local_name or Path(path_in_repo).name
+    dest = cache_root / file_name
+    logger.info("Selected storage path: %s", dest)
+    logger.info("Checking model file: %s", dest)
+    if dest.exists() and dest.stat().st_size > 0:
+        logger.info("Model already exists locally: %s", dest)
         return dest
-    dest.write_bytes(cached.read_bytes())
-    return dest
+
+    try:
+        cached = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=path_in_repo,
+                repo_type=repo_type,
+                token=settings.hf_token or None,
+                cache_dir=str(settings.hf_cache_dir),
+            )
+        )
+    except Exception:
+        logger.exception("Model download failed with full error: %s/%s", repo_id, path_in_repo)
+        raise
+
+    if cached.exists():
+        if cached.resolve() != dest.resolve():
+            dest.write_bytes(cached.read_bytes())
+        logger.info("Model download completed: %s", dest)
+        return dest
+
+    raise RuntimeError(f"HF download returned no file for {repo_id}/{path_in_repo}")
 
 
 def download_bytes(repo_id: str, path_in_repo: str, *, repo_type: str) -> bytes:

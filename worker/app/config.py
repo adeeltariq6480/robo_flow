@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,6 +50,10 @@ class Settings(BaseSettings):
     )
     hf_model_repo: str = Field(
         default="", validation_alias=AliasChoices("HF_MODEL_REPO")
+    )
+    railway_volume_mount_path: str = Field(
+        default="",
+        validation_alias=AliasChoices("RAILWAY_VOLUME_MOUNT_PATH"),
     )
 
     # --- Server ---
@@ -118,6 +125,10 @@ class Settings(BaseSettings):
             "UPLOAD_DB_WORKERS", "UPLOAD_FIRESTORE_WORKERS"
         ),
     )
+    hf_hub_disable_xet: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("HF_HUB_DISABLE_XET"),
+    )
 
     @property
     def supabase_configured(self) -> bool:
@@ -151,5 +162,33 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    @property
+    def storage_base_path(self) -> Path:
+        base = self.railway_volume_mount_path.strip() or "/tmp"
+        return Path(base)
+
+    @property
+    def model_files_dir(self) -> Path:
+        return self.storage_base_path / "models"
+
+    @property
+    def hf_cache_dir(self) -> Path:
+        return self.storage_base_path / "huggingface"
+
+    @property
+    def torch_home_dir(self) -> Path:
+        return self.storage_base_path / "torch"
+
+    @property
+    def transformers_cache_dir(self) -> Path:
+        return self.storage_base_path / "transformers"
+
 
 settings = Settings()
+
+os.environ.setdefault("HF_HOME", str(settings.hf_cache_dir))
+os.environ.setdefault("HF_HUB_CACHE", str(settings.hf_cache_dir / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(settings.transformers_cache_dir))
+os.environ.setdefault("TORCH_HOME", str(settings.torch_home_dir))
+if settings.hf_hub_disable_xet:
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")

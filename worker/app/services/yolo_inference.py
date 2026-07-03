@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -8,22 +9,36 @@ from app.models.schemas import DetectionBox, InferenceResult, JobConfig
 logger = logging.getLogger(__name__)
 
 _yolo_models: dict[str, object] = {}
+_yolo_lock = threading.Lock()
 
 
-def _get_yolo(model_path: Path):
+def get_model(model_path: Path):
     """Load and cache a YOLO model by path."""
     key = str(model_path.resolve())
-    if key not in _yolo_models:
+    if key in _yolo_models:
+        return _yolo_models[key]
+
+    with _yolo_lock:
+        if key in _yolo_models:
+            return _yolo_models[key]
+
         try:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError(
                 "ultralytics is not installed. Run: pip install ultralytics"
             ) from exc
-        logger.info("Loading YOLO weights from %s (CPU — may take 1–3 min)…", model_path)
+
+        logger.info("Model loading started: %s", model_path)
         started = time.perf_counter()
-        _yolo_models[key] = YOLO(str(model_path))
-        logger.info("YOLO loaded in %.1fs", time.perf_counter() - started)
+        try:
+            model = YOLO(str(model_path))
+        except Exception as exc:
+            logger.exception("Model loading failed with full error: %s", model_path)
+            raise RuntimeError(f"Model loading failed for {model_path}: {exc}") from exc
+
+        _yolo_models[key] = model
+        logger.info("Model loaded successfully in %.1fs: %s", time.perf_counter() - started, model_path)
     return _yolo_models[key]
 
 
@@ -31,7 +46,7 @@ def prewarm_yolo(model_path: Path) -> None:
     """Load model into memory so the UI can show progress before the first image."""
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
-    _get_yolo(model_path)
+    get_model(model_path)
 
 
 def run_yolo_inference(
@@ -47,7 +62,7 @@ def run_yolo_inference(
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    model = _get_yolo(model_path)
+    model = get_model(model_path)
     start = time.perf_counter()
 
     results = model.predict(
@@ -102,3 +117,16 @@ def unload_model(model_path: Path) -> None:
     if key in _yolo_models:
         logger.info("Unloading YOLO model %s", model_path.name)
     _yolo_models.pop(key, None)
+
+
+def is_model_loaded(model_path: Path) -> bool:
+    return str(model_path.resolve()) in _yolo_models
+
+
+def describe_model_status(model_path: Path) -> dict:
+    model_file_exists = model_path.exists()
+    return {
+        "model_loaded": is_model_loaded(model_path),
+        "model_file_exists": model_file_exists,
+        "model_path": str(model_path),
+    }

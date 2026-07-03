@@ -1,6 +1,7 @@
 """Resolve model/image files by downloading them from Hugging Face Hub."""
 
 import logging
+import threading
 from pathlib import Path
 
 from app.services import hf_storage as file_storage
@@ -11,6 +12,7 @@ from app.services.supabase_repo import (
 )
 
 logger = logging.getLogger(__name__)
+_MODEL_DOWNLOAD_LOCK = threading.Lock()
 
 
 def download_model(model_id: str, project_id: str) -> Path:
@@ -21,13 +23,47 @@ def download_model(model_id: str, project_id: str) -> Path:
     path = row.get("hfPath")
     if not repo or not path:
         raise ValueError(f"Model {model_id} has no storage location")
-    logger.info("Downloading model %s from %s/%s", model_id, repo, path)
-    return file_storage.download_to_local(
-        repo,
-        path,
-        repo_type=file_storage.REPO_TYPE_MODEL,
-        local_name=file_storage.model_cache_local_name_from_path(path),
-    )
+    local_name = file_storage.model_cache_local_name_from_path(path)
+    target_path = file_storage.model_local_cache_path(local_name)
+    with _MODEL_DOWNLOAD_LOCK:
+        logger.info(
+            "Model download selected storage path project=%s model=%s repo=%s path=%s local=%s",
+            project_id,
+            model_id,
+            repo,
+            path,
+            target_path,
+        )
+        logger.info("Checking model file: %s", target_path)
+        if target_path.exists() and target_path.stat().st_size > 0:
+            logger.info("Model already exists locally: %s", target_path)
+            return target_path
+
+        logger.info("Model download started: %s", target_path)
+        try:
+            downloaded = file_storage.download_to_local(
+                repo,
+                path,
+                repo_type=file_storage.REPO_TYPE_MODEL,
+                local_name=local_name,
+            )
+        except Exception as exc:
+            logger.exception("Model download failed with full error for %s", model_id)
+            raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
+
+        logger.info("Model download completed: %s", downloaded)
+        return downloaded
+
+
+def resolve_model_local_path(model_id: str, project_id: str) -> Path:
+    row = get_model(project_id, model_id)
+    if not row:
+        raise ValueError(f"Model {model_id} not found in project {project_id}")
+    path = row.get("hfPath")
+    if not path:
+        raise ValueError(f"Model {model_id} has no storage location")
+    local_name = file_storage.model_cache_local_name_from_path(path)
+    return file_storage.model_local_cache_path(local_name)
 
 
 def download_image(repo: str, path: str, image_id: str) -> Path:
