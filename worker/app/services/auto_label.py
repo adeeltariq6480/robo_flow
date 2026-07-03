@@ -146,26 +146,35 @@ async def run_auto_label(
             return base
         return int(base + (step_index / step_total) * 55)
 
+    async def safe_update_job(**fields) -> None:
+        try:
+            await update_job(job_id, project_id=project_id, **fields)
+        except Exception as exc:
+            logger.warning("Job progress update failed for %s: %s", job_id, exc)
+
     async def run_with_heartbeat(
         func,
         *args,
         progress: int,
         message: str,
+        timeout_seconds: int = 900,
+        heartbeat_seconds: int = 30,
     ):
         task = asyncio.create_task(asyncio.to_thread(func, *args))
         elapsed = 0
         while not task.done():
-            done, _ = await asyncio.wait({task}, timeout=60)
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
             if done:
                 break
-            elapsed += 60
-            heartbeat_progress = min(progress + max(1, elapsed // 60), 84)
-            await update_job(
-                job_id,
+            elapsed += heartbeat_seconds
+            if elapsed >= timeout_seconds:
+                task.cancel()
+                raise TimeoutError(f"{message} timed out after {timeout_seconds}s")
+            heartbeat_progress = min(progress + max(1, elapsed // heartbeat_seconds), 84)
+            await safe_update_job(
                 progress=heartbeat_progress,
                 progress_message=f"{message} ({elapsed}s)",
                 processed_items=done_units,
-                project_id=project_id,
             )
         return await task
 
@@ -201,7 +210,10 @@ async def run_auto_label(
         await update_job(
             job_id,
             progress=_prep_progress(mi),
-            progress_message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
+            progress_message=(
+                f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face "
+                "(cache-first, max 10 min)..."
+            ),
             processed_items=done_units,
             project_id=project_id,
         )
@@ -213,6 +225,8 @@ async def run_auto_label(
                 project_id,
                 progress=_prep_progress(mi),
                 message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face",
+                timeout_seconds=600,
+                heartbeat_seconds=30,
             )
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
@@ -237,6 +251,8 @@ async def run_auto_label(
                 model_path,
                 progress=_prep_progress(mi) + 5,
                 message=f"Model {mi + 1}/{num_models}: loading YOLO into memory",
+                timeout_seconds=600,
+                heartbeat_seconds=30,
             )
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
