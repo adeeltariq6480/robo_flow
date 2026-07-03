@@ -50,8 +50,8 @@ Health check should return:
 | Variable | Value |
 |----------|--------|
 | `NEXT_PUBLIC_WORKER_API_URL` | Railway public URL |
-| `NEXT_PUBLIC_SUPABASE_URL` | Same Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon / publishable key (for large model uploads direct to Storage) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (required for models over 25 MB) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon / publishable key |
 | `WORKER_API_KEY` | same as Railway (or empty) |
 
 Redeploy frontend.

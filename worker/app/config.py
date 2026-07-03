@@ -9,7 +9,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Supabase (Postgres metadata + Storage) ---
+    # --- Supabase (Postgres metadata only) ---
     supabase_url: str = Field(
         default="",
         validation_alias=AliasChoices(
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
     )
 
-    # --- Legacy Hugging Face (optional — superseded by Supabase Storage) ---
+    # --- Hugging Face Hub (binary file storage) ---
     hf_token: str = Field(default="", validation_alias=AliasChoices("HF_TOKEN"))
     hf_username: str = Field(default="", validation_alias=AliasChoices("HF_USERNAME"))
     hf_dataset_repo: str = Field(
@@ -122,6 +122,14 @@ class Settings(BaseSettings):
     @property
     def supabase_configured(self) -> bool:
         return bool(self.supabase_url.strip() and self.supabase_service_role_key.strip())
+
+    @property
+    def hf_configured(self) -> bool:
+        return bool(
+            self.hf_token.strip()
+            and self.dataset_repo_id
+            and self.model_repo_id
+        )
 
     @property
     def dataset_repo_id(self) -> str:

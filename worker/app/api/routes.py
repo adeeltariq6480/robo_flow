@@ -39,9 +39,9 @@ from app.models.schemas import (
     ReviewAction,
     TestRunRequest,
 )
-from app.services import export_builder, image_preprocess
+from app.services import export_builder, hf_storage as file_storage, image_preprocess
 from app.services import supabase_repo as repo
-from app.services import supabase_storage as file_storage
+from app.services import model_chunk_upload
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,17 @@ async def db(fn, /, *args, **kwargs):
 
 
 def _check_upload_config() -> None:
-    """Fail fast with a clear message when Railway env is incomplete."""
+    """Fail fast when Supabase (metadata) or Hugging Face (files) is not configured."""
     missing: list[str] = []
     if not settings.supabase_configured:
         missing.append("SUPABASE_URL")
         missing.append("SUPABASE_SERVICE_ROLE_KEY")
+    if not settings.hf_token:
+        missing.append("HF_TOKEN")
+    if not settings.dataset_repo_id:
+        missing.append("HF_DATASET_REPO (or HF_USERNAME)")
+    if not settings.model_repo_id:
+        missing.append("HF_MODEL_REPO (or HF_USERNAME)")
     if missing:
         raise HTTPException(
             status_code=503,
@@ -351,7 +357,7 @@ async def delete_images(
 
 
 # ===========================================================================
-# Uploads → Supabase Storage
+# Uploads → Hugging Face Hub (metadata in Supabase Postgres)
 # ===========================================================================
 
 @api_router.post("/upload-images")
@@ -566,6 +572,7 @@ async def upload_zip(
     file: UploadFile = File(...),
     _: None = Depends(verify_api_key),
 ):
+    _check_upload_config()
     raw = await file.read()
     file_storage.upload_dataset_zip(project_id, dataset_id, file.filename, raw)
 
@@ -681,7 +688,8 @@ async def upload_model(
     file: UploadFile = File(...),
     _: None = Depends(verify_api_key),
 ):
-    """Legacy path: file through worker. Prefer /api/models/register + direct storage."""
+    """Upload model file via worker → Hugging Face Hub + DB record."""
+    _check_upload_config()
     data = await file.read()
     loc = await asyncio.to_thread(
         file_storage.upload_model_file, project_id, file.filename, data
@@ -700,7 +708,7 @@ async def upload_model(
 
 @api_router.post("/register-model")
 async def register_model(body: ModelRegister, _: None = Depends(verify_api_key)):
-    """Register model metadata after browser uploaded file to Supabase Storage."""
+    """Register model metadata when the file already exists on Hugging Face Hub."""
     if not body.hf_path.strip():
         raise HTTPException(status_code=400, detail="hf_path is required")
     return await asyncio.to_thread(
@@ -711,11 +719,78 @@ async def register_model(body: ModelRegister, _: None = Depends(verify_api_key))
             "modelVersion": body.model_version,
             "modelType": body.model_type,
             "description": body.description,
-            "hfRepo": body.hf_repo or "models",
+            "hfRepo": body.hf_repo or settings.model_repo_id,
             "hfPath": body.hf_path,
             "fileSize": body.file_size,
         },
     )
+
+
+@api_router.post("/upload-model/init")
+async def upload_model_init(
+    project_id: str = Form(...),
+    file_name: str = Form(...),
+    total_chunks: int = Form(...),
+    file_size: int = Form(...),
+    model_name: str = Form(...),
+    model_version: str = Form("1.0.0"),
+    model_type: str = Form("pytorch"),
+    description: str = Form(""),
+    _: None = Depends(verify_api_key),
+):
+    """Start a chunked model upload session (for large .pt files)."""
+    _check_upload_config()
+    try:
+        session_id = await asyncio.to_thread(
+            model_chunk_upload.init_session,
+            project_id,
+            file_name,
+            total_chunks,
+            model_name=model_name,
+            model_version=model_version,
+            model_type=model_type,
+            description=description or None,
+            file_size=file_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"sessionId": session_id}
+
+
+@api_router.post("/upload-model/chunk")
+async def upload_model_chunk(
+    session_id: str = Form(...),
+    chunk_index: int = Form(...),
+    chunk: UploadFile = File(...),
+    _: None = Depends(verify_api_key),
+):
+    _check_upload_config()
+    data = await chunk.read()
+    try:
+        await asyncio.to_thread(
+            model_chunk_upload.save_chunk, session_id, chunk_index, data
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "chunkIndex": chunk_index}
+
+
+@api_router.post("/upload-model/finish")
+async def upload_model_finish(
+    session_id: str = Form(...),
+    _: None = Depends(verify_api_key),
+):
+    _check_upload_config()
+    try:
+        model = await asyncio.to_thread(model_chunk_upload.finalize_session, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Chunked model upload failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return model
 
 
 @api_router.get("/models/{project_id}")
@@ -730,7 +805,7 @@ async def delete_model(project_id: str, model_id: str, _: None = Depends(verify_
 
 
 # ===========================================================================
-# Image content proxy (Supabase Storage)
+# Image content proxy (Hugging Face Hub)
 # ===========================================================================
 
 @api_router.get("/images/{project_id}/{image_id}/content")
@@ -918,11 +993,12 @@ async def reject_image(body: ReviewAction, _: None = Depends(verify_api_key)):
 
 
 # ===========================================================================
-# Export → Supabase Storage
+# Export → Hugging Face Hub
 # ===========================================================================
 
 @api_router.post("/export")
 async def export(body: ExportRequest, _: None = Depends(verify_api_key)):
+    _check_upload_config()
     export_job_id = repo.create_export_job(body.project_id, body.export_format)
     try:
         zip_bytes, file_name = await asyncio.to_thread(

@@ -13,9 +13,7 @@ export function getSupabaseAnonKey(): string {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!key) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY is not set in .env.local"
-    );
+    throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not set in .env.local");
   }
   return key;
 }

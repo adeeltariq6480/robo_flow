@@ -1,9 +1,9 @@
-"""Resolve model/image files by downloading them from Supabase Storage."""
+"""Resolve model/image files by downloading them from Hugging Face Hub."""
 
 import logging
 from pathlib import Path
 
-from app.services import supabase_storage as file_storage
+from app.services import hf_storage as file_storage
 from app.services.supabase_repo import (
     get_image,
     get_model,

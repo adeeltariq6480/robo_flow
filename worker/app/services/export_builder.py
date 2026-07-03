@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
 
-from app.services import supabase_repo, supabase_storage
+from app.services import hf_storage, supabase_repo
 
 
 def _class_index_map(project_id: str) -> dict[str, int]:
@@ -31,8 +31,8 @@ def _image_bytes(img: dict) -> bytes:
         raise ValueError(
             f"Image {img.get('fileName', img.get('id'))} has no Hugging Face location"
         )
-    return supabase_storage.download_bytes(
-        repo, path, repo_type=supabase_storage.REPO_TYPE_DATASET
+    return hf_storage.download_bytes(
+        repo, path, repo_type=hf_storage.REPO_TYPE_DATASET
     )
 
 

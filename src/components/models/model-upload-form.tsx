@@ -192,7 +192,7 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
             progressSublabel={`${progress}% complete`}
             accept=".onnx,.pt,.pth,.pb,.h5,.tflite"
             hint="Click or drag & drop model files"
-            subhint="Select multiple files — up to 500 MB each"
+            subhint="Files over 25 MB upload directly to storage; smaller files go through the worker"
           />
 
           {queue.length > 0 && (

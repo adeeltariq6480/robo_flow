@@ -1,11 +1,8 @@
 import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/env";
 
-const MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const LARGE_UPLOAD_TIMEOUT_MS = 45 * 60 * 1000;
 
-/**
- * Upload a large file directly to Supabase Storage (bypasses Railway body limits).
- * Uses the Storage REST API with XHR for upload progress.
- */
+/** Upload directly to Supabase Storage (for files too large for Railway proxy). */
 export function uploadFileToSupabaseStorage(
   bucket: string,
   objectPath: string,
@@ -23,7 +20,7 @@ export function uploadFileToSupabaseStorage(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
-    xhr.timeout = MODEL_UPLOAD_TIMEOUT_MS;
+    xhr.timeout = LARGE_UPLOAD_TIMEOUT_MS;
     xhr.setRequestHeader("Authorization", `Bearer ${apiKey}`);
     xhr.setRequestHeader("apikey", apiKey);
     xhr.setRequestHeader(
@@ -59,12 +56,12 @@ export function uploadFileToSupabaseStorage(
     xhr.onerror = () =>
       reject(
         new Error(
-          "Connection lost while uploading to storage. Check your network or try a smaller file."
+          "Connection lost while uploading to storage. Check network or Supabase storage policy."
         )
       );
 
     xhr.ontimeout = () =>
-      reject(new Error("Model upload timed out — try again on a faster connection."));
+      reject(new Error("Upload timed out — try again on a stable connection."));
 
     xhr.send(file);
   });

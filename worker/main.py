@@ -20,6 +20,10 @@ async def lifespan(app: FastAPI):
     await queue_manager.start()
     if not settings.supabase_configured:
         logger.warning("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — API will fail")
+    if not settings.hf_configured:
+        logger.warning(
+            "HF_TOKEN / HF_DATASET_REPO / HF_MODEL_REPO not set — uploads will fail"
+        )
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
     await queue_manager.stop()
@@ -28,7 +32,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Axiom AI API",
-    description="Axiom AI backend: Supabase metadata + storage, YOLO auto-labelling",
+    description="Axiom AI backend: Supabase metadata + Hugging Face file storage",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -69,5 +73,8 @@ async def health():
         "queues": queue_manager.queue_stats(),
         "config": {
             "supabase": settings.supabase_configured,
+            "huggingface": settings.hf_configured,
+            "dataset_repo": settings.dataset_repo_id or None,
+            "model_repo": settings.model_repo_id or None,
         },
     }

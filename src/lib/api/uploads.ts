@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * Browser → FastAPI multipart uploads. Files are sent to the backend, which
- * stores them in Hugging Face Hub and records metadata in Firestore.
+ * Browser → FastAPI multipart uploads. Files go to Hugging Face Hub;
+ * metadata is stored in Supabase Postgres via the worker.
  */
 
-import { API_BASE_URL, api } from "@/lib/api/client";
-import {
-  modelStoragePath,
-  uploadFileToSupabaseStorage,
-} from "@/lib/supabase/storage-upload";
+import { API_BASE_URL } from "@/lib/api/client";
+
+/** Small models: single request to worker. Larger: chunked upload → HF. */
+const MODEL_WORKER_MAX_BYTES = 25 * 1024 * 1024;
+const MODEL_CHUNK_SIZE = 8 * 1024 * 1024;
 
 /** Stay under Railway/proxy body limits (~15–25 MB per request). */
 const MAX_BATCH_BYTES = 15 * 1024 * 1024;
@@ -17,6 +17,8 @@ const MAX_BATCH_BYTES = 15 * 1024 * 1024;
 const MAX_BATCH_FILES = 20;
 const UPLOAD_MAX_RETRIES = 2;
 const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+/** YOLO .pt files can be large — allow longer worker upload time. */
+const MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,12 +73,13 @@ function isRateLimitError(message: string) {
 function uploadForm<T>(
   path: string,
   form: FormData,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  timeoutMs = UPLOAD_TIMEOUT_MS
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE_URL}${path}`);
-    xhr.timeout = UPLOAD_TIMEOUT_MS;
+    xhr.timeout = timeoutMs;
 
     xhr.upload.onprogress = (e) => {
       if (onProgress && e.lengthComputable) {
@@ -289,6 +292,69 @@ export function uploadZip(
   return uploadForm("/api/upload-zip", form, onProgress);
 }
 
+async function uploadModelChunked(
+  projectId: string,
+  data: {
+    file: File;
+    modelName: string;
+    modelVersion: string;
+    modelType: string;
+    description?: string;
+  },
+  onProgress?: (percent: number) => void
+): Promise<{ id: string; modelName: string }> {
+  const totalChunks = Math.ceil(data.file.size / MODEL_CHUNK_SIZE);
+  const initForm = new FormData();
+  initForm.append("project_id", projectId);
+  initForm.append("file_name", data.file.name);
+  initForm.append("total_chunks", String(totalChunks));
+  initForm.append("file_size", String(data.file.size));
+  initForm.append("model_name", data.modelName);
+  initForm.append("model_version", data.modelVersion);
+  initForm.append("model_type", data.modelType);
+  initForm.append("description", data.description ?? "");
+
+  const { sessionId } = await uploadForm<{ sessionId: string }>(
+    "/api/upload-model/init",
+    initForm,
+    undefined,
+    MODEL_UPLOAD_TIMEOUT_MS
+  );
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * MODEL_CHUNK_SIZE;
+    const end = Math.min(start + MODEL_CHUNK_SIZE, data.file.size);
+    const blob = data.file.slice(start, end);
+    const chunkForm = new FormData();
+    chunkForm.append("session_id", sessionId);
+    chunkForm.append("chunk_index", String(i));
+    chunkForm.append("chunk", blob, data.file.name);
+
+    await uploadForm(
+      "/api/upload-model/chunk",
+      chunkForm,
+      onProgress
+        ? (pct) => {
+            const overall = ((i + pct / 100) / totalChunks) * 95;
+            onProgress(Math.round(overall));
+          }
+        : undefined,
+      MODEL_UPLOAD_TIMEOUT_MS
+    );
+  }
+
+  const finishForm = new FormData();
+  finishForm.append("session_id", sessionId);
+  const model = await uploadForm<{ id: string; modelName: string }>(
+    "/api/upload-model/finish",
+    finishForm,
+    onProgress ? () => onProgress(99) : undefined,
+    MODEL_UPLOAD_TIMEOUT_MS
+  );
+  onProgress?.(100);
+  return model;
+}
+
 export async function uploadModel(
   projectId: string,
   data: {
@@ -300,29 +366,21 @@ export async function uploadModel(
   },
   onProgress?: (percent: number) => void
 ): Promise<{ id: string; modelName: string }> {
-  const storagePath = modelStoragePath(projectId, data.file.name);
+  if (data.file.size <= MODEL_WORKER_MAX_BYTES) {
+    const form = new FormData();
+    form.append("project_id", projectId);
+    form.append("model_name", data.modelName);
+    form.append("model_version", data.modelVersion);
+    form.append("model_type", data.modelType);
+    form.append("description", data.description ?? "");
+    form.append("file", data.file);
+    return uploadForm(
+      "/api/upload-model",
+      form,
+      onProgress,
+      MODEL_UPLOAD_TIMEOUT_MS
+    );
+  }
 
-  await uploadFileToSupabaseStorage(
-    "models",
-    storagePath,
-    data.file,
-    onProgress ? (pct) => onProgress(Math.round(pct * 0.92)) : undefined
-  );
-
-  const model = await api.post<{ id: string; modelName: string }>(
-    "/api/register-model",
-    {
-      project_id: projectId,
-      model_name: data.modelName,
-      model_version: data.modelVersion,
-      model_type: data.modelType,
-      description: data.description ?? null,
-      hf_repo: "models",
-      hf_path: storagePath,
-      file_size: data.file.size,
-    }
-  );
-
-  onProgress?.(100);
-  return model;
+  return uploadModelChunked(projectId, data, onProgress);
 }
