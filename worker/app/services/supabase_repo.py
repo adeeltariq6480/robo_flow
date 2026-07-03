@@ -479,23 +479,37 @@ def _delete_image_annotations(project_id: str, image_id: str) -> None:
 
 
 def delete_images(project_id: str, dataset_id: str, image_ids: list[str]) -> None:
+    images: list[dict] = []
     for image_id in image_ids:
         img = get_image(project_id, image_id)
-        if not img or img.get("datasetId") != dataset_id:
-            continue
-        _delete_image_annotations(project_id, image_id)
+        if img and img.get("datasetId") == dataset_id:
+            images.append(img)
+
+    if not images:
+        return
+
+    for img in images:
+        _delete_image_annotations(project_id, img["id"])
+
+    paths_by_repo: dict[str, list[str]] = {}
+    for img in images:
         repo_id = img.get("hfRepo")
         path_in_repo = img.get("hfPath")
         if repo_id and path_in_repo:
-            try:
-                file_storage.delete_from_repo(
-                    repo_id,
-                    path_in_repo,
-                    repo_type=file_storage.REPO_TYPE_DATASET,
-                )
-            except Exception as exc:
-                logger.warning("HF image delete failed %s: %s", image_id, exc)
-        _sb().table("images").delete().eq("id", image_id).execute()
+            paths_by_repo.setdefault(repo_id, []).append(path_in_repo)
+
+    for repo_id, paths in paths_by_repo.items():
+        try:
+            file_storage.delete_paths_from_repo(
+                repo_id,
+                paths,
+                repo_type=file_storage.REPO_TYPE_DATASET,
+                commit_message=f"Delete {len(paths)} dataset images",
+            )
+        except Exception as exc:
+            logger.warning("HF bulk image delete failed for %d paths: %s", len(paths), exc)
+
+    _sb().table("images").delete().in_("id", [img["id"] for img in images]).execute()
     recount_dataset_images(project_id, dataset_id)
 
 
@@ -503,19 +517,28 @@ def delete_dataset(project_id: str, dataset_id: str) -> None:
     imgs = list_dataset_images(project_id, dataset_id)
     for img in imgs:
         _delete_image_annotations(project_id, img["id"])
+
+    paths_by_repo: dict[str, list[str]] = {}
+    for img in imgs:
         repo_id = img.get("hfRepo")
         path_in_repo = img.get("hfPath")
         if repo_id and path_in_repo:
-            try:
-                file_storage.delete_from_repo(
-                    repo_id,
-                    path_in_repo,
-                    repo_type=file_storage.REPO_TYPE_DATASET,
-                )
-            except Exception as exc:
-                logger.warning("HF dataset image delete failed %s: %s", img["id"], exc)
+            paths_by_repo.setdefault(repo_id, []).append(path_in_repo)
+
+    for repo_id, paths in paths_by_repo.items():
+        try:
+            file_storage.delete_paths_from_repo(
+                repo_id,
+                paths,
+                repo_type=file_storage.REPO_TYPE_DATASET,
+                commit_message=f"Delete dataset {dataset_id} images",
+            )
+        except Exception as exc:
+            logger.warning("HF bulk dataset image delete failed for %d paths: %s", len(paths), exc)
+
     _sb().table("images").delete().eq("dataset_id", dataset_id).execute()
     _sb().table("datasets").delete().eq("id", dataset_id).eq("project_id", project_id).execute()
+
 
 
 def dataset_review_files(project_id: str, dataset_id: str) -> list[dict]:

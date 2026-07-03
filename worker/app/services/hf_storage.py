@@ -18,7 +18,7 @@ import threading
 from functools import lru_cache
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
 from app.config import settings
@@ -290,3 +290,38 @@ def delete_from_repo(repo_id: str, path_in_repo: str, *, repo_type: str) -> None
             logger.info("HF file already missing at %s — skipping delete", path_in_repo)
             return
         raise
+
+
+def delete_paths_from_repo(
+    repo_id: str,
+    paths_in_repo: list[str],
+    *,
+    repo_type: str,
+    commit_message: str | None = None,
+) -> None:
+    """Delete many repo paths in one HF commit."""
+    paths = sorted({p for p in paths_in_repo if p})
+    if not paths:
+        return
+
+    logger.debug("HF bulk delete %s (%s) %d paths", repo_id, repo_type, len(paths))
+    operations = [CommitOperationDelete(path_in_repo=path) for path in paths]
+    with _hf_commit_lock:
+        try:
+            _api().create_commit(
+                repo_id=repo_id,
+                repo_type=repo_type,
+                operations=operations,
+                commit_message=commit_message or f"Delete {len(paths)} files",
+            )
+        except HfHubHTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise RuntimeError(
+                    "Hugging Face commit rate limit reached. "
+                    "Wait about 1 hour before retrying deletes."
+                ) from exc
+            detail = str(exc).lower()
+            if "no files have been modified" in detail or "empty commit" in detail:
+                logger.info("HF bulk delete found no modified files")
+                return
+            raise

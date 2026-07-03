@@ -574,8 +574,6 @@ async def upload_zip(
 ):
     _check_upload_config()
     raw = await file.read()
-    file_storage.upload_dataset_zip(project_id, dataset_id, file.filename, raw)
-
     created: list[dict] = []
     skipped: list[dict] = []
     adjusted: list[dict] = []
