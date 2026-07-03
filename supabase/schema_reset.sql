@@ -113,6 +113,8 @@ create table public.images (
 create index idx_images_dataset on public.images (dataset_id);
 create index idx_images_project on public.images (project_id);
 create index idx_images_queue on public.images (project_id, queue_type);
+create unique index idx_images_unique_dataset_hf_path
+  on public.images (project_id, dataset_id, hf_path);
 
 create table public.models (
   id             uuid primary key default gen_random_uuid(),

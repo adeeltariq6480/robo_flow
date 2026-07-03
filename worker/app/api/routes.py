@@ -419,6 +419,7 @@ async def upload_images(
         if not session_id:
             session_id = uuid4().hex
 
+        wait_for_session = False
         with _upload_sessions_lock:
             session = _upload_sessions.get(session_id)
             if session is None:
@@ -429,6 +430,7 @@ async def upload_images(
                     "dir": session_dir,
                     "items": [],
                     "used_names": set(),
+                    "finalizing": False,
                 }
                 _upload_sessions[session_id] = session
             elif (
@@ -436,20 +438,37 @@ async def upload_images(
                 or session["dataset_id"] != dataset_id
             ):
                 raise HTTPException(status_code=400, detail="Invalid upload session context")
+            elif session.get("finalized_result") is not None:
+                return session["finalized_result"]
+            elif session.get("finalizing"):
+                wait_for_session = True
 
-        for filename, result, content_type in ready:
-            stored_name = _safe_local_name(filename, session["used_names"])
-            local_path = Path(session["dir"]) / stored_name
-            local_path.write_bytes(result.data)
-            session["items"].append(
-                {
-                    "stored_name": stored_name,
-                    "width": result.width,
-                    "height": result.height,
-                    "mime_type": result.mime_type or content_type,
-                    "file_size": len(result.data),
-                }
-            )
+            if not wait_for_session:
+                for filename, result, content_type in ready:
+                    stored_name = _safe_local_name(filename, session["used_names"])
+                    local_path = Path(session["dir"]) / stored_name
+                    local_path.write_bytes(result.data)
+                    session["items"].append(
+                        {
+                            "stored_name": stored_name,
+                            "width": result.width,
+                            "height": result.height,
+                            "mime_type": result.mime_type or content_type,
+                            "file_size": len(result.data),
+                        }
+                    )
+                if finalize_session:
+                    session["finalizing"] = True
+
+        if wait_for_session:
+            for _ in range(600):
+                with _upload_sessions_lock:
+                    if session.get("finalized_result") is not None:
+                        return session["finalized_result"]
+                    if session.get("finalize_error"):
+                        raise HTTPException(status_code=500, detail=session["finalize_error"])
+                await asyncio.sleep(0.5)
+            raise HTTPException(status_code=409, detail="Upload finalization is still running")
 
         if not finalize_session:
             return {
@@ -471,9 +490,15 @@ async def upload_images(
             )
         except RuntimeError as exc:
             logger.exception("HF deferred session upload failed")
+            with _upload_sessions_lock:
+                session["finalizing"] = False
+                session["finalize_error"] = str(exc)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("HF deferred session upload failed")
+            with _upload_sessions_lock:
+                session["finalizing"] = False
+                session["finalize_error"] = str(exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         hf_repo = hf_info["hfRepo"]
@@ -505,11 +530,12 @@ async def upload_images(
         for record in records:
             if isinstance(record, Exception):
                 logger.exception("DB image record failed (deferred)")
+                with _upload_sessions_lock:
+                    session["finalizing"] = False
+                    session["finalize_error"] = str(record)
                 raise HTTPException(status_code=500, detail=str(record)) from record
             created.append(record)
 
-        with _upload_sessions_lock:
-            _upload_sessions.pop(session_id, None)
         shutil.rmtree(session["dir"], ignore_errors=True)
     elif ready:
         hf_items = [(filename, result.data) for filename, result, _ in ready]
@@ -557,12 +583,17 @@ async def upload_images(
             created.append(record)
 
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
-    return {
+    result_payload = {
         "uploaded": len(created),
         "images": created,
         "skipped": skipped,
         "adjusted": adjusted,
     }
+    if upload_session_id and finalize_session:
+        with _upload_sessions_lock:
+            session["finalizing"] = False
+            session["finalized_result"] = result_payload
+    return result_payload
 
 
 @api_router.post("/upload-zip")
@@ -845,10 +876,11 @@ async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key
 async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api_key)):
     total = repo.count_dataset_images(body.project_id, body.dataset_id)
     model_ids = body.resolved_model_ids()
+    total_work_items = total * max(len(model_ids), 1)
     job_id, queue, position = await submit_job(
         body.project_id, JobType.AUTO_LABEL,
         model_id=model_ids[0], model_ids=model_ids,
-        dataset_id=body.dataset_id, config=body.config, total_items=total,
+        dataset_id=body.dataset_id, config=body.config, total_items=total_work_items,
         input_payload={"model_ids": model_ids},
     )
     return JobCreateResponse(

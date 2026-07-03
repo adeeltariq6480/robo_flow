@@ -12,7 +12,7 @@ interface JobProgressProps {
   onComplete?: (job: JobResponse) => void;
 }
 
-const POLL_MS = 2000;
+const POLL_MS = 8000;
 const MAX_POLL_ERRORS = 15;
 
 export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) {

@@ -94,6 +94,8 @@ create table if not exists public.images (
 create index if not exists idx_images_dataset on public.images (dataset_id);
 create index if not exists idx_images_project on public.images (project_id);
 create index if not exists idx_images_queue on public.images (project_id, queue_type);
+create unique index if not exists idx_images_unique_dataset_hf_path
+  on public.images (project_id, dataset_id, hf_path);
 
 -- ---------------------------------------------------------------------------
 -- Models
