@@ -131,6 +131,7 @@ export function AnnotationEditorClient({
         onSave={(boxes) => persist(boxes, "save")}
         onApprove={(boxes) => persist(boxes, "approve")}
         onReject={(boxes) => persist(boxes, "reject")}
+        onCancel={() => router.back()}
         onPrev={() => navigateTo(prevFileId)}
         onNext={() => navigateTo(nextFileId)}
         hasPrev={!!prevFileId}

@@ -79,7 +79,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
       setSelected(new Set());
       router.refresh();
       setToast({ open: true, message: "Datasets deleted", type: "success" });
-      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
+      setTimeout(() => {
+        setToast((t) => ({ ...t, open: false }));
+        window.location.reload();
+      }, 2200);
     }
     setLoading(false);
     setDeleteStatus(false);
@@ -95,7 +98,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
       setSelected(new Set());
       router.refresh();
       setToast({ open: true, message: "All datasets deleted", type: "success" });
-      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
+      setTimeout(() => {
+        setToast((t) => ({ ...t, open: false }));
+        window.location.reload();
+      }, 2200);
     }
     setLoading(false);
     setDeleteStatus(false);
@@ -115,7 +121,10 @@ export function DatasetsPageClient({ projectId, datasets, hasModels }: DatasetsP
       });
       router.refresh();
       setToast({ open: true, message: "Dataset deleted", type: "success" });
-      setTimeout(() => setToast((t) => ({ ...t, open: false })), 2200);
+      setTimeout(() => {
+        setToast((t) => ({ ...t, open: false }));
+        window.location.reload();
+      }, 2200);
     }
     setLoading(false);
     setDeleteStatus(false);

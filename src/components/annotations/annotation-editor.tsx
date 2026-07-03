@@ -22,6 +22,8 @@ import {
   Square,
   Trash2,
   X,
+  RotateCcw,
+  Play,
 } from "lucide-react";
 
 type EditorMode = "select" | "draw";
@@ -35,6 +37,7 @@ interface AnnotationEditorProps {
   onSave: (boxes: AnnotationBox[]) => void;
   onApprove: (boxes: AnnotationBox[]) => void;
   onReject: (boxes: AnnotationBox[]) => void;
+  onCancel?: () => void;
   onPrev?: () => void;
   onNext?: () => void;
   hasPrev?: boolean;
@@ -64,6 +67,7 @@ export function AnnotationEditor({
   onSave,
   onApprove,
   onReject,
+  onCancel,
   onPrev,
   onNext,
   hasPrev,
@@ -515,6 +519,26 @@ export function AnnotationEditor({
           >
             {!saving && <X className="h-4 w-4" />}
             {saving ? "Saving…" : "Reject"}
+          </Button>
+        </div>
+
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            onClick={onCancel}
+            className="flex-1 !border-slate-300 !text-slate-700 hover:!bg-slate-50"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Cancel
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={onNext}
+            disabled={!hasNext}
+            className="flex-1"
+          >
+            <Play className="h-4 w-4" />
+            Resume
           </Button>
         </div>
 
