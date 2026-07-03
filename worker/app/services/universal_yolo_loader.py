@@ -102,8 +102,13 @@ class UniversalYOLOModel:
 
             # Load YOLOv5 model
             try:
+                # Pass trust_repo=True to avoid interactive trust prompt in non-interactive environments
                 self.model = torch.hub.load(
-                    "ultralytics/yolov5", "custom", path=self.model_path, force_reload=False
+                    "ultralytics/yolov5",
+                    "custom",
+                    path=self.model_path,
+                    force_reload=False,
+                    trust_repo=True,
                 )
             except Exception as exc:
                 error_msg = str(exc).lower()
