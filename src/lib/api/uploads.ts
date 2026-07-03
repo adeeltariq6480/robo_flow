@@ -104,6 +104,11 @@ function uploadForm<T>(
       } catch {
         /* keep default */
       }
+      if (xhr.status === 404 && path.includes("upload-model")) {
+        message =
+          "Worker update pending — redeploy Railway backend, then retry. " +
+          "(Missing chunked upload API on server.)";
+      }
       reject(new Error(message));
     };
 

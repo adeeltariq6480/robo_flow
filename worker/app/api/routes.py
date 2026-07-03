@@ -678,54 +678,6 @@ async def upload_zip(
     }
 
 
-@api_router.post("/upload-model")
-async def upload_model(
-    project_id: str = Form(...),
-    model_name: str = Form(...),
-    model_version: str = Form("1.0.0"),
-    model_type: str = Form("pytorch"),
-    description: str = Form(""),
-    file: UploadFile = File(...),
-    _: None = Depends(verify_api_key),
-):
-    """Upload model file via worker → Hugging Face Hub + DB record."""
-    _check_upload_config()
-    data = await file.read()
-    loc = await asyncio.to_thread(
-        file_storage.upload_model_file, project_id, file.filename, data
-    )
-    model = repo.create_model(project_id, {
-        "modelName": model_name,
-        "modelVersion": model_version,
-        "modelType": model_type,
-        "description": description or None,
-        "hfRepo": loc["hfRepo"],
-        "hfPath": loc["hfPath"],
-        "fileSize": len(data),
-    })
-    return model
-
-
-@api_router.post("/register-model")
-async def register_model(body: ModelRegister, _: None = Depends(verify_api_key)):
-    """Register model metadata when the file already exists on Hugging Face Hub."""
-    if not body.hf_path.strip():
-        raise HTTPException(status_code=400, detail="hf_path is required")
-    return await asyncio.to_thread(
-        repo.create_model,
-        body.project_id,
-        {
-            "modelName": body.model_name,
-            "modelVersion": body.model_version,
-            "modelType": body.model_type,
-            "description": body.description,
-            "hfRepo": body.hf_repo or settings.model_repo_id,
-            "hfPath": body.hf_path,
-            "fileSize": body.file_size,
-        },
-    )
-
-
 @api_router.post("/upload-model/init")
 async def upload_model_init(
     project_id: str = Form(...),
@@ -791,6 +743,54 @@ async def upload_model_finish(
         logger.exception("Chunked model upload failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return model
+
+
+@api_router.post("/upload-model")
+async def upload_model(
+    project_id: str = Form(...),
+    model_name: str = Form(...),
+    model_version: str = Form("1.0.0"),
+    model_type: str = Form("pytorch"),
+    description: str = Form(""),
+    file: UploadFile = File(...),
+    _: None = Depends(verify_api_key),
+):
+    """Upload model file via worker → Hugging Face Hub + DB record."""
+    _check_upload_config()
+    data = await file.read()
+    loc = await asyncio.to_thread(
+        file_storage.upload_model_file, project_id, file.filename, data
+    )
+    model = repo.create_model(project_id, {
+        "modelName": model_name,
+        "modelVersion": model_version,
+        "modelType": model_type,
+        "description": description or None,
+        "hfRepo": loc["hfRepo"],
+        "hfPath": loc["hfPath"],
+        "fileSize": len(data),
+    })
+    return model
+
+
+@api_router.post("/register-model")
+async def register_model(body: ModelRegister, _: None = Depends(verify_api_key)):
+    """Register model metadata when the file already exists on Hugging Face Hub."""
+    if not body.hf_path.strip():
+        raise HTTPException(status_code=400, detail="hf_path is required")
+    return await asyncio.to_thread(
+        repo.create_model,
+        body.project_id,
+        {
+            "modelName": body.model_name,
+            "modelVersion": body.model_version,
+            "modelType": body.model_type,
+            "description": body.description,
+            "hfRepo": body.hf_repo or settings.model_repo_id,
+            "hfPath": body.hf_path,
+            "fileSize": body.file_size,
+        },
+    )
 
 
 @api_router.get("/models/{project_id}")

@@ -74,6 +74,7 @@ async def health():
         "config": {
             "supabase": settings.supabase_configured,
             "huggingface": settings.hf_configured,
+            "storage_backend": "huggingface",
             "dataset_repo": settings.dataset_repo_id or None,
             "model_repo": settings.model_repo_id or None,
         },
