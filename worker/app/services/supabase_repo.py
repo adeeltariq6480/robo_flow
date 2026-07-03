@@ -395,39 +395,7 @@ def count_dataset_images(project_id: str, dataset_id: str) -> int:
     return res.count or 0
 
 
-def dedupe_dataset_images(project_id: str, dataset_id: str) -> int:
-    res = (
-        _sb()
-        .table("images")
-        .select("id,hf_path,created_at")
-        .eq("project_id", project_id)
-        .eq("dataset_id", dataset_id)
-        .order("created_at")
-        .execute()
-    )
-    seen: set[str] = set()
-    duplicate_ids: list[str] = []
-    for row in res.data or []:
-        hf_path = row.get("hf_path")
-        if not hf_path:
-            continue
-        if hf_path in seen:
-            duplicate_ids.append(str(row["id"]))
-        else:
-            seen.add(hf_path)
-
-    if duplicate_ids:
-        logger.warning(
-            "Removing %d duplicate image row(s) for dataset %s",
-            len(duplicate_ids),
-            dataset_id,
-        )
-        _sb().table("images").delete().in_("id", duplicate_ids).execute()
-    return len(duplicate_ids)
-
-
 def recount_dataset_images(project_id: str, dataset_id: str) -> int:
-    dedupe_dataset_images(project_id, dataset_id)
     total = count_dataset_images(project_id, dataset_id)
     update_dataset(
         project_id,
@@ -445,20 +413,6 @@ def recount_dataset_images(project_id: str, dataset_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
-    existing = (
-        _sb()
-        .table("images")
-        .select("*")
-        .eq("project_id", project_id)
-        .eq("dataset_id", dataset_id)
-        .eq("hf_path", data["hfPath"])
-        .limit(1)
-        .execute()
-    )
-    rows = existing.data or []
-    if rows:
-        return _image_row(rows[0])
-
     res = (
         _sb()
         .table("images")
@@ -483,7 +437,6 @@ def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
 
 
 def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
-    dedupe_dataset_images(project_id, dataset_id)
     res = (
         _sb()
         .table("images")
@@ -526,37 +479,23 @@ def _delete_image_annotations(project_id: str, image_id: str) -> None:
 
 
 def delete_images(project_id: str, dataset_id: str, image_ids: list[str]) -> None:
-    images: list[dict] = []
     for image_id in image_ids:
         img = get_image(project_id, image_id)
-        if img and img.get("datasetId") == dataset_id:
-            images.append(img)
-
-    if not images:
-        return
-
-    for img in images:
-        _delete_image_annotations(project_id, img["id"])
-
-    paths_by_repo: dict[str, list[str]] = {}
-    for img in images:
+        if not img or img.get("datasetId") != dataset_id:
+            continue
+        _delete_image_annotations(project_id, image_id)
         repo_id = img.get("hfRepo")
         path_in_repo = img.get("hfPath")
         if repo_id and path_in_repo:
-            paths_by_repo.setdefault(repo_id, []).append(path_in_repo)
-
-    for repo_id, paths in paths_by_repo.items():
-        try:
-            file_storage.delete_paths_from_repo(
-                repo_id,
-                paths,
-                repo_type=file_storage.REPO_TYPE_DATASET,
-                commit_message=f"Delete {len(paths)} dataset images",
-            )
-        except Exception as exc:
-            logger.warning("HF bulk image delete failed for %d paths: %s", len(paths), exc)
-
-    _sb().table("images").delete().in_("id", [img["id"] for img in images]).execute()
+            try:
+                file_storage.delete_from_repo(
+                    repo_id,
+                    path_in_repo,
+                    repo_type=file_storage.REPO_TYPE_DATASET,
+                )
+            except Exception as exc:
+                logger.warning("HF image delete failed %s: %s", image_id, exc)
+        _sb().table("images").delete().eq("id", image_id).execute()
     recount_dataset_images(project_id, dataset_id)
 
 
@@ -564,28 +503,19 @@ def delete_dataset(project_id: str, dataset_id: str) -> None:
     imgs = list_dataset_images(project_id, dataset_id)
     for img in imgs:
         _delete_image_annotations(project_id, img["id"])
-
-    paths_by_repo: dict[str, list[str]] = {}
-    for img in imgs:
         repo_id = img.get("hfRepo")
         path_in_repo = img.get("hfPath")
         if repo_id and path_in_repo:
-            paths_by_repo.setdefault(repo_id, []).append(path_in_repo)
-
-    for repo_id, paths in paths_by_repo.items():
-        try:
-            file_storage.delete_paths_from_repo(
-                repo_id,
-                paths,
-                repo_type=file_storage.REPO_TYPE_DATASET,
-                commit_message=f"Delete dataset {dataset_id} images",
-            )
-        except Exception as exc:
-            logger.warning("HF bulk dataset image delete failed for %d paths: %s", len(paths), exc)
-
+            try:
+                file_storage.delete_from_repo(
+                    repo_id,
+                    path_in_repo,
+                    repo_type=file_storage.REPO_TYPE_DATASET,
+                )
+            except Exception as exc:
+                logger.warning("HF dataset image delete failed %s: %s", img["id"], exc)
     _sb().table("images").delete().eq("dataset_id", dataset_id).execute()
     _sb().table("datasets").delete().eq("id", dataset_id).eq("project_id", project_id).execute()
-
 
 
 def dataset_review_files(project_id: str, dataset_id: str) -> list[dict]:
@@ -862,88 +792,6 @@ def save_image_annotations(
         ]
         _sb().table("annotation_objects").insert(rows).execute()
     return ann_id
-
-
-def save_auto_label_results(
-    project_id: str,
-    job_id: str,
-    results: list[dict],
-) -> None:
-    """Persist auto-label output for many images with a small number of API calls."""
-    if not results:
-        return
-
-    now = now_iso()
-    image_ids = [str(r["image_id"]) for r in results]
-
-    _sb().table("annotations").delete().in_("image_id", image_ids).execute()
-    _sb().table("review_queues").delete().in_("image_id", image_ids).execute()
-
-    annotation_rows = [
-        {
-            "project_id": project_id,
-            "image_id": r["image_id"],
-            "job_id": job_id,
-            "status": "active",
-            "source": "auto",
-            "review_status": "pending",
-            "auto_labeled_at": now,
-        }
-        for r in results
-    ]
-    ann_res = _sb().table("annotations").insert(annotation_rows).execute()
-    ann_by_image = {str(row["image_id"]): str(row["id"]) for row in ann_res.data or []}
-
-    object_rows: list[dict] = []
-    for result in results:
-        image_id = str(result["image_id"])
-        ann_id = ann_by_image.get(image_id)
-        if not ann_id:
-            continue
-        for obj in result.get("objects") or []:
-            object_rows.append(
-                {
-                    "annotation_id": ann_id,
-                    "project_id": project_id,
-                    "image_id": image_id,
-                    "class_id": obj.get("classId") or obj.get("project_class_id"),
-                    "class_index": obj.get("classIndex", 0),
-                    "class_name": obj.get("className") or obj.get("class_name", "unknown"),
-                    "x_min": obj["xMin"],
-                    "y_min": obj["yMin"],
-                    "x_max": obj["xMax"],
-                    "y_max": obj["yMax"],
-                    "confidence": obj.get("confidence", 1.0),
-                    "source": "auto",
-                }
-            )
-
-    chunk_size = 1000
-    for i in range(0, len(object_rows), chunk_size):
-        _sb().table("annotation_objects").insert(object_rows[i : i + chunk_size]).execute()
-
-    image_ids_by_queue: dict[str, list[str]] = {}
-    review_rows: list[dict] = []
-    for result in results:
-        queue_type = result.get("queue_type") or "unassigned"
-        image_id = str(result["image_id"])
-        image_ids_by_queue.setdefault(queue_type, []).append(image_id)
-        review_rows.append(
-            {
-                "project_id": project_id,
-                "image_id": image_id,
-                "queue_type": queue_type,
-                "reason": result.get("reason"),
-            }
-        )
-
-    for queue_type, ids in image_ids_by_queue.items():
-        _sb().table("images").update(
-            {"queue_type": queue_type, "status": "labeled"}
-        ).in_("id", ids).execute()
-
-    for i in range(0, len(review_rows), chunk_size):
-        _sb().table("review_queues").insert(review_rows[i : i + chunk_size]).execute()
 
 
 def detections_to_objects(detections: list[dict]) -> list[dict]:

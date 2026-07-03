@@ -18,7 +18,7 @@ import threading
 from functools import lru_cache
 from pathlib import Path
 
-from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
 from app.config import settings
@@ -97,18 +97,6 @@ def export_path(project_id: str, file_name: str) -> str:
 
 def model_path(project_id: str, file_name: str) -> str:
     return f"models/{project_id}/{file_name}"
-
-
-def model_cache_local_name_from_path(path_in_repo: str) -> str:
-    parts = path_in_repo.replace("\\", "/").split("/")
-    if len(parts) >= 3 and parts[0] == "models":
-        project_id = parts[1]
-        file_name = parts[-1]
-    else:
-        project_id = "unknown"
-        file_name = parts[-1] if parts else "model.pt"
-    safe_file = file_name.replace("\\", "_").replace("/", "_")
-    return f"model_{project_id}_{safe_file}"
 
 
 # ---------------------------------------------------------------------------
@@ -238,16 +226,11 @@ def upload_dataset_zip(
 
 
 def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
-    loc = upload_bytes(
+    return upload_bytes(
         data,
         repo_type=REPO_TYPE_MODEL,
         path_in_repo=model_path(project_id, file_name),
     )
-    cache_path = _temp_dir() / model_cache_local_name_from_path(loc["hfPath"])
-    if not cache_path.exists() or cache_path.stat().st_size != len(data):
-        cache_path.write_bytes(data)
-        logger.info("Cached uploaded model locally at %s", cache_path)
-    return loc
 
 
 def upload_export(project_id: str, file_name: str, data: bytes) -> dict:
@@ -271,24 +254,18 @@ def download_to_local(
 ) -> Path:
     """Download a file from HF Hub. Uses HF cache; optional copy to temp dir."""
     logger.debug("HF download %s (%s) %s", repo_id, repo_type, path_in_repo)
-    dest = _temp_dir() / local_name if local_name else None
-    if dest is not None and dest.exists() and dest.stat().st_size > 0:
-        logger.info("Using local cached file %s for %s", dest, path_in_repo)
-        return dest
-
     cached = Path(
         hf_hub_download(
             repo_id=repo_id,
             filename=path_in_repo,
             repo_type=repo_type,
             token=settings.hf_token or None,
-            etag_timeout=30,
         )
     )
     if not local_name:
         return cached
 
-    assert dest is not None
+    dest = _temp_dir() / local_name
     if dest.exists() and dest.stat().st_size == cached.stat().st_size:
         return dest
     dest.write_bytes(cached.read_bytes())
@@ -313,38 +290,3 @@ def delete_from_repo(repo_id: str, path_in_repo: str, *, repo_type: str) -> None
             logger.info("HF file already missing at %s — skipping delete", path_in_repo)
             return
         raise
-
-
-def delete_paths_from_repo(
-    repo_id: str,
-    paths_in_repo: list[str],
-    *,
-    repo_type: str,
-    commit_message: str | None = None,
-) -> None:
-    """Delete many repo paths in one HF commit."""
-    paths = sorted({p for p in paths_in_repo if p})
-    if not paths:
-        return
-
-    logger.debug("HF bulk delete %s (%s) %d paths", repo_id, repo_type, len(paths))
-    operations = [CommitOperationDelete(path_in_repo=path) for path in paths]
-    with _hf_commit_lock:
-        try:
-            _api().create_commit(
-                repo_id=repo_id,
-                repo_type=repo_type,
-                operations=operations,
-                commit_message=commit_message or f"Delete {len(paths)} files",
-            )
-        except HfHubHTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
-                raise RuntimeError(
-                    "Hugging Face commit rate limit reached. "
-                    "Wait about 1 hour before retrying deletes."
-                ) from exc
-            detail = str(exc).lower()
-            if "no files have been modified" in detail or "empty commit" in detail:
-                logger.info("HF bulk delete found no modified files")
-                return
-            raise

@@ -10,7 +10,8 @@ from app.services.supabase_repo import (
     classify_queue,
     detections_to_objects,
     list_dataset_images,
-    save_auto_label_results,
+    save_image_annotations,
+    update_image_queue,
 )
 from app.services.storage import (
     build_class_name_map,
@@ -56,10 +57,10 @@ def _is_image_row(file_row: dict) -> bool:
 
 def _progress_interval(total: int) -> int:
     if total <= 50:
-        return 5
+        return 1
     if total <= 200:
-        return 20
-    return 50
+        return 5
+    return 10
 
 
 def _compact_job_result(
@@ -134,6 +135,8 @@ async def run_auto_label(
     per_image_dets: dict[str, list[DetectionBox]] = defaultdict(list)
     per_image_models: dict[str, dict[str, int]] = defaultdict(dict)
 
+    loaded_models: list[tuple[str, object]] = []
+
     def _prep_progress(step_index: int) -> int:
         if num_models <= 0:
             return 35
@@ -144,36 +147,19 @@ async def run_auto_label(
             return base
         return int(base + (step_index / step_total) * 55)
 
-    async def safe_update_job(**fields) -> None:
-        try:
-            await update_job(job_id, project_id=project_id, **fields)
-        except Exception as exc:
-            logger.warning("Job progress update failed for %s: %s", job_id, exc)
-
-    async def run_with_heartbeat(
-        func,
-        *args,
-        progress: int,
-        message: str,
-        timeout_seconds: int = 900,
-        heartbeat_seconds: int = 30,
-    ):
-        task = asyncio.create_task(asyncio.to_thread(func, *args))
-        elapsed = 0
+    async def _run_with_heartbeat(label: str, coro, *, start_progress: int, end_progress: int):
+        task = asyncio.create_task(coro)
+        pulse = start_progress
         while not task.done():
-            done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
-            if done:
-                break
-            elapsed += heartbeat_seconds
-            if elapsed >= timeout_seconds:
-                task.cancel()
-                raise TimeoutError(f"{message} timed out after {timeout_seconds}s")
-            heartbeat_progress = min(progress + max(1, elapsed // heartbeat_seconds), 84)
-            await safe_update_job(
-                progress=heartbeat_progress,
-                progress_message=f"{message} ({elapsed}s)",
+            await update_job(
+                job_id,
+                progress=min(pulse, end_progress),
+                progress_message=label,
                 processed_items=done_units,
+                project_id=project_id,
             )
+            pulse = min(pulse + 1, end_progress)
+            await asyncio.sleep(20)
         return await task
 
     async def ensure_image(file_id: str) -> bool:
@@ -202,36 +188,27 @@ async def run_auto_label(
     work_units = max(len(ready_ids) * num_models, 1)
     done_units = 0
 
-    # --- Run one model across all images, then unload before the next model. ---
-    successful_model_ids: list[str] = []
+    # --- Run each model across all images (one model in RAM at a time) ---
     for mi, model_id in enumerate(model_ids):
-        logger.info("Job %s: model %d/%d id=%s - downloading from HF", job_id, mi + 1, num_models, model_id)
+        logger.info("Job %s: model %d/%d id=%s — downloading from HF", job_id, mi + 1, num_models, model_id)
         await update_job(
             job_id,
             progress=_prep_progress(mi),
-            progress_message=(
-                f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face "
-                "(cache-first, max 10 min)..."
-            ),
+            progress_message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
             processed_items=done_units,
             project_id=project_id,
         )
 
-        model_path = None
         try:
-            model_path = await run_with_heartbeat(
-                download_model,
-                model_id,
-                project_id,
-                progress=_prep_progress(mi),
-                message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face",
-                timeout_seconds=600,
-                heartbeat_seconds=30,
+            model_path = await _run_with_heartbeat(
+                f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
+                asyncio.to_thread(download_model, model_id, project_id),
+                start_progress=_prep_progress(mi),
+                end_progress=_prep_progress(mi) + 5,
             )
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
             model_failures[model_id] = f"download failed: {exc}"
-            done_units += len(ready_ids)
             continue
 
         logger.info("Job %s: model %s file ready at %s", job_id, model_id, model_path)
@@ -240,39 +217,45 @@ async def run_auto_label(
             progress=_prep_progress(mi) + 5,
             progress_message=(
                 f"Model {mi + 1}/{num_models}: loading YOLO into memory "
-                "(first time can take 1-3 min on CPU)..."
+                f"(first time can take 1–3 min on CPU)…"
             ),
             processed_items=done_units,
             project_id=project_id,
         )
 
         try:
-            await run_with_heartbeat(
-                prewarm_yolo,
-                model_path,
-                progress=_prep_progress(mi) + 5,
-                message=f"Model {mi + 1}/{num_models}: loading YOLO into memory",
-                timeout_seconds=600,
-                heartbeat_seconds=30,
+            await _run_with_heartbeat(
+                f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU warmup)…",
+                asyncio.to_thread(prewarm_yolo, model_path),
+                start_progress=_prep_progress(mi) + 5,
+                end_progress=_prep_progress(mi + 1),
             )
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
             model_failures[model_id] = f"load failed: {exc}"
-            done_units += len(ready_ids)
             continue
 
-        successful_model_ids.append(model_id)
+        loaded_models.append((model_id, model_path))
+
         logger.info("Job %s: model %s loaded, starting inference", job_id, model_id)
         await update_job(
             job_id,
-            progress=_inference_progress(done_units, work_units),
-            progress_message=f"Model {mi + 1}/{num_models}: labeling image 1/{total}...",
+            progress=_prep_progress(mi + 1),
+            progress_message=f"Model {mi + 1}/{num_models}: labeling image 1/{total}…",
             processed_items=done_units,
             project_id=project_id,
         )
 
-        try:
+    if not loaded_models:
+        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
+        hint = "; ".join(samples) if samples else "unknown model error"
+        raise ValueError(f"No models could be loaded. Examples: {hint}")
+
+    work_units = max(len(ready_ids) * len(loaded_models), 1)
+
+    try:
+        for mi, (model_id, model_path) in enumerate(loaded_models):
             for idx, file_row in enumerate(file_list):
                 file_id = str(file_row["id"])
                 if file_id in prep_failures:
@@ -286,7 +269,10 @@ async def run_auto_label(
                     await update_job(
                         job_id,
                         progress=pct,
-                        progress_message=f"Model {mi + 1}/{num_models}: image {idx + 1}/{total}",
+                        progress_message=(
+                            f"Model {mi + 1}/{len(loaded_models)} · "
+                            f"image {idx + 1}/{total}"
+                        ),
                         processed_items=done_units,
                         project_id=project_id,
                     )
@@ -314,14 +300,10 @@ async def run_auto_label(
                         prep_failures[file_id] = f"Inference error: {exc}"
 
                 done_units += 1
-        finally:
+    finally:
+        for _, model_path in loaded_models:
             await asyncio.to_thread(unload_model, model_path)
-            gc.collect()
-
-    if not successful_model_ids:
-        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
-        hint = "; ".join(samples) if samples else "unknown model error"
-        raise ValueError(f"No models could be loaded. Examples: {hint}")
+        gc.collect()
 
     # --- Merge detections and save to Firestore ---
     labeled = 0
@@ -331,19 +313,20 @@ async def run_auto_label(
     ]
 
     logger.info("Job %s: saving annotations for %d images", job_id, total - failed)
-    await update_job(
-        job_id,
-        progress=90,
-        progress_message=f"Preparing labels for {total - failed} image(s)...",
-        processed_items=done_units,
-        project_id=project_id,
-    )
 
-    batched_results: list[dict] = []
-    for file_row in file_list:
+    for idx, file_row in enumerate(file_list):
         file_id = str(file_row["id"])
         if file_id in prep_failures:
             continue
+
+        if idx % progress_step == 0 or idx == total - 1:
+            await update_job(
+                job_id,
+                progress=int(85 + (idx / max(total, 1)) * 14),
+                progress_message=f"Saving labels {idx + 1}/{total}…",
+                processed_items=idx,
+                project_id=project_id,
+            )
 
         try:
             combined = per_image_dets.get(file_id, [])
@@ -357,6 +340,14 @@ async def run_auto_label(
             )
 
             if config.save_to_dataset:
+                save_image_annotations(
+                    project_id,
+                    file_id,
+                    objects,
+                    job_id=job_id,
+                    source="auto",
+                    auto_labeled=True,
+                )
                 queue_type, reason = classify_queue(
                     objects,
                     confidence=config.confidence,
@@ -364,14 +355,7 @@ async def run_auto_label(
                     class_id_known=class_known,
                     per_model=per_model if num_models > 1 else None,
                 )
-                batched_results.append(
-                    {
-                        "image_id": file_id,
-                        "objects": objects,
-                        "queue_type": queue_type,
-                        "reason": reason,
-                    }
-                )
+                update_image_queue(project_id, file_id, queue_type, reason)
 
             labeled += 1
             all_results.append(
@@ -381,17 +365,7 @@ async def run_auto_label(
             failed += 1
             all_results.append({"file_id": file_id, "error": str(exc)})
 
-    if config.save_to_dataset and batched_results:
-        await update_job(
-            job_id,
-            progress=96,
-            progress_message=f"Saving {len(batched_results)} labels in bulk...",
-            processed_items=done_units,
-            project_id=project_id,
-        )
-        await asyncio.to_thread(save_auto_label_results, project_id, job_id, batched_results)
-
-    await update_job(job_id, processed_items=done_units, project_id=project_id)
+    await update_job(job_id, processed_items=total, project_id=project_id)
     logger.info("Job %s done: labeled=%d failed=%d", job_id, labeled, failed)
 
     if model_failures:
@@ -412,7 +386,7 @@ async def run_auto_label(
 
     return _compact_job_result(
         dataset_id=dataset_id,
-        model_ids=successful_model_ids,
+        model_ids=[model_id for model_id, _ in loaded_models],
         total=total,
         labeled=labeled,
         failed=failed,
