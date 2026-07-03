@@ -59,11 +59,54 @@ export function getBackendMisconfigurationMessage(): string | null {
   return null;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const FETCH_RETRIES = 3;
+const FETCH_TIMEOUT_MS = 25_000;
+
+async function fetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < FETCH_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      return res;
+    } catch (err) {
+      lastError = err;
+      if (attempt < FETCH_RETRIES - 1) {
+        await sleep(1500 * (attempt + 1));
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
 function backendUnreachableMessage(cause?: unknown): string {
   const misconfig = getBackendMisconfigurationMessage();
   if (misconfig) return misconfig;
   const detail =
     cause instanceof Error && cause.message ? ` (${cause.message})` : "";
+  const isTransient =
+    cause instanceof Error &&
+    (/fetch failed|aborted|timeout|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(
+      cause.message
+    ) ||
+      cause.name === "AbortError");
+  if (isTransient) {
+    return (
+      `Cannot reach the API at ${API_BASE_URL} right now — the worker may be restarting ` +
+      "(common on Railway after deploy). Refresh the page in a few seconds." +
+      detail
+    );
+  }
   return (
     `Cannot reach the API at ${API_BASE_URL}. ` +
     "Start the FastAPI worker locally or set NEXT_PUBLIC_WORKER_API_URL to your deployed backend." +
@@ -111,7 +154,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE_URL}${path}`, {
+    res = await fetchWithRetry(`${API_BASE_URL}${path}`, {
       cache: "no-store",
       ...options,
       headers: apiHeaders(options.headers, isForm),

@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -20,9 +22,14 @@ export function BackendSetupRequired({
         <ServerCrash className="mx-auto h-12 w-12 text-amber-500" />
         <CardHeader
           title="Backend not reachable"
-          description="The frontend could not contact the FastAPI API during server rendering."
+          description="The frontend could not contact the FastAPI API during server rendering. If Railway logs show the worker is running, refresh — it may have been restarting."
         />
         <Alert variant="error">{message}</Alert>
+        <div className="mt-4 flex justify-center">
+          <Button type="button" variant="secondary" onClick={() => window.location.reload()}>
+            Refresh page
+          </Button>
+        </div>
         <div className="mt-6 space-y-3 text-left text-sm text-slate-600">
           <p className="font-medium text-slate-800">On Railway (worker):</p>
           <ol className="list-decimal space-y-2 pl-5">

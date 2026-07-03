@@ -61,11 +61,33 @@ async function parseWorkerError(res: Response): Promise<string> {
   }
 }
 
+async function workerFetchWithRetry(
+  url: string,
+  options: RequestInit
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25_000);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
 async function workerFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await workerFetchWithRetry(`${API_BASE_URL}${path}`, {
     ...options,
     cache: "no-store",
     headers: workerHeaders(options.headers),
