@@ -229,6 +229,11 @@ async def run_auto_label(
                 ),
                 timeout=MODEL_DOWNLOAD_TIMEOUT_SECONDS,
             )
+        except FileNotFoundError as exc:
+            logger.warning("model skipped %s: %s", model_id, exc)
+            model_failures[model_id] = str(exc)
+            logger.info("continuing with next model")
+            continue
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
             if isinstance(exc, TimeoutError):
@@ -237,6 +242,7 @@ async def run_auto_label(
                 )
             else:
                 model_failures[model_id] = f"download failed: {exc}"
+            logger.info("continuing with next model")
             continue
 
         logger.info("Job %s: model %s file ready at %s", job_id, model_id, model_path)
@@ -270,6 +276,8 @@ async def run_auto_label(
                 )
             else:
                 model_failures[model_id] = f"load failed: {exc}"
+            logger.warning("model skipped %s", model_id)
+            logger.info("continuing with next model")
             continue
 
         logger.info("Job %s: model %s loaded, starting inference", job_id, model_id)

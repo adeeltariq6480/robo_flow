@@ -5,6 +5,8 @@ import os
 import threading
 from pathlib import Path
 
+from huggingface_hub.utils import HfHubHTTPError
+
 from app.config import settings
 from app.services import hf_storage as file_storage
 from app.services.supabase_repo import (
@@ -26,6 +28,25 @@ def persist_model_bytes_locally(project_id: str, file_name: str, data: bytes) ->
     return target_path
 
 
+def _model_local_candidates(project_id: str, local_name: str) -> tuple[Path, Path]:
+    project_path = settings.model_files_dir / project_id / local_name
+    global_path = settings.model_files_dir / local_name
+    logger.info("checking project local model path: %s", project_path)
+    logger.info("checking global local model path: %s", global_path)
+    return project_path, global_path
+
+
+def _resolve_existing_model_path(project_id: str, local_name: str) -> Path | None:
+    project_path, global_path = _model_local_candidates(project_id, local_name)
+    if project_path.exists() and project_path.stat().st_size > 0:
+        logger.info("local model found: %s", project_path)
+        return project_path
+    if global_path.exists() and global_path.stat().st_size > 0:
+        logger.info("local model found: %s", global_path)
+        return global_path
+    return None
+
+
 def download_model(model_id: str, project_id: str) -> Path:
     row = get_model(project_id, model_id)
     if not row:
@@ -35,7 +56,7 @@ def download_model(model_id: str, project_id: str) -> Path:
     if not repo or not path:
         raise ValueError(f"Model {model_id} has no storage location")
     local_name = file_storage.model_cache_local_name_from_path(path)
-    target_path = file_storage.model_local_cache_path(local_name)
+    project_local_name = f"{project_id}/{local_name}"
     with _MODEL_DOWNLOAD_LOCK:
         logger.info(
             "Model download selected storage path project=%s model=%s repo=%s path=%s local=%s",
@@ -43,26 +64,30 @@ def download_model(model_id: str, project_id: str) -> Path:
             model_id,
             repo,
             path,
-            target_path,
+            project_local_name,
         )
-        if target_path.exists() and target_path.stat().st_size > 0:
-            logger.info("Model already exists locally: %s", target_path)
-            return target_path
 
-        fallback_dir = settings.model_files_dir / project_id
-        fallback_path = fallback_dir / local_name
-        if fallback_path.exists() and fallback_path.stat().st_size > 0:
-            logger.info("Model found in project local storage: %s", fallback_path)
-            return fallback_path
+        existing_path = _resolve_existing_model_path(project_id, local_name)
+        if existing_path is not None:
+            return existing_path
 
-        logger.info("Model download started: %s", target_path)
+        logger.info("Hugging Face download started repo=%s path=%s", repo, path)
         try:
             downloaded = file_storage.download_to_local(
                 repo,
                 path,
                 repo_type=file_storage.REPO_TYPE_MODEL,
-                local_name=local_name,
+                local_name=project_local_name,
             )
+        except HfHubHTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                logger.warning("Hugging Face model missing 404 repo=%s path=%s", repo, path)
+                raise FileNotFoundError(
+                    "Model file not found locally or on Hugging Face. Please re-upload this model."
+                ) from exc
+            logger.exception("Model download failed with full error for %s", model_id)
+            raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
         except Exception as exc:
             logger.exception("Model download failed with full error for %s", model_id)
             raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
@@ -79,13 +104,13 @@ def resolve_model_local_path(model_id: str, project_id: str) -> Path:
     if not path:
         raise ValueError(f"Model {model_id} has no storage location")
     local_name = file_storage.model_cache_local_name_from_path(path)
-    candidate = file_storage.model_local_cache_path(local_name)
-    fallback = settings.model_files_dir / project_id / local_name
-    if candidate.exists() and candidate.stat().st_size > 0:
-        return candidate
-    if fallback.exists() and fallback.stat().st_size > 0:
-        return fallback
-    return candidate
+    project_path = settings.model_files_dir / project_id / local_name
+    global_path = settings.model_files_dir / local_name
+    if project_path.exists() and project_path.stat().st_size > 0:
+        return project_path
+    if global_path.exists() and global_path.stat().st_size > 0:
+        return global_path
+    return project_path
 
 
 def resolve_image_path(row: dict, image_id: str) -> Path | None:

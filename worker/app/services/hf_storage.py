@@ -92,8 +92,10 @@ def model_cache_local_name_from_path(path_in_repo: str) -> str:
     return f"{base}.pt"
 
 
-def model_local_cache_path(local_name: str) -> Path:
+def model_local_cache_path(local_name: str, project_id: str | None = None) -> Path:
     path = settings.model_files_dir
+    if project_id:
+        path = path / project_id
     path.mkdir(parents=True, exist_ok=True)
     return path / local_name
 
@@ -374,6 +376,7 @@ def download_to_local(
 
     file_name = local_name or Path(path_in_repo).name
     dest = cache_root / file_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Selected storage path: %s", dest)
     logger.info("Checking model file: %s", dest)
     if dest.exists() and dest.stat().st_size > 0:

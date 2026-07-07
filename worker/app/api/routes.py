@@ -904,6 +904,49 @@ async def delete_model(project_id: str, model_id: str, _: None = Depends(verify_
     return {"ok": True}
 
 
+@api_router.post("/models/{project_id}/{model_id}/reupload")
+async def reupload_model(
+    project_id: str,
+    model_id: str,
+    _: None = Depends(verify_api_key),
+):
+    model_row = await asyncio.to_thread(repo.get_model, project_id, model_id)
+    if not model_row:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    try:
+        local_path = await asyncio.to_thread(resolve_model_local_path, model_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if not local_path.exists() or not local_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Model file not found locally or on Hugging Face. Please re-upload this model.",
+        )
+
+    data = local_path.read_bytes()
+    loc = await asyncio.to_thread(
+        file_storage.upload_model_file,
+        project_id,
+        local_path.name,
+        data,
+    )
+    return await asyncio.to_thread(
+        repo.create_model,
+        project_id,
+        {
+            "modelName": model_row["modelName"],
+            "modelVersion": model_row.get("modelVersion", "1.0.0"),
+            "modelType": model_row.get("modelType", "pytorch"),
+            "description": model_row.get("description"),
+            "hfRepo": loc["hfRepo"],
+            "hfPath": loc["hfPath"],
+            "fileSize": len(data),
+        },
+    )
+
+
 @api_router.get("/model-status")
 async def model_status(
     project_id: str,
