@@ -112,7 +112,10 @@ async def run_auto_label(
         raise ValueError("Dataset has no files to label")
 
     if not file_list:
-        raise ValueError("No local images found and remote Hugging Face images are missing. Re-upload dataset or run HF sync.")
+        raise ValueError(
+            "No local images found and remote Hugging Face images are missing. "
+            "Re-upload dataset or run HF sync. You can also try POST /api/admin/datasets/{project_id}/{dataset_id}/repair-local-paths"
+        )
 
     # If we require local images and some images are still queued/not saved,
     # refuse to start auto-label so the client can finish uploads first.
@@ -406,7 +409,11 @@ async def run_auto_label(
         )
 
     if len(prep_failures) == total:
-        raise ValueError("No local images found and remote Hugging Face images are missing. Re-upload dataset or run HF sync.")
+        raise ValueError(
+            "No images available for labeling: local files missing and HF downloads failed. "
+            "Try: 1) run POST /api/admin/datasets/{project_id}/{dataset_id}/repair-local-paths to resync local paths; "
+            "2) re-upload dataset; or 3) run POST /api/admin/hf-sync/run to schedule HF sync."
+        )
 
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
 
