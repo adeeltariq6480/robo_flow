@@ -76,7 +76,7 @@ def download_model(model_id: str, project_id: str) -> Path:
             downloaded = file_storage.download_to_local(
                 repo,
                 path,
-                repo_type=file_storage.REPO_TYPE_MODEL,
+                repo_type=settings.model_repo_type,
                 local_name=project_local_name,
             )
         except HfHubHTTPError as exc:
@@ -110,7 +110,10 @@ def resolve_model_local_path(model_id: str, project_id: str) -> Path:
         return project_path
     if global_path.exists() and global_path.stat().st_size > 0:
         return global_path
-    return project_path
+
+    # If the model isn't present locally, download it from Hugging Face.
+    # This is required for ephemeral hosts like Vercel where local disk is not durable.
+    return download_model(model_id, project_id)
 
 
 def resolve_image_path(row: dict, image_id: str) -> Path | None:

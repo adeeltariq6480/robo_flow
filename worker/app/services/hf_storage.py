@@ -109,8 +109,16 @@ def persist_model_bytes_locally(project_id: str, file_name: str, data: bytes) ->
     return target_path
 
 
-def hf_upload_enabled() -> bool:
+def hf_dataset_upload_enabled() -> bool:
     return bool(settings.hf_upload_enabled and settings.hf_token and settings.dataset_repo_id)
+
+
+def hf_model_upload_enabled() -> bool:
+    return bool(settings.hf_upload_enabled and settings.hf_token and settings.model_repo_id)
+
+
+def hf_upload_enabled() -> bool:
+    return hf_dataset_upload_enabled() or hf_model_upload_enabled()
 
 
 def _upload_with_retry(operation_name: str, fn):
@@ -206,9 +214,14 @@ def upload_bytes(
     commit_message: str | None = None,
 ) -> dict:
     repo_id = (
-        settings.dataset_repo_id if repo_type == REPO_TYPE_DATASET
+        settings.dataset_repo_id if repo_type == settings.dataset_repo_type
         else settings.model_repo_id
     )
+    if not repo_id:
+        raise RuntimeError(
+            f"Missing Hugging Face repo for repo_type={repo_type}. "
+            "Set HF_DATASET_REPO or HF_MODEL_REPO as appropriate."
+        )
     logger.info("Hugging Face upload started repo=%s repo_type=%s path=%s", repo_id, repo_type, path_in_repo)
     _ensure_repo(repo_id, repo_type)
     with _hf_commit_lock:
@@ -258,7 +271,7 @@ def upload_dataset_image(
     return {
         "hfRepo": settings.dataset_repo_id,
         "hfPath": dataset_image_path(project_id, dataset_id, file_name),
-        "repoType": REPO_TYPE_DATASET,
+        "repoType": settings.dataset_repo_type,
         "localPath": str(local_path) if 'local_path' in locals() else None,
     }
 
@@ -273,7 +286,7 @@ def upload_dataset_images_batch(
         raise ValueError("No images to upload")
 
     repo_id = settings.dataset_repo_id
-    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+    _ensure_repo(repo_id, settings.dataset_repo_type)
 
     repo_folder = f"datasets/{project_id}/{dataset_id}/images"
     used_names: set[str] = set()
@@ -291,7 +304,7 @@ def upload_dataset_images_batch(
                 _api().upload_folder(
                     folder_path=str(tmp_path),
                     repo_id=repo_id,
-                    repo_type=REPO_TYPE_DATASET,
+                    repo_type=settings.dataset_repo_type,
                     path_in_repo=repo_folder,
                     commit_message=f"Upload {len(items)} images to dataset {dataset_id}",
                 )
@@ -316,18 +329,18 @@ def upload_dataset_images_from_folder(
     count: int,
 ) -> dict:
     """Upload an existing local folder in a single commit."""
-    if not hf_upload_enabled():
+    if not hf_dataset_upload_enabled():
         logger.info("HF upload disabled; skipping batch upload for dataset %s", dataset_id)
         return {"hfRepo": settings.dataset_repo_id, "count": count}
     repo_id = settings.dataset_repo_id
-    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+    _ensure_repo(repo_id, settings.dataset_repo_type)
     repo_folder = f"datasets/{project_id}/{dataset_id}/images"
     with _hf_commit_lock:
         def _do_upload():
             _api().upload_folder(
                 folder_path=folder_path,
                 repo_id=repo_id,
-                repo_type=REPO_TYPE_DATASET,
+                repo_type=settings.dataset_repo_type,
                 path_in_repo=repo_folder,
                 commit_message=f"Upload {count} images to dataset {dataset_id}",
             )
@@ -351,18 +364,18 @@ def upload_labels_from_folder(
     count: int,
 ) -> dict:
     """Upload a labels folder in a single commit under datasets/{project}/{dataset}/labels."""
-    if not hf_upload_enabled():
+    if not hf_dataset_upload_enabled():
         logger.info("HF upload disabled; skipping labels batch upload for dataset %s", dataset_id)
         return {"hfRepo": settings.dataset_repo_id, "count": count}
     repo_id = settings.dataset_repo_id
-    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+    _ensure_repo(repo_id, settings.dataset_repo_type)
     repo_folder = f"datasets/{project_id}/{dataset_id}/labels"
     with _hf_commit_lock:
         def _do_upload():
             _api().upload_folder(
                 folder_path=folder_path,
                 repo_id=repo_id,
-                repo_type=REPO_TYPE_DATASET,
+                repo_type=settings.dataset_repo_type,
                 path_in_repo=repo_folder,
                 commit_message=f"Upload {count} labels to dataset {dataset_id}",
             )
@@ -383,19 +396,19 @@ def upload_dataset_zip(
 ) -> dict:
     return upload_bytes(
         data,
-        repo_type=REPO_TYPE_DATASET,
+        repo_type=settings.dataset_repo_type,
         path_in_repo=dataset_zip_path(project_id, dataset_id, file_name),
     )
 
 
 def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
     logger.info("Selected repo for model upload: %s (model) target=%s", settings.model_repo_id, model_path(project_id, file_name))
-    if not hf_upload_enabled():
+    if not hf_model_upload_enabled():
         logger.info("Hugging Face upload is disabled; skipping model upload %s", file_name)
-        return {"hfRepo": settings.model_repo_id, "hfPath": model_path(project_id, file_name), "repoType": REPO_TYPE_MODEL}
+        return {"hfRepo": settings.model_repo_id, "hfPath": model_path(project_id, file_name), "repoType": settings.model_repo_type}
     return upload_bytes(
         data,
-        repo_type=REPO_TYPE_MODEL,
+        repo_type=settings.model_repo_type,
         path_in_repo=model_path(project_id, file_name),
     )
 
@@ -403,7 +416,7 @@ def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
 def upload_export(project_id: str, file_name: str, data: bytes) -> dict:
     return upload_bytes(
         data,
-        repo_type=REPO_TYPE_DATASET,
+        repo_type=settings.dataset_repo_type,
         path_in_repo=export_path(project_id, file_name),
     )
 
@@ -422,7 +435,7 @@ def download_to_local(
     """Download a file from HF Hub with a persistent local cache copy."""
     logger.debug("HF download %s (%s) %s", repo_id, repo_type, path_in_repo)
 
-    if repo_type == REPO_TYPE_MODEL:
+    if repo_type == settings.model_repo_type:
         cache_root = settings.model_files_dir
     else:
         cache_root = settings.hf_cache_dir

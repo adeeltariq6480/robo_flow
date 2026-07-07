@@ -51,6 +51,21 @@ class Settings(BaseSettings):
     hf_model_repo: str = Field(
         default="", validation_alias=AliasChoices("HF_MODEL_REPO")
     )
+    deploy_target: str = Field(
+        default="", validation_alias=AliasChoices("DEPLOY_TARGET")
+    )
+    local_storage_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("LOCAL_STORAGE_ENABLED"),
+    )
+    hf_dataset_repo_type: str = Field(
+        default="dataset",
+        validation_alias=AliasChoices("HF_DATASET_REPO_TYPE"),
+    )
+    hf_model_repo_type: str = Field(
+        default="model",
+        validation_alias=AliasChoices("HF_MODEL_REPO_TYPE"),
+    )
     model_dir: str = Field(default="", validation_alias=AliasChoices("MODEL_DIR"))
     dataset_local_dir: str = Field(
         default="",
@@ -194,6 +209,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def is_vercel(self) -> bool:
+        return self.deploy_target.strip().lower() == "vercel"
+
+    @property
+    def dataset_repo_type(self) -> str:
+        return self.hf_dataset_repo_type.strip().lower() or "dataset"
+
+    @property
+    def model_repo_type(self) -> str:
+        return self.hf_model_repo_type.strip().lower() or "model"
 
     @property
     def storage_base_path(self) -> Path:

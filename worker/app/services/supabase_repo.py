@@ -670,6 +670,17 @@ def update_model_status(project_id: str, model_id: str, data: dict) -> None:
         raise
 
 
+def update_model_fields(project_id: str, model_id: str, data: dict) -> None:
+    payload: dict = {}
+    if "hfRepo" in data:
+        payload["hf_repo"] = data["hfRepo"]
+    if "hfPath" in data:
+        payload["hf_path"] = data["hfPath"]
+    if not payload:
+        return
+    _sb().table("models").update(payload).eq("id", model_id).eq("project_id", project_id).execute()
+
+
 # ---------------------------------------------------------------------------
 # Labelling jobs
 # ---------------------------------------------------------------------------

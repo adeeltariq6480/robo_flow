@@ -1382,6 +1382,104 @@ async def validate_model_endpoint(
     }
 
 
+@api_router.get("/models/{project_id}/{model_id}/health-check")
+async def health_check_model(
+    project_id: str,
+    model_id: str,
+    _: None = Depends(verify_api_key),
+):
+    model_row = await asyncio.to_thread(repo.get_model, project_id, model_id)
+    if not model_row:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    try:
+        model_path = await asyncio.to_thread(resolve_model_local_path, model_id, project_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Model health check failed for %s/%s", project_id, model_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    status = describe_model_status(model_path)
+    return {
+        "modelId": model_id,
+        "projectId": project_id,
+        "hfRepo": model_row.get("hfRepo"),
+        "hfPath": model_row.get("hfPath"),
+        "localPath": str(model_path),
+        "health": status,
+    }
+
+
+@api_router.post("/models/{project_id}/{model_id}/repair-hf-paths")
+async def repair_model_hf_path(
+    project_id: str,
+    model_id: str,
+    _: None = Depends(verify_api_key),
+):
+    model_row = await asyncio.to_thread(repo.get_model, project_id, model_id)
+    if not model_row:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    local_dir = settings.model_files_dir / project_id
+    candidates = []
+    if local_dir.exists():
+        candidates = [p for p in local_dir.iterdir() if p.is_file() and p.stat().st_size > 0]
+
+    if len(candidates) == 1:
+        local_file = candidates[0]
+        data = local_file.read_bytes()
+        try:
+            loc = await asyncio.to_thread(
+                file_storage.upload_model_file,
+                project_id,
+                local_file.name,
+                data,
+            )
+        except Exception as exc:
+            logger.exception("Model repair upload failed for %s/%s", project_id, model_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        await asyncio.to_thread(repo.update_model_fields, project_id, model_id, loc)
+        return {
+            "modelId": model_id,
+            "projectId": project_id,
+            "repaired": True,
+            "hfRepo": loc["hfRepo"],
+            "hfPath": loc["hfPath"],
+            "localPath": str(local_file),
+        }
+
+    if len(candidates) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Multiple local model candidates found. "
+                "Specify a single local model file in the project directory."
+            ),
+        )
+
+    # No local candidate available; try downloading from HF if the record has a path.
+    if model_row.get("hfRepo") and model_row.get("hfPath"):
+        try:
+            model_path = await asyncio.to_thread(resolve_model_local_path, model_id, project_id)
+            return {
+                "modelId": model_id,
+                "projectId": project_id,
+                "repaired": False,
+                "message": "Model path is valid and available.",
+                "localPath": str(model_path),
+            }
+        except Exception as exc:
+            logger.exception("Model repair failed while downloading HF model for %s/%s", project_id, model_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    raise HTTPException(
+        status_code=400,
+        detail="No local model found and HF path is not available to repair.",
+    )
+
+
 @api_router.post("/models/validate-file")
 async def validate_model_file_endpoint(
     file: UploadFile = File(...),
