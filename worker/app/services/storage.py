@@ -150,7 +150,7 @@ def resolve_image_path(row: dict, image_id: str) -> Path | None:
                     dest_path.write_bytes(downloaded.read_bytes())
                     # update DB local path for this image
                     try:
-                        update_image_storage_fields(str(project_id), image_id, {"localPath": str(dest_path), "storageStatus": "local_ready"})
+                            update_image_storage_fields(str(project_id), image_id, {"local_path": str(dest_path), "storage_status": "local_ready"})
                     except Exception:
                         logger.exception("Failed to update image local path for %s", image_id)
                 return dest_path

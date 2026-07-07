@@ -154,6 +154,14 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("HF_UPLOAD_ENABLED"),
     )
+    auto_commit_after_upload: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("AUTO_COMMIT_AFTER_UPLOAD"),
+    )
+    auto_commit_after_labels: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AUTO_COMMIT_AFTER_LABELS"),
+    )
 
     @property
     def supabase_configured(self) -> bool:

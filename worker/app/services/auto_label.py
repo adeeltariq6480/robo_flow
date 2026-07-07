@@ -3,6 +3,7 @@ import gc
 import logging
 import os
 from collections import defaultdict
+from app.config import settings
 
 from app.core.jobs import update_job
 from app.models.schemas import DetectionBox, JobConfig
@@ -113,6 +114,21 @@ async def run_auto_label(
     if not file_list:
         raise ValueError("No local images found and remote Hugging Face images are missing. Re-upload dataset or run HF sync.")
 
+    # If we require local images and some images are still queued/not saved,
+    # refuse to start auto-label so the client can finish uploads first.
+    if settings.auto_label_use_local_images:
+        any_not_ready = False
+        for f in file_list:
+            lp = f.get("localPath") or f.get("local_path")
+            status = f.get("status") or f.get("storageStatus") or f.get("storage_status")
+            if not lp or not os.path.exists(lp):
+                # If image is queued (upload session not flushed) or local file missing, mark not ready
+                if status in {"queued", "uploading", "processing", "pending"} or not lp:
+                    any_not_ready = True
+                    break
+        if any_not_ready:
+            raise ValueError("Dataset local files are not ready yet.")
+
     low_threshold = int(getattr(config, "low_label_threshold", 1) or 1)
     num_models = len(model_ids)
     progress_step = _progress_interval(total)
@@ -124,6 +140,24 @@ async def run_auto_label(
         num_models,
         project_id,
         dataset_id,
+    )
+
+    # Diagnostic counts: local vs HF availability
+    local_found = 0
+    hf_available = 0
+    for f in file_list:
+        lp = f.get("localPath") or f.get("local_path")
+        if lp and os.path.exists(lp):
+            local_found += 1
+        if f.get("hfPath"):
+            hf_available += 1
+    local_missing = total - local_found
+    logger.info(
+        "Auto-label sources: total_db=%d local_found=%d local_missing=%d hf_available=%d",
+        total,
+        local_found,
+        local_missing,
+        hf_available,
     )
 
     await update_job(
@@ -432,6 +466,26 @@ async def run_auto_label(
                     per_model=per_model if num_models > 1 else None,
                 )
                 update_image_queue(project_id, file_id, queue_type, reason)
+
+            # Save YOLO-format label file locally for this image
+            try:
+                from app.services.export_builder import _class_index_map
+
+                class_index = _class_index_map(project_id)
+                stem = (file_row.get("fileName") or str(file_row.get("id"))).rsplit(".", 1)[0]
+                labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
+                labels_dir.mkdir(parents=True, exist_ok=True)
+                lines = []
+                for o in objects:
+                    idx = class_index.get(o.get("className"), 0)
+                    xc = (o["xMin"] + o["xMax"]) / 2
+                    yc = (o["yMin"] + o["yMax"]) / 2
+                    w = (o["xMax"] - o["xMin"])
+                    h = (o["yMax"] - o["yMin"])
+                    lines.append(f"{idx} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}")
+                (labels_dir / f"{stem}.txt").write_text("\n".join(lines) + ("\n" if lines else ""))
+            except Exception:
+                logger.exception("Failed to write label file for image %s", file_id)
 
             labeled += 1
             all_results.append(

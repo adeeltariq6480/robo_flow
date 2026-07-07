@@ -1,4 +1,5 @@
 import io
+import os
 import logging
 import zipfile
 import asyncio
@@ -57,8 +58,8 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 _upload_sessions: dict[str, dict] = {}
 _upload_sessions_lock = threading.Lock()
-_UPLOAD_BATCH_SIZE = 20
-_UPLOAD_FLUSH_DELAY_SECONDS = 4.0
+_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "200"))
+_UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "60.0"))
 
 
 async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
@@ -219,26 +220,57 @@ async def _store_dataset_image(
     result: image_preprocess.PreprocessResult,
     content_type: str | None,
 ) -> dict:
-    loc = await asyncio.to_thread(
-        file_storage.upload_dataset_image,
-        project_id,
-        dataset_id,
-        filename,
-        result.data,
-    )
+    # Save local copy first so downstream jobs can run from local storage
+    local_path = None
+    try:
+        loc = await asyncio.to_thread(
+            file_storage.upload_dataset_image,
+            project_id,
+            dataset_id,
+            filename,
+            result.data,
+        )
+        # hf_storage.upload_dataset_image now also returns localPath when HF is disabled
+        local_path = loc.get("localPath") if isinstance(loc, dict) else None
+    except Exception:
+        # If HF upload fails, we still want to persist the local file and create DB record.
+        logger.exception("Hugging Face upload failed for %s/%s — will continue with local storage", project_id, filename)
+        # Attempt to save locally directly
+        try:
+            local_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            lp = local_dir / filename
+            lp.write_bytes(result.data)
+            local_path = str(lp)
+            logger.info("Saved dataset image locally after HF failure: %s", local_path)
+        except Exception:
+            logger.exception("Failed to save dataset image locally for %s/%s", project_id, filename)
+
+    db_payload = {
+        "fileName": filename,
+        "hfRepo": settings.dataset_repo_id,
+        "hfPath": file_storage.dataset_image_path(project_id, dataset_id, filename),
+        "width": result.width,
+        "height": result.height,
+        "mimeType": result.mime_type or content_type,
+        "fileSize": len(result.data),
+    }
+    if local_path:
+        db_payload["localPath"] = local_path
+        db_payload["storageStatus"] = "local_ready"
+        # if HF is enabled we mark pending, otherwise disabled
+        db_payload["hfSyncStatus"] = "pending" if file_storage.hf_upload_enabled() else "disabled"
+    else:
+        db_payload["storageStatus"] = "pending"
+        db_payload["hfSyncStatus"] = "pending"
+
+    logger.info("Creating DB image record project=%s dataset=%s file=%s local=%s hf_upload=%s", project_id, dataset_id, filename, bool(local_path), file_storage.hf_upload_enabled())
+
     return await asyncio.to_thread(
         repo.create_image,
         project_id,
         dataset_id,
-        {
-            "fileName": filename,
-            "hfRepo": loc["hfRepo"],
-            "hfPath": loc["hfPath"],
-            "width": result.width,
-            "height": result.height,
-            "mimeType": result.mime_type or content_type,
-            "fileSize": len(result.data),
-        },
+        db_payload,
     )
 
 
@@ -297,43 +329,20 @@ async def _flush_upload_session(session_id: str, *, initial_delay: float) -> Non
         )
 
         try:
-            if not file_storage.hf_upload_enabled():
-                logger.info("HF upload disabled; skipping remote sync session=%s count=%d", session_id, len(items))
-                for item in items:
-                    await asyncio.to_thread(
-                        repo.update_image_storage_fields,
-                        session["project_id"],
-                        item["image_id"],
-                        {
-                            "status": "local_ready",
-                            "storage_status": "local_ready",
-                            "hf_sync_status": "skipped",
-                        },
-                    )
-            else:
+            # Do not commit to Hugging Face during upload flush. Only persist
+            # local files and mark DB records as ready for later finalization.
+            logger.info("Upload session flushed locally session=%s count=%d", session_id, len(items))
+            for item in items:
                 await asyncio.to_thread(
-                    file_storage.upload_dataset_images_from_folder,
+                    repo.update_image_storage_fields,
                     session["project_id"],
-                    session["dataset_id"],
-                    str(batch_root),
-                    len(items),
+                    item["image_id"],
+                    {
+                        "status": "uploaded",
+                        "storage_status": "local_ready",
+                        "hf_sync_status": "pending",
+                    },
                 )
-                logger.info(
-                    "Hugging Face upload success session=%s count=%d",
-                    session_id,
-                    len(items),
-                )
-                for item in items:
-                    await asyncio.to_thread(
-                        repo.update_image_storage_fields,
-                        session["project_id"],
-                        item["image_id"],
-                        {
-                            "status": "uploaded",
-                            "storage_status": "local_ready",
-                            "hf_sync_status": "synced",
-                        },
-                    )
         except Exception as exc:
             logger.exception(
                 "Upload failed after retries session=%s count=%d: %s",
@@ -1127,9 +1136,184 @@ async def preview_hf_sync(project_id: str, _: None = Depends(verify_api_key)):
         "localImagesCount": total_local_images,
         "dbImagesCount": total_db_images,
         "imagesPendingSyncCount": total_pending_images,
+        # extra fields for admin
+        "local_images_found": total_local_images,
+        "pending_hf_images": total_pending_images,
+        "failed_hf_images": 0,
+        "local_models_found": len(local_models),
+        "pending_hf_models": 0,
+        "last_hf_error": None,
         "datasets": datasets_summary,
     }
     return response
+
+
+@api_router.post("/admin/hf-sync/run")
+async def run_hf_sync(project_id: str, _: None = Depends(verify_api_key)):
+    """Run a large-batch HF sync for a project. Non-blocking uploads are serialized
+    and retried conservatively; failures are recorded as `pending_hf_sync`.
+    """
+    hf_enabled = file_storage.hf_upload_enabled()
+    batch_size = int(os.getenv("HF_SYNC_BATCH_SIZE", "200"))
+    min_delay = int(os.getenv("HF_SYNC_MIN_DELAY_SECONDS", "60"))
+
+    datasets = await asyncio.to_thread(repo.list_datasets, project_id)
+    report = {"projectId": project_id, "hfUploadEnabled": hf_enabled, "datasets": []}
+
+    for ds in datasets:
+        ds_id = ds["id"]
+        images = await asyncio.to_thread(repo.list_dataset_images, project_id, ds_id)
+        pending = [i for i in images if i.get("hfSyncStatus") not in {"synced", "disabled", "skipped"} and (i.get("storageStatus") in {"local_ready", "pending"} or i.get("localPath"))]
+        failed = []
+        uploaded = 0
+        # prepare batches
+        items: list[tuple[str, bytes, str]] = []
+        for img in pending:
+            lp = img.get("localPath") or img.get("local_path")
+            if not lp:
+                failed.append({"id": img.get("id"), "reason": "no localPath"})
+                continue
+            try:
+                data = Path(lp).read_bytes()
+                items.append((img.get("fileName") or Path(lp).name, data, img.get("id")))
+            except Exception as exc:
+                failed.append({"id": img.get("id"), "reason": f"read failed: {exc}"})
+
+        # upload in batches
+        for i in range(0, len(items), batch_size):
+            batch = items[i : i + batch_size]
+            payload = [(name, data) for (name, data, _id) in batch]
+            try:
+                res = await asyncio.to_thread(file_storage.upload_dataset_images_batch, project_id, ds_id, payload)
+                # mark all as synced
+                for (_name, _data, img_id) in batch:
+                    try:
+                        await asyncio.to_thread(repo.update_image_storage_fields, project_id, img_id, {"hf_sync_status": "synced", "storage_status": "local_ready"})
+                        uploaded += 1
+                    except Exception:
+                        failed.append({"id": img_id, "reason": "db update failed after upload"})
+            except Exception as exc:
+                logger.exception("HF batch upload failed for project=%s dataset=%s: %s", project_id, ds_id, exc)
+                # mark images as pending_hf_sync
+                for (_name, _data, img_id) in batch:
+                    try:
+                        await asyncio.to_thread(repo.update_image_storage_fields, project_id, img_id, {"hf_sync_status": "pending_hf_sync"})
+                    except Exception:
+                        logger.exception("Failed to mark image pending_hf_sync %s", img_id)
+                # Respect server-side Retry-After by sleeping a bit before next commit
+                await asyncio.sleep(min_delay)
+
+        report["datasets"].append({"datasetId": ds_id, "uploaded": uploaded, "failed": failed, "pendingCount": len(pending)})
+
+    return report
+
+
+@api_router.post("/datasets/{project_id}/{dataset_id}/finalize-upload")
+async def finalize_upload(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    """Finalize a dataset upload by committing the entire images folder to Hugging Face in one commit."""
+    folder = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+    if not folder.exists():
+        raise HTTPException(status_code=404, detail="Dataset images folder not found")
+    hf_enabled = file_storage.hf_upload_enabled()
+    if not hf_enabled:
+        raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
+
+    try:
+        res = await asyncio.to_thread(file_storage.upload_labels_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+    except Exception as exc:
+        logger.exception("Finalize upload failed for %s/%s: %s", project_id, dataset_id, exc)
+        # mark pending for retry
+        images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+        for img in images:
+            try:
+                await asyncio.to_thread(repo.update_image_storage_fields, project_id, img.get("id"), {"hf_sync_status": "pending_hf_sync"})
+            except Exception:
+                logger.exception("Failed to mark image pending_hf_sync %s", img.get("id"))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # mark all images as synced
+    images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+    for img in images:
+        try:
+            await asyncio.to_thread(repo.update_image_storage_fields, project_id, img.get("id"), {"hf_sync_status": "synced"})
+        except Exception:
+            logger.exception("Failed to mark image synced %s", img.get("id"))
+
+    return {"ok": True, "commit": res}
+
+
+@api_router.post("/datasets/{project_id}/{dataset_id}/finalize-labels")
+async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    """Commit all label files in dataset labels folder to Hugging Face in one commit."""
+    folder = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
+    if not folder.exists():
+        raise HTTPException(status_code=404, detail="Labels folder not found")
+    hf_enabled = file_storage.hf_upload_enabled()
+    if not hf_enabled:
+        raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
+
+    try:
+        res = await asyncio.to_thread(file_storage.upload_dataset_images_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+    except Exception as exc:
+        logger.exception("Finalize labels failed for %s/%s: %s", project_id, dataset_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # update dataset label_status if DB has such field; for now update images hfSyncStatus if present
+    return {"ok": True, "commit": res}
+
+
+@api_router.get("/datasets/{project_id}/{dataset_id}/sync-preview")
+async def dataset_sync_preview(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+    local_images = 0
+    pending_image_sync = 0
+    for img in images:
+        lp = img.get("localPath") or img.get("local_path")
+        if lp and Path(lp).exists():
+            local_images += 1
+        if img.get("hfSyncStatus") not in {"synced", "disabled", "skipped"}:
+            pending_image_sync += 1
+    labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
+    local_labels = sum(1 for _ in labels_dir.iterdir() if _.is_file()) if labels_dir.exists() else 0
+    pending_label_sync = 0
+    # labels syncing tracked at dataset level; for now infer from existence
+    labels_synced = False
+    return {
+        "local_images_count": len(images),
+        "local_labels_count": local_labels,
+        "images_synced": pending_image_sync == 0,
+        "labels_synced": labels_synced,
+        "pending_image_sync": pending_image_sync,
+        "pending_label_sync": pending_label_sync,
+    }
+
+
+@api_router.post("/admin/datasets/{project_id}/{dataset_id}/repair-local-paths")
+async def repair_local_paths(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    """Scan the local dataset folder and update DB `localPath` and `storageStatus`.
+    """
+    base = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+    found = []
+    updated = 0
+    if not base.exists():
+        raise HTTPException(status_code=404, detail="Dataset local folder not found")
+
+    files_on_disk = {p.name: p for p in base.iterdir() if p.is_file()}
+    images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+    name_map = {img.get("fileName"): img for img in images}
+    for name, path in files_on_disk.items():
+        img = name_map.get(name)
+        if not img:
+            continue
+        img_id = img.get("id")
+        try:
+            await asyncio.to_thread(repo.update_image_storage_fields, project_id, img_id, {"localPath": str(path), "storageStatus": "local_ready", "hfSyncStatus": img.get("hfSyncStatus") or "pending"})
+            updated += 1
+            found.append(name)
+        except Exception:
+            logger.exception("Failed to update image localPath for %s", img_id)
+
+    return {"projectId": project_id, "datasetId": dataset_id, "found": len(found), "updated": updated}
 
 
 @api_router.get("/model-status")

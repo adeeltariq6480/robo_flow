@@ -235,15 +235,32 @@ def upload_bytes(
 def upload_dataset_image(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:
-    logger.info("Selected repo for image upload: %s (dataset) target=%s", settings.dataset_repo_id, dataset_image_path(project_id, dataset_id, file_name))
-    if not hf_upload_enabled():
-        logger.info("Hugging Face upload is disabled; skipping image upload %s", file_name)
-        return {"hfRepo": settings.dataset_repo_id, "hfPath": dataset_image_path(project_id, dataset_id, file_name), "repoType": REPO_TYPE_DATASET}
-    return upload_bytes(
-        data,
-        repo_type=REPO_TYPE_DATASET,
-        path_in_repo=dataset_image_path(project_id, dataset_id, file_name),
+    logger.info(
+        "Selected repo for image upload: %s (dataset) target=%s",
+        settings.dataset_repo_id,
+        dataset_image_path(project_id, dataset_id, file_name),
     )
+    # Always persist a local copy first so uploads and downstream jobs
+    # (auto-label) can operate from local storage even if HF is disabled
+    # or rate-limited.
+    local_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_path = local_dir / file_name
+        local_path.write_bytes(data)
+        logger.info("Saved dataset image locally: %s", local_path)
+    except Exception:
+        logger.exception("Failed to save dataset image locally: %s/%s", project_id, file_name)
+
+    # Do not commit to Hugging Face per-upload. Always return hf path to record
+    # where the file should live, but actual HF commit will be done by
+    # finalize endpoints that upload entire folders in a single commit.
+    return {
+        "hfRepo": settings.dataset_repo_id,
+        "hfPath": dataset_image_path(project_id, dataset_id, file_name),
+        "repoType": REPO_TYPE_DATASET,
+        "localPath": str(local_path) if 'local_path' in locals() else None,
+    }
 
 
 def upload_dataset_images_batch(
@@ -322,6 +339,40 @@ def upload_dataset_images_from_folder(
                 raise RuntimeError(
                     "Hugging Face commit rate limit reached. "
                     "Wait ~30 minutes or upload fewer images per session."
+                ) from exc
+            raise
+    return {"hfRepo": repo_id, "count": count}
+
+
+def upload_labels_from_folder(
+    project_id: str,
+    dataset_id: str,
+    folder_path: str,
+    count: int,
+) -> dict:
+    """Upload a labels folder in a single commit under datasets/{project}/{dataset}/labels."""
+    if not hf_upload_enabled():
+        logger.info("HF upload disabled; skipping labels batch upload for dataset %s", dataset_id)
+        return {"hfRepo": settings.dataset_repo_id, "count": count}
+    repo_id = settings.dataset_repo_id
+    _ensure_repo(repo_id, REPO_TYPE_DATASET)
+    repo_folder = f"datasets/{project_id}/{dataset_id}/labels"
+    with _hf_commit_lock:
+        def _do_upload():
+            _api().upload_folder(
+                folder_path=folder_path,
+                repo_id=repo_id,
+                repo_type=REPO_TYPE_DATASET,
+                path_in_repo=repo_folder,
+                commit_message=f"Upload {count} labels to dataset {dataset_id}",
+            )
+
+        try:
+            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+        except HfHubHTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise RuntimeError(
+                    "Hugging Face commit rate limit reached when uploading labels."
                 ) from exc
             raise
     return {"hfRepo": repo_id, "count": count}
