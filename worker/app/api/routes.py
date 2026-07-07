@@ -589,49 +589,82 @@ async def upload_images(
                 raise HTTPException(status_code=500, detail="Upload session expired")
             stored_name = _safe_local_name(filename, session_state["used_names"])
 
-        local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
-        logger.info(
-            "Image received session=%s file=%s stored=%s local=%s",
-            session_id,
-            filename,
-            stored_name,
-            local_path,
-        )
+        remote_uploaded = False
+        local_path = None
+        if settings.is_vercel or not settings.local_storage_enabled:
+            try:
+                loc = await asyncio.to_thread(
+                    file_storage.upload_dataset_image,
+                    project_id,
+                    dataset_id,
+                    stored_name,
+                    result.data,
+                )
+                remote_uploaded = True
+                logger.info(
+                    "Image uploaded immediately to HF on Vercel project=%s dataset=%s file=%s",
+                    project_id,
+                    dataset_id,
+                    stored_name,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Hugging Face upload failed on Vercel for %s/%s: %s",
+                    project_id,
+                    stored_name,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Hugging Face upload failed for {stored_name}: {exc}",
+                ) from exc
+        else:
+            local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+            logger.info(
+                "Image received session=%s file=%s stored=%s local=%s",
+                session_id,
+                filename,
+                stored_name,
+                local_path,
+            )
+
+        record_data = {
+            "fileName": stored_name,
+            "hfRepo": settings.dataset_repo_id,
+            "hfPath": file_storage.dataset_image_path(project_id, dataset_id, stored_name),
+            "width": result.width,
+            "height": result.height,
+            "mimeType": result.mime_type or f.content_type,
+            "fileSize": len(result.data),
+            "status": "uploaded" if remote_uploaded else "queued",
+            "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
+            "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
+        }
+        if local_path:
+            record_data["localPath"] = str(local_path)
 
         record = await asyncio.to_thread(
             repo.create_image,
             project_id,
             dataset_id,
-            {
-                "fileName": stored_name,
-                "hfRepo": settings.dataset_repo_id,
-                "hfPath": file_storage.dataset_image_path(
-                    project_id, dataset_id, stored_name
-                ),
-                "width": result.width,
-                "height": result.height,
-                "mimeType": result.mime_type or f.content_type,
-                "fileSize": len(result.data),
-                "status": "queued",
-                "localPath": str(local_path),
-                "storageStatus": "local_ready",
-                "hfSyncStatus": "queued" if file_storage.hf_upload_enabled() else "skipped",
-            },
+            record_data,
         )
-
-        with _upload_sessions_lock:
-            session_state = _upload_sessions.get(session_id)
-            if session_state is not None:
-                session_state["items"].append(
-                    {
-                        "image_id": record["id"],
-                        "stored_name": stored_name,
-                        "local_path": str(local_path),
-                    }
-                )
-
         created.append(record)
-        logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
+
+        if not remote_uploaded:
+            with _upload_sessions_lock:
+                session_state = _upload_sessions.get(session_id)
+                if session_state is not None:
+                    session_state["items"].append(
+                        {
+                            "image_id": record["id"],
+                            "stored_name": stored_name,
+                            "local_path": str(local_path),
+                        }
+                    )
+            logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
+        else:
+            logger.info("Image recorded as remote_ready and synced session=%s file=%s", session_id, stored_name)
 
     if not created:
         return {
@@ -666,32 +699,6 @@ async def upload_images(
         "adjusted": adjusted,
         "processing": True,
     }
-
-    with _upload_sessions_lock:
-        session = _upload_sessions.get(session_id)
-        if session is not None:
-            if finalize_session:
-                session["finalize_requested"] = True
-            immediate = finalize_session or len(session["items"]) >= _UPLOAD_BATCH_SIZE
-            should_schedule = session.get("flush_task") is None and session["items"]
-        else:
-            immediate = False
-            should_schedule = False
-
-    if should_schedule:
-        _schedule_upload_flush(session_id, immediate=immediate)
-
-    result_payload = {
-        "uploadSessionId": session_id,
-        "uploaded": len(created),
-        "images": created,
-        "queued": len(created),
-        "skipped": skipped,
-        "adjusted": adjusted,
-        "processing": True,
-    }
-    await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
-    return result_payload
 
 
 @api_router.post("/upload-zip")
@@ -732,47 +739,86 @@ async def upload_zip(
                         raise HTTPException(status_code=500, detail="Upload session expired")
                     stored_name = _safe_local_name(filename, session_state["used_names"])
 
-                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+                remote_uploaded = False
+                local_path = None
+                if settings.is_vercel or not settings.local_storage_enabled:
+                    try:
+                        loc = await asyncio.to_thread(
+                            file_storage.upload_dataset_image,
+                            project_id,
+                            dataset_id,
+                            stored_name,
+                            result.data,
+                        )
+                        remote_uploaded = True
+                        logger.info(
+                            "ZIP image uploaded immediately to HF on Vercel project=%s dataset=%s file=%s",
+                            project_id,
+                            dataset_id,
+                            stored_name,
+                        )
+                    except Exception as exc:
+                        logger.exception(
+                            "Hugging Face upload failed on Vercel for ZIP %s/%s: %s",
+                            project_id,
+                            stored_name,
+                            exc,
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Hugging Face upload failed for {stored_name}: {exc}",
+                        ) from exc
+                else:
+                    local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+
+                record_data = {
+                    "fileName": stored_name,
+                    "hfRepo": settings.dataset_repo_id,
+                    "hfPath": file_storage.dataset_image_path(
+                        project_id, dataset_id, stored_name
+                    ),
+                    "width": result.width,
+                    "height": result.height,
+                    "mimeType": result.mime_type or file.content_type,
+                    "fileSize": len(result.data),
+                    "status": "uploaded" if remote_uploaded else "queued",
+                    "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
+                    "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
+                }
+                if local_path:
+                    record_data["localPath"] = str(local_path)
 
                 record = await asyncio.to_thread(
                     repo.create_image,
                     project_id,
                     dataset_id,
-                    {
-                        "fileName": stored_name,
-                        "hfRepo": settings.dataset_repo_id,
-                        "hfPath": file_storage.dataset_image_path(
-                            project_id, dataset_id, stored_name
-                        ),
-                        "width": result.width,
-                        "height": result.height,
-                        "mimeType": result.mime_type or file.content_type,
-                        "fileSize": len(result.data),
-                        "status": "queued",
-                        "localPath": str(local_path),
-                        "storageStatus": "local_ready",
-                        "hfSyncStatus": "queued" if file_storage.hf_upload_enabled() else "skipped",
-                    },
+                    record_data,
                 )
-
-                with _upload_sessions_lock:
-                    session_state = _upload_sessions.get(session_id)
-                    if session_state is not None:
-                        session_state["items"].append(
-                            {
-                                "image_id": record["id"],
-                                "stored_name": stored_name,
-                                "local_path": str(local_path),
-                            }
-                        )
-
                 created.append(record)
-                logger.info(
-                    "ZIP image staged session=%s file=%s stored=%s",
-                    session_id,
-                    filename,
-                    stored_name,
-                )
+
+                if not remote_uploaded:
+                    with _upload_sessions_lock:
+                        session_state = _upload_sessions.get(session_id)
+                        if session_state is not None:
+                            session_state["items"].append(
+                                {
+                                    "image_id": record["id"],
+                                    "stored_name": stored_name,
+                                    "local_path": str(local_path),
+                                }
+                            )
+                    logger.info(
+                        "ZIP image staged session=%s file=%s stored=%s",
+                        session_id,
+                        filename,
+                        stored_name,
+                    )
+                else:
+                    logger.info(
+                        "ZIP image recorded as remote_ready and synced session=%s file=%s",
+                        session_id,
+                        stored_name,
+                    )
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
@@ -1188,7 +1234,16 @@ async def run_hf_sync(project_id: str, _: None = Depends(verify_api_key)):
                 # mark all as synced
                 for (_name, _data, img_id) in batch:
                     try:
-                        await asyncio.to_thread(repo.update_image_storage_fields, project_id, img_id, {"hf_sync_status": "synced", "storage_status": "local_ready"})
+                        await asyncio.to_thread(
+                            repo.update_image_storage_fields,
+                            project_id,
+                            img_id,
+                            {
+                                "hfPath": file_storage.dataset_image_path(project_id, ds_id, _name),
+                                "hf_sync_status": "synced",
+                                "storage_status": "remote_ready",
+                            },
+                        )
                         uploaded += 1
                     except Exception:
                         failed.append({"id": img_id, "reason": "db update failed after upload"})
@@ -1219,7 +1274,7 @@ async def finalize_upload(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        res = await asyncio.to_thread(file_storage.upload_labels_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+        res = await asyncio.to_thread(file_storage.upload_dataset_images_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
     except Exception as exc:
         logger.exception("Finalize upload failed for %s/%s: %s", project_id, dataset_id, exc)
         # mark pending for retry
@@ -1235,7 +1290,11 @@ async def finalize_upload(project_id: str, dataset_id: str, _: None = Depends(ve
     images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
     for img in images:
         try:
-            await asyncio.to_thread(repo.update_image_storage_fields, project_id, img.get("id"), {"hf_sync_status": "synced"})
+            file_name = img.get("fileName")
+            payload = {"hf_sync_status": "synced", "storage_status": "remote_ready"}
+            if file_name:
+                payload["hfPath"] = file_storage.dataset_image_path(project_id, dataset_id, file_name)
+            await asyncio.to_thread(repo.update_image_storage_fields, project_id, img.get("id"), payload)
         except Exception:
             logger.exception("Failed to mark image synced %s", img.get("id"))
 
@@ -1253,7 +1312,7 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        res = await asyncio.to_thread(file_storage.upload_dataset_images_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+        res = await asyncio.to_thread(file_storage.upload_labels_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
     except Exception as exc:
         logger.exception("Finalize labels failed for %s/%s: %s", project_id, dataset_id, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1285,6 +1344,91 @@ async def dataset_sync_preview(project_id: str, dataset_id: str, _: None = Depen
         "labels_synced": labels_synced,
         "pending_image_sync": pending_image_sync,
         "pending_label_sync": pending_label_sync,
+    }
+
+
+@api_router.post("/admin/datasets/{project_id}/{dataset_id}/repair-hf-paths")
+async def repair_dataset_hf_paths(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    if not settings.dataset_repo_id:
+        raise HTTPException(status_code=400, detail="HF dataset repo is not configured")
+    api = _hf_api()
+    prefix = f"datasets/{project_id}/{dataset_id}/images/"
+
+    try:
+        files = api.list_repo_files(repo_id=settings.dataset_repo_id, repo_type=settings.dataset_repo_type)
+    except Exception as exc:
+        logger.exception("HF path repair failed for project=%s dataset=%s", project_id, dataset_id)
+        raise HTTPException(status_code=500, detail=f"Failed to list HF repo files: {exc}") from exc
+
+    remote_files = [f for f in files if f.startswith(prefix)]
+    images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+    name_map = {img.get("fileName"): img for img in images if img.get("fileName")}
+    updated = []
+    for remote_path in remote_files:
+        filename = Path(remote_path).name
+        img = name_map.get(filename)
+        if not img:
+            continue
+        try:
+            await asyncio.to_thread(
+                repo.update_image_storage_fields,
+                project_id,
+                img["id"],
+                {
+                    "hfPath": remote_path,
+                    "storageStatus": "remote_ready",
+                    "hfSyncStatus": "synced",
+                },
+            )
+            updated.append({"imageId": img["id"], "fileName": filename, "hfPath": remote_path})
+        except Exception:
+            logger.exception("Failed to update image HF path for %s", img.get("id"))
+
+    return {
+        "projectId": project_id,
+        "datasetId": dataset_id,
+        "repoId": settings.dataset_repo_id,
+        "repoType": settings.dataset_repo_type,
+        "remoteFilesCount": len(remote_files),
+        "matchedImages": len(updated),
+        "updated": updated,
+    }
+
+
+@api_router.get("/admin/datasets/{project_id}/{dataset_id}/hf-file-check")
+async def hf_file_check(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    if not settings.dataset_repo_id:
+        raise HTTPException(status_code=400, detail="HF dataset repo is not configured")
+    api = _hf_api()
+    prefix = f"datasets/{project_id}/{dataset_id}/images/"
+
+    try:
+        files = api.list_repo_files(repo_id=settings.dataset_repo_id, repo_type=settings.dataset_repo_type)
+    except Exception as exc:
+        logger.exception("HF file check failed for project=%s dataset=%s", project_id, dataset_id)
+        raise HTTPException(status_code=500, detail=f"Failed to list HF repo files: {exc}") from exc
+
+    remote_files = [f for f in files if f.startswith(prefix)]
+    remote_file_set = set(remote_files)
+    remote_file_names = {Path(f).name for f in remote_files}
+    images = await asyncio.to_thread(repo.list_dataset_images, project_id, dataset_id)
+    db_images_count = len(images)
+    images_with_hf_path = sum(1 for img in images if img.get("hfPath"))
+    matched_by_filename = sum(1 for img in images if img.get("fileName") and img.get("fileName") in remote_file_names)
+    missing_remote = sum(
+        1
+        for img in images
+        if img.get("hfPath") and img.get("hfPath") not in remote_file_set
+    )
+
+    return {
+        "db_images_count": db_images_count,
+        "images_with_hf_path": images_with_hf_path,
+        "hf_files_found": len(remote_files),
+        "matched_by_filename": matched_by_filename,
+        "missing_remote": missing_remote,
+        "examples_missing": [img.get("hfPath") for img in images if img.get("hfPath") and img.get("hfPath") not in remote_file_set][:5],
+        "examples_found": [img.get("hfPath") for img in images if img.get("hfPath") and img.get("hfPath") in remote_file_set][:5],
     }
 
 

@@ -84,6 +84,7 @@ create table if not exists public.images (
   local_path      text,
   storage_status  text,
   hf_sync_status  text,
+  last_error      text,
   mime_type       text,
   file_size       bigint not null default 0,
   width           integer,

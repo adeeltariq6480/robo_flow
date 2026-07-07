@@ -248,11 +248,24 @@ def upload_bytes(
 def upload_dataset_image(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:
+    target_path = dataset_image_path(project_id, dataset_id, file_name)
     logger.info(
         "Selected repo for image upload: %s (dataset) target=%s",
         settings.dataset_repo_id,
-        dataset_image_path(project_id, dataset_id, file_name),
+        target_path,
     )
+
+    if settings.is_vercel or not settings.local_storage_enabled:
+        if not hf_dataset_upload_enabled():
+            raise RuntimeError(
+                "Hugging Face upload is disabled; Vercel deployment requires HF dataset storage."
+            )
+        return upload_bytes(
+            data,
+            repo_type=settings.dataset_repo_type,
+            path_in_repo=target_path,
+        )
+
     # Always persist a local copy first so uploads and downstream jobs
     # (auto-label) can operate from local storage even if HF is disabled
     # or rate-limited.
@@ -265,12 +278,9 @@ def upload_dataset_image(
     except Exception:
         logger.exception("Failed to save dataset image locally: %s/%s", project_id, file_name)
 
-    # Do not commit to Hugging Face per-upload. Always return hf path to record
-    # where the file should live, but actual HF commit will be done by
-    # finalize endpoints that upload entire folders in a single commit.
     return {
         "hfRepo": settings.dataset_repo_id,
-        "hfPath": dataset_image_path(project_id, dataset_id, file_name),
+        "hfPath": target_path,
         "repoType": settings.dataset_repo_type,
         "localPath": str(local_path) if 'local_path' in locals() else None,
     }
@@ -471,6 +481,22 @@ def download_to_local(
         return dest
 
     raise RuntimeError(f"HF download returned no file for {repo_id}/{path_in_repo}")
+
+
+def download_to_temp(
+    repo_id: str,
+    path_in_repo: str,
+    *,
+    repo_type: str,
+) -> Path:
+    """Download a file from HF Hub to a temporary local path for ephemeral inference."""
+    source = download_to_local(repo_id, path_in_repo, repo_type=repo_type)
+    settings.storage_base_path.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix="hf-temp-", dir=settings.storage_base_path))
+    temp_path = temp_dir / Path(path_in_repo).name
+    temp_path.write_bytes(source.read_bytes())
+    logger.info("Downloaded HF file to temp path: %s", temp_path)
+    return temp_path
 
 
 def download_bytes(repo_id: str, path_in_repo: str, *, repo_type: str) -> bytes:

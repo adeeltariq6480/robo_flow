@@ -215,6 +215,10 @@ class Settings(BaseSettings):
         return self.deploy_target.strip().lower() == "vercel"
 
     @property
+    def use_local_images_for_auto_label(self) -> bool:
+        return self.auto_label_use_local_images and self.local_storage_enabled and not self.is_vercel
+
+    @property
     def dataset_repo_type(self) -> str:
         return self.hf_dataset_repo_type.strip().lower() or "dataset"
 

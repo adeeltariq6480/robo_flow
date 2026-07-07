@@ -2,7 +2,9 @@ import asyncio
 import gc
 import logging
 import os
-from collections import defaultdict
+import shutil
+from collections import Counter, defaultdict
+from pathlib import Path
 from app.config import settings
 
 from app.core.jobs import update_job
@@ -22,6 +24,7 @@ from app.services.storage import (
     download_image_row,
     download_model,
     get_project_class_map,
+    resolve_hf_path_for_image,
 )
 from app.services.yolo_inference import prewarm_yolo, run_yolo_inference, unload_model
 
@@ -93,6 +96,26 @@ def _compact_job_result(
     }
 
 
+def _no_images_message() -> str:
+    if settings.is_vercel:
+        return (
+            "No remote Hugging Face images found for this dataset. "
+            "Run HF sync or repair HF paths. Local storage is disabled on Vercel."
+        )
+    return "No local images found. Run repair-local-paths or HF sync."
+
+
+def _status_counts(file_list: list[dict], key: str) -> dict[str, int]:
+    return dict(Counter(str(f.get(key) or "missing") for f in file_list))
+
+
+def _vercel_remote_ready(file_row: dict) -> bool:
+    return bool(file_row.get("hfPath")) and (
+        file_row.get("hfSyncStatus") == "synced"
+        or file_row.get("storageStatus") == "remote_ready"
+    )
+
+
 async def run_auto_label(
     job_id: str,
     project_id: str,
@@ -105,21 +128,52 @@ async def run_auto_label(
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
-    file_list = list_dataset_images(project_id, dataset_id)
-    total = len(file_list)
+    db_file_list = list_dataset_images(project_id, dataset_id)
+    db_total = len(db_file_list)
 
-    if total == 0:
+    if db_total == 0:
         raise ValueError("Dataset has no files to label")
 
-    if not file_list:
-        raise ValueError(
-            "No local images found and remote Hugging Face images are missing. "
-            "Re-upload dataset or run HF sync. You can also try POST /api/admin/datasets/{project_id}/{dataset_id}/repair-local-paths"
-        )
+    if settings.is_vercel:
+        repaired = 0
+        for f in db_file_list:
+            image_id = str(f.get("id"))
+            hf_path = resolve_hf_path_for_image(f, image_id)
+            if hf_path and not f.get("hfPath"):
+                f["hfPath"] = hf_path
+                f["hfSyncStatus"] = "synced"
+                f["storageStatus"] = "remote_ready"
+                repaired += 1
+        if repaired:
+            logger.info("Auto-label repaired %d missing HF path(s) before filtering", repaired)
+        file_list = [f for f in db_file_list if _vercel_remote_ready(f)]
+    else:
+        file_list = db_file_list
+
+    total = len(file_list)
+
+    logger.info(
+        "Auto-label deployment config: DEPLOY_TARGET=%s LOCAL_STORAGE_ENABLED=%s AUTO_LABEL_USE_LOCAL_IMAGES=%s",
+        settings.deploy_target or "",
+        settings.local_storage_enabled,
+        settings.auto_label_use_local_images,
+    )
+    logger.info(
+        "Auto-label DB image state: db_images_count=%d eligible_images=%d images_with_hf_path=%d hf_sync_status_counts=%s storage_status_counts=%s hf_path_examples=%s",
+        db_total,
+        total,
+        sum(1 for f in db_file_list if f.get("hfPath")),
+        _status_counts(db_file_list, "hfSyncStatus"),
+        _status_counts(db_file_list, "storageStatus"),
+        [f.get("hfPath") for f in db_file_list if f.get("hfPath")][:5],
+    )
+
+    if total == 0:
+        raise ValueError(_no_images_message())
 
     # If we require local images and some images are still queued/not saved,
     # refuse to start auto-label so the client can finish uploads first.
-    if settings.auto_label_use_local_images:
+    if settings.use_local_images_for_auto_label:
         any_not_ready = False
         for f in file_list:
             lp = f.get("localPath") or f.get("local_path")
@@ -229,8 +283,10 @@ async def run_auto_label(
                     project_id,
                     file_id,
                     {
+                        "status": "missing_remote",
                         "storage_status": "missing_remote",
                         "hf_sync_status": "missing_remote",
+                        "last_error": str(exc),
                     },
                 )
             prep_failures[file_id] = str(exc)
@@ -360,6 +416,8 @@ async def run_auto_label(
                     )
 
                 try:
+                    if not await ensure_image(file_id):
+                        continue
                     inference = await asyncio.to_thread(
                         run_yolo_inference,
                         model_path,
@@ -408,12 +466,14 @@ async def run_auto_label(
             project_id=project_id,
         )
 
-    if len(prep_failures) == total:
-        raise ValueError(
-            "No images available for labeling: local files missing and HF downloads failed. "
-            "Try: 1) run POST /api/admin/datasets/{project_id}/{dataset_id}/repair-local-paths to resync local paths; "
-            "2) re-upload dataset; or 3) run POST /api/admin/hf-sync/run to schedule HF sync."
+    if prep_failures:
+        logger.info(
+            "Auto-label first HF/image preparation errors: %s",
+            [f"{fid}: {err}" for fid, err in list(prep_failures.items())[:5]],
         )
+
+    if len(prep_failures) == total:
+        raise ValueError(_no_images_message())
 
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
 
@@ -505,6 +565,18 @@ async def run_auto_label(
     await update_job(job_id, processed_items=total, project_id=project_id)
     logger.info("Job %s done: labeled=%d failed=%d", job_id, labeled, failed)
 
+    for path in image_paths.values():
+        try:
+            image_path = Path(path)
+            if settings.is_vercel or str(image_path).startswith(str(settings.storage_base_path)):
+                if image_path.exists():
+                    image_path.unlink()
+                parent = image_path.parent
+                if parent.name.startswith("hf-temp-"):
+                    shutil.rmtree(parent, ignore_errors=True)
+        except Exception:
+            logger.debug("Failed to delete temporary auto-label image %s", path)
+
     if model_failures:
         logger.warning(
             "Job %s completed with %d model failure(s): %s",
@@ -516,9 +588,14 @@ async def run_auto_label(
     if labeled == 0 and failed > 0:
         samples = [str(r.get("error", "unknown")) for r in all_results if r.get("error")][:3]
         hint = "; ".join(samples) if samples else "unknown error"
+        if settings.is_vercel:
+            raise ValueError(
+                f"All {failed} image(s) failed. Check HF_TOKEN, HF_MODEL_REPO, HF_DATASET_REPO "
+                f"on Vercel and run repair HF paths if needed. Examples: {hint}"
+            )
         raise ValueError(
             f"All {failed} image(s) failed. Check HF_TOKEN, HF_MODEL_REPO, HF_DATASET_REPO "
-            f"on Railway and that classes match your YOLO model. Examples: {hint}"
+            f"on Railway/VPS and that classes match your YOLO model. Examples: {hint}"
         )
 
     return _compact_job_result(

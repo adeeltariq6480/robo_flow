@@ -75,6 +75,7 @@ def _image_row(row: dict) -> dict:
         "localPath": row.get("local_path"),
         "storageStatus": row.get("storage_status", "local_ready" if row.get("local_path") else "pending"),
         "hfSyncStatus": row.get("hf_sync_status", "pending"),
+        "lastError": row.get("last_error"),
         "mimeType": row.get("mime_type"),
         "fileSize": row.get("file_size", 0),
         "width": row.get("width"),
@@ -445,7 +446,7 @@ def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
     except Exception as exc:
         message = str(exc).lower()
         if "column" in message and "does not exist" in message:
-            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status"}}
+            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}}
             res = _sb().table("images").insert(fallback).execute()
         else:
             raise
@@ -462,10 +463,24 @@ def update_image_storage_fields(project_id: str, image_id: str, data: dict) -> N
         payload["status"] = data["status"]
     if "local_path" in data:
         payload["local_path"] = data["local_path"]
+    if "localPath" in data:
+        payload["local_path"] = data["localPath"]
     if "storage_status" in data:
         payload["storage_status"] = data["storage_status"]
+    if "storageStatus" in data:
+        payload["storage_status"] = data["storageStatus"]
     if "hf_sync_status" in data:
         payload["hf_sync_status"] = data["hf_sync_status"]
+    if "hfSyncStatus" in data:
+        payload["hf_sync_status"] = data["hfSyncStatus"]
+    if "hfPath" in data:
+        payload["hf_path"] = data["hfPath"]
+    if "hf_path" in data:
+        payload["hf_path"] = data["hf_path"]
+    if "lastError" in data:
+        payload["last_error"] = data["lastError"]
+    if "last_error" in data:
+        payload["last_error"] = data["last_error"]
     if not payload:
         return
     try:
@@ -473,7 +488,7 @@ def update_image_storage_fields(project_id: str, image_id: str, data: dict) -> N
     except Exception as exc:
         message = str(exc).lower()
         if "column" in message and "does not exist" in message:
-            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status"}}
+            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}}
             if fallback:
                 _sb().table("images").update(fallback).eq("id", image_id).eq("project_id", project_id).execute()
         else:

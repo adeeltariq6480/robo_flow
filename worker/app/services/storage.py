@@ -116,53 +116,148 @@ def resolve_model_local_path(model_id: str, project_id: str) -> Path:
     return download_model(model_id, project_id)
 
 
+def _should_use_local_auto_label_image() -> bool:
+    return settings.auto_label_use_local_images and settings.local_storage_enabled and not settings.is_vercel
+
+
+def _resolve_hf_path_by_filename(row: dict, image_id: str) -> str | None:
+    file_name = row.get("fileName") or row.get("file_name")
+    project_id = row.get("projectId") or row.get("project_id")
+    dataset_id = row.get("datasetId") or row.get("dataset_id")
+    if not file_name or not project_id or not dataset_id:
+        return None
+    repo_id = row.get("hfRepo") or row.get("hf_repo") or settings.dataset_repo_id
+    if not repo_id:
+        return None
+
+    prefix = f"datasets/{project_id}/{dataset_id}/images/"
+    try:
+        repo_files = file_storage._api().list_repo_files(
+            repo_id=repo_id,
+            repo_type=settings.dataset_repo_type,
+        )
+    except Exception as exc:
+        logger.exception("Failed to list HF repo files for image %s: %s", image_id, exc)
+        return None
+
+    for path in repo_files:
+        if path.startswith(prefix) and Path(path).name == file_name:
+            selected = path
+            if selected != row.get("hfPath"):
+                try:
+                    update_image_storage_fields(
+                        str(project_id),
+                        image_id,
+                        {
+                            "hfPath": selected,
+                            "storageStatus": "remote_ready",
+                            "hfSyncStatus": "synced",
+                        },
+                    )
+                except Exception:
+                    logger.exception("Failed to update image hfPath for %s", image_id)
+            return selected
+    return None
+
+
+def resolve_hf_path_for_image(row: dict, image_id: str) -> str | None:
+    return row.get("hfPath") or row.get("hf_path") or _resolve_hf_path_by_filename(row, image_id)
+
+
 def resolve_image_path(row: dict, image_id: str) -> Path | None:
     local_path = row.get("localPath") or row.get("local_path")
-    if settings.auto_label_use_local_images and local_path:
+    if _should_use_local_auto_label_image() and local_path:
         candidate = Path(local_path)
         if candidate.exists() and candidate.is_file():
             logger.info("Auto-label using local image %s for %s", candidate, image_id)
             return candidate
+        logger.info("Auto-label local image missing or unavailable for %s", image_id)
 
-    hf_path = row.get("hfPath")
+    existing_hf_path = row.get("hfPath") or row.get("hf_path")
+    hf_path = resolve_hf_path_for_image(row, image_id)
+    if not existing_hf_path and hf_path:
+        logger.info("Resolved missing HF path from repo file list for %s: %s", image_id, hf_path)
+
     if not hf_path:
         logger.warning("Image %s has no remote HF path", image_id)
         return None
 
-    if not settings.auto_label_use_local_images:
-        logger.info("Auto-label falling back to HF image for %s", image_id)
-    else:
-        logger.info("Auto-label local image missing; falling back to HF for %s", image_id)
-
+    logger.info("Auto-label using HF path %s for %s", hf_path, image_id)
     try:
-        downloaded = file_storage.download_to_local(
+        download_fn = (
+            file_storage.download_to_temp
+            if settings.is_vercel or not settings.local_storage_enabled
+            else file_storage.download_to_local
+        )
+        downloaded = download_fn(
             row.get("hfRepo", settings.dataset_repo_id),
             hf_path,
             repo_type=file_storage.REPO_TYPE_DATASET,
         )
-        # Cache HF images into project dataset local folder for future reuse
-        try:
-            project_id = row.get("projectId") or row.get("project_id")
-            dataset_id = row.get("datasetId") or row.get("dataset_id")
-            file_name = row.get("fileName") or Path(hf_path).name
-            if project_id and dataset_id:
-                dest_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                dest_path = dest_dir / file_name
-                if not dest_path.exists() or dest_path.stat().st_size == 0:
-                    dest_path.write_bytes(downloaded.read_bytes())
-                    # update DB local path for this image
-                    try:
-                            update_image_storage_fields(str(project_id), image_id, {"local_path": str(dest_path), "storage_status": "local_ready"})
-                    except Exception:
-                        logger.exception("Failed to update image local path for %s", image_id)
-                return dest_path
-        except Exception:
-            logger.exception("Failed to cache HF image locally for %s", image_id)
-        return downloaded
     except Exception as exc:
+        message = str(exc).lower()
+        if "404" in message or "not found" in message:
+            logger.warning("HF image missing for %s path=%s", image_id, hf_path)
+            if row.get("fileName"):
+                alt_path = _resolve_hf_path_by_filename(row, image_id)
+                if alt_path and alt_path != hf_path:
+                    logger.info("Found alternate HF path for %s: %s", image_id, alt_path)
+                    try:
+                        download_fn = (
+                            file_storage.download_to_temp
+                            if settings.is_vercel or not settings.local_storage_enabled
+                            else file_storage.download_to_local
+                        )
+                        downloaded = download_fn(
+                            row.get("hfRepo", settings.dataset_repo_id),
+                            alt_path,
+                            repo_type=file_storage.REPO_TYPE_DATASET,
+                        )
+                        return downloaded
+                    except Exception as secondary_exc:
+                        logger.warning(
+                            "Alternate HF image download failed for %s: %s",
+                            image_id,
+                            secondary_exc,
+                        )
+            update_image_storage_fields(
+                str(row.get("projectId") or row.get("project_id") or ""),
+                image_id,
+                {
+                    "status": "missing_remote",
+                    "storage_status": "missing_remote",
+                    "hf_sync_status": "missing_remote",
+                    "lastError": str(exc),
+                },
+            )
         logger.warning("HF image unavailable for %s: %s", image_id, exc)
         return None
+
+    if not settings.local_storage_enabled or settings.is_vercel:
+        return downloaded
+
+    try:
+        project_id = row.get("projectId") or row.get("project_id")
+        dataset_id = row.get("datasetId") or row.get("dataset_id")
+        file_name = row.get("fileName") or Path(hf_path).name
+        if project_id and dataset_id:
+            dest_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / file_name
+            if not dest_path.exists() or dest_path.stat().st_size == 0:
+                dest_path.write_bytes(downloaded.read_bytes())
+                try:
+                    update_image_storage_fields(
+                        str(project_id),
+                        image_id,
+                        {"local_path": str(dest_path), "storage_status": "local_ready"},
+                    )
+                except Exception:
+                    logger.exception("Failed to update image local path for %s", image_id)
+            return dest_path
+    except Exception:
+        logger.exception("Failed to cache HF image locally for %s", image_id)
+    return downloaded
 
 
 def download_image(repo: str, path: str, image_id: str) -> Path:
