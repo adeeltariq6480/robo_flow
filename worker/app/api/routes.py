@@ -11,6 +11,7 @@ from pathlib import Path
 import psutil
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     Form,
@@ -19,6 +20,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from huggingface_hub import CommitOperationDelete, HfApi
 
 from app.config import settings
 from app.core.jobs import submit_job
@@ -91,6 +93,20 @@ def _check_upload_config() -> None:
                 f"Set these Railway variables: {', '.join(missing)}"
             ),
         )
+
+
+def _hf_api() -> HfApi:
+    if not settings.hf_token:
+        raise HTTPException(status_code=503, detail="HF_TOKEN is not configured on the backend.")
+    return HfApi(token=settings.hf_token)
+
+
+def _validate_hf_cleanup_args(repo_id: str | None, repo_type: str | None) -> tuple[str, str]:
+    if not repo_id or not repo_id.strip():
+        raise HTTPException(status_code=400, detail="repo_id is required")
+    if repo_type not in {"dataset", "model"}:
+        raise HTTPException(status_code=400, detail="repo_type must be either 'dataset' or 'model'")
+    return repo_id.strip(), repo_type
 
 
 def _safe_filename(name: str | None, fallback: str = "image.jpg") -> str:
@@ -945,6 +961,111 @@ async def reupload_model(
             "fileSize": len(data),
         },
     )
+
+
+@api_router.get("/admin/hf-cleanup/preview")
+async def preview_hf_cleanup(
+    repo_id: str = "",
+    repo_type: str = "",
+    _: None = Depends(verify_api_key),
+):
+    logger.info("cleanup preview started repo=%s type=%s", repo_id, repo_type)
+    repo_id, repo_type = _validate_hf_cleanup_args(repo_id, repo_type)
+    api = _hf_api()
+
+    try:
+        files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        logger.exception("cleanup preview failed repo=%s type=%s", repo_id, repo_type)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list repository files: {exc}",
+        ) from exc
+
+    logger.info(
+        "files found repo=%s type=%s count=%d",
+        repo_id,
+        repo_type,
+        len(files),
+    )
+
+    response = {
+        "repo_id": repo_id,
+        "repo_type": repo_type,
+        "files": files,
+    }
+    if not files:
+        response["message"] = "No files found."
+    return response
+
+
+@api_router.post("/admin/hf-cleanup/delete")
+async def delete_hf_cleanup(
+    body: dict = Body(...),
+    _: None = Depends(verify_api_key),
+):
+    repo_id = body.get("repo_id", "")
+    repo_type = body.get("repo_type", "")
+    confirmation = body.get("confirmation", "")
+
+    logger.info("cleanup delete requested repo=%s type=%s", repo_id, repo_type)
+    repo_id, repo_type = _validate_hf_cleanup_args(repo_id, repo_type)
+
+    if confirmation != "DELETE":
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation must be exactly DELETE",
+        )
+
+    logger.info("confirmation verified repo=%s type=%s", repo_id, repo_type)
+    api = _hf_api()
+
+    try:
+        files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        logger.exception("cleanup failed listing files repo=%s type=%s", repo_id, repo_type)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list repository files: {exc}",
+        ) from exc
+
+    if not files:
+        logger.info("cleanup completed repo=%s type=%s no files found", repo_id, repo_type)
+        return {
+            "success": True,
+            "deleted_count": 0,
+            "deleted_files": [],
+            "message": "No files found.",
+        }
+
+    operations = [CommitOperationDelete(path_in_repo=file) for file in files]
+    logger.info(
+        "delete commit started repo=%s type=%s files=%d",
+        repo_id,
+        repo_type,
+        len(files),
+    )
+
+    try:
+        api.create_commit(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            operations=operations,
+            commit_message="Cleanup repo contents",
+        )
+    except Exception as exc:
+        logger.exception("cleanup failed repo=%s type=%s", repo_id, repo_type)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete repository files: {exc}",
+        ) from exc
+
+    logger.info("cleanup completed repo=%s type=%s deleted=%d", repo_id, repo_type, len(files))
+    return {
+        "success": True,
+        "deleted_count": len(files),
+        "deleted_files": files,
+    }
 
 
 @api_router.get("/model-status")

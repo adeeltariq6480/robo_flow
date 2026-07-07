@@ -1,7 +1,6 @@
 """Resolve model/image files from local storage first, then Hugging Face Hub."""
 
 import logging
-import os
 import threading
 from pathlib import Path
 

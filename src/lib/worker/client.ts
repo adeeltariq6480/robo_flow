@@ -166,3 +166,23 @@ export async function getQueueStats() {
     Record<string, { pending: number; running: number; max_workers: number }>
   >("/jobs/queues/stats");
 }
+
+export async function previewHfCleanup(repo_id: string, repo_type: string) {
+  return workerFetch<{ repo_id: string; repo_type: string; files: string[]; message?: string }>(
+    `/api/admin/hf-cleanup/preview?repo_id=${encodeURIComponent(repo_id)}&repo_type=${encodeURIComponent(repo_type)}`
+  );
+}
+
+export async function deleteHfCleanup(body: {
+  repo_id: string;
+  repo_type: string;
+  confirmation: string;
+}) {
+  return workerFetch<{ success: boolean; deleted_count: number; deleted_files: string[]; message?: string }>(
+    "/api/admin/hf-cleanup/delete",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    }
+  );
+}
