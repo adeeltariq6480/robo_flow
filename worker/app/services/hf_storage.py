@@ -209,6 +209,7 @@ def upload_bytes(
         settings.dataset_repo_id if repo_type == REPO_TYPE_DATASET
         else settings.model_repo_id
     )
+    logger.info("Hugging Face upload started repo=%s repo_type=%s path=%s", repo_id, repo_type, path_in_repo)
     _ensure_repo(repo_id, repo_type)
     with _hf_commit_lock:
         def _do_upload():
@@ -234,8 +235,9 @@ def upload_bytes(
 def upload_dataset_image(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:
+    logger.info("Selected repo for image upload: %s (dataset) target=%s", settings.dataset_repo_id, dataset_image_path(project_id, dataset_id, file_name))
     if not hf_upload_enabled():
-        logger.info("HF upload disabled; skipping image upload %s", file_name)
+        logger.info("Hugging Face upload is disabled; skipping image upload %s", file_name)
         return {"hfRepo": settings.dataset_repo_id, "hfPath": dataset_image_path(project_id, dataset_id, file_name), "repoType": REPO_TYPE_DATASET}
     return upload_bytes(
         data,
@@ -336,8 +338,9 @@ def upload_dataset_zip(
 
 
 def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
+    logger.info("Selected repo for model upload: %s (model) target=%s", settings.model_repo_id, model_path(project_id, file_name))
     if not hf_upload_enabled():
-        logger.info("HF upload disabled; skipping model upload %s", file_name)
+        logger.info("Hugging Face upload is disabled; skipping model upload %s", file_name)
         return {"hfRepo": settings.model_repo_id, "hfPath": model_path(project_id, file_name), "repoType": REPO_TYPE_MODEL}
     return upload_bytes(
         data,

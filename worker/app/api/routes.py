@@ -1068,6 +1068,70 @@ async def delete_hf_cleanup(
     }
 
 
+@api_router.get("/admin/hf-sync/preview")
+async def preview_hf_sync(project_id: str, _: None = Depends(verify_api_key)):
+    """Preview which local models/images would be uploaded to Hugging Face for a project."""
+    logger.info("hf-sync preview project=%s", project_id)
+    # Basic HF config
+    hf_enabled = file_storage.hf_upload_enabled()
+    dataset_repo = settings.dataset_repo_id
+    model_repo = settings.model_repo_id
+
+    # Models: local files and DB models
+    model_dir = settings.model_files_dir / project_id
+    local_models = []
+    if model_dir.exists():
+        for p in model_dir.iterdir():
+            if p.is_file() and p.stat().st_size > 0:
+                local_models.append(p.name)
+
+    db_models = await asyncio.to_thread(repo.list_models, project_id)
+    db_model_names = [m.get("hfPath") and file_storage.model_cache_local_name_from_path(m.get("hfPath")) or None for m in db_models]
+    models_missing_local = [m for m in db_model_names if m and m not in local_models]
+
+    # Datasets / images: aggregate per-dataset
+    datasets = await asyncio.to_thread(repo.list_datasets, project_id)
+    datasets_summary: list[dict] = []
+    total_local_images = 0
+    total_db_images = 0
+    total_pending_images = 0
+    for ds in datasets:
+        ds_id = ds["id"]
+        local_images_dir = settings.dataset_files_dir / project_id / ds_id / "images"
+        local_images = []
+        if local_images_dir.exists():
+            for p in local_images_dir.iterdir():
+                if p.is_file() and p.stat().st_size > 0:
+                    local_images.append(p.name)
+        db_images = await asyncio.to_thread(repo.list_dataset_images, project_id, ds_id)
+        pending = [i for i in db_images if i.get("hfSyncStatus") != "synced" and i.get("storageStatus") in {"local_ready", "pending"}]
+        datasets_summary.append({
+            "datasetId": ds_id,
+            "datasetName": ds.get("name"),
+            "localImagesCount": len(local_images),
+            "dbImagesCount": len(db_images),
+            "pendingImagesCount": len(pending),
+        })
+        total_local_images += len(local_images)
+        total_db_images += len(db_images)
+        total_pending_images += len(pending)
+
+    response = {
+        "hfUploadEnabled": hf_enabled,
+        "datasetRepo": dataset_repo,
+        "modelRepo": model_repo,
+        "projectId": project_id,
+        "localModelsCount": len(local_models),
+        "dbModelsCount": len(db_models),
+        "modelsMissingLocal": models_missing_local,
+        "localImagesCount": total_local_images,
+        "dbImagesCount": total_db_images,
+        "imagesPendingSyncCount": total_pending_images,
+        "datasets": datasets_summary,
+    }
+    return response
+
+
 @api_router.get("/model-status")
 async def model_status(
     project_id: str,

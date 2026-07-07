@@ -24,6 +24,16 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "HF_TOKEN / HF_DATASET_REPO / HF_MODEL_REPO not set — uploads will fail"
         )
+    # Log Hugging Face upload configuration
+    try:
+        logger.info("HF_UPLOAD_ENABLED=%s", settings.hf_upload_enabled)
+        logger.info("HF_TOKEN present=%s", bool(settings.hf_token and settings.hf_token.strip()))
+        logger.info("HF_DATASET_REPO=%s", settings.dataset_repo_id or None)
+        logger.info("HF_MODEL_REPO=%s", settings.model_repo_id or None)
+        logger.info("Selected repo_type for image upload: %s", "dataset")
+        logger.info("Selected repo_type for model upload: %s", "model")
+    except Exception:
+        logger.exception("Failed to log HF startup configuration")
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
     await queue_manager.stop()
