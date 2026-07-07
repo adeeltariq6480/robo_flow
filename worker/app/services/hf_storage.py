@@ -121,6 +121,37 @@ def hf_upload_enabled() -> bool:
     return hf_dataset_upload_enabled() or hf_model_upload_enabled()
 
 
+def _format_hf_error(exc: Exception) -> str:
+    if isinstance(exc, HfHubHTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        text = str(exc)
+        if status == 401:
+            return "Hugging Face rejected HF_TOKEN (401). Check token value and permissions."
+        if status == 403:
+            return "Hugging Face denied access (403). Token needs write access to this repo."
+        if status == 404:
+            return "Hugging Face repo or path was not found (404). Check repo id and repo type."
+        if status == 429:
+            return "Hugging Face rate limit reached (429). Wait and retry with fewer commits."
+        if status:
+            return f"Hugging Face returned HTTP {status}: {text}"
+        return f"Hugging Face error: {text}"
+    return str(exc)
+
+
+def _verify_repo_file(repo_id: str, repo_type: str, path_in_repo: str) -> None:
+    try:
+        files = _api().list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Uploaded {path_in_repo}, but could not verify Hugging Face repo files: {_format_hf_error(exc)}"
+        ) from exc
+    if path_in_repo not in files:
+        raise RuntimeError(
+            f"Hugging Face upload did not make {path_in_repo} available in repo {repo_id} ({repo_type})."
+        )
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
@@ -156,7 +187,10 @@ def _upload_with_retry(operation_name: str, fn):
                 time.sleep(wait_for)
                 delay *= 2
                 continue
-            raise
+            if "no files have been modified" in detail or "empty commit" in detail:
+                logger.info("HF upload produced no changes for %s; treating as already uploaded", operation_name)
+                return None
+            raise RuntimeError(_format_hf_error(exc)) from exc
         except Exception as exc:
             last_exc = exc
             if attempt < max_attempts - 1:
@@ -171,11 +205,11 @@ def _upload_with_retry(operation_name: str, fn):
                 time.sleep(wait_for)
                 delay *= 2
                 continue
-            raise
+            raise RuntimeError(_format_hf_error(exc)) from exc
 
     assert last_exc is not None
     logger.error("HF upload failed after retries for %s: %s", operation_name, last_exc)
-    raise last_exc
+    raise RuntimeError(_format_hf_error(last_exc)) from last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +276,7 @@ def upload_bytes(
                 logger.info("HF file unchanged at %s — reusing existing blob", path_in_repo)
             else:
                 raise
+    _verify_repo_file(repo_id, repo_type, path_in_repo)
     return {"hfRepo": repo_id, "hfPath": path_in_repo, "repoType": repo_type}
 
 
@@ -319,15 +354,10 @@ def upload_dataset_images_batch(
                     commit_message=f"Upload {len(items)} images to dataset {dataset_id}",
                 )
 
-            try:
-                _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
-            except HfHubHTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 429:
-                    raise RuntimeError(
-                        "Hugging Face commit rate limit reached. "
-                        "Wait ~30 minutes or upload fewer images per session."
-                    ) from exc
-                raise
+            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+
+    for local_name in local_names:
+        _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_name}")
 
     return {"hfRepo": repo_id, "count": len(items), "localNames": local_names}
 
@@ -355,15 +385,10 @@ def upload_dataset_images_from_folder(
                 commit_message=f"Upload {count} images to dataset {dataset_id}",
             )
 
-        try:
-            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
-        except HfHubHTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
-                raise RuntimeError(
-                    "Hugging Face commit rate limit reached. "
-                    "Wait ~30 minutes or upload fewer images per session."
-                ) from exc
-            raise
+        _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+    for local_file in Path(folder_path).iterdir():
+        if local_file.is_file():
+            _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_file.name}")
     return {"hfRepo": repo_id, "count": count}
 
 
@@ -390,14 +415,10 @@ def upload_labels_from_folder(
                 commit_message=f"Upload {count} labels to dataset {dataset_id}",
             )
 
-        try:
-            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
-        except HfHubHTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
-                raise RuntimeError(
-                    "Hugging Face commit rate limit reached when uploading labels."
-                ) from exc
-            raise
+        _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+    for local_file in Path(folder_path).iterdir():
+        if local_file.is_file():
+            _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_file.name}")
     return {"hfRepo": repo_id, "count": count}
 
 

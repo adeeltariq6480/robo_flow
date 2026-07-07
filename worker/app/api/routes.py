@@ -91,9 +91,19 @@ def _check_upload_config() -> None:
             status_code=503,
             detail=(
                 "Upload storage not configured on the backend. "
-                f"Set these Railway variables: {', '.join(missing)}"
+                f"Set these backend environment variables: {', '.join(missing)}"
             ),
         )
+
+
+def _hf_upload_exception(exc: Exception, *, file_name: str, target: str) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail=(
+            f"Hugging Face {target} upload failed for {file_name}: {exc}. "
+            "Check HF_TOKEN write permission, HF_DATASET_REPO/HF_MODEL_REPO, and repo type."
+        ),
+    )
 
 
 def _hf_api() -> HfApi:
@@ -614,10 +624,7 @@ async def upload_images(
                     stored_name,
                     exc,
                 )
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Hugging Face upload failed for {stored_name}: {exc}",
-                ) from exc
+                raise _hf_upload_exception(exc, file_name=stored_name, target="image") from exc
         else:
             local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
             logger.info(
@@ -764,10 +771,7 @@ async def upload_zip(
                             stored_name,
                             exc,
                         )
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"Hugging Face upload failed for {stored_name}: {exc}",
-                        ) from exc
+                        raise _hf_upload_exception(exc, file_name=stored_name, target="image") from exc
                 else:
                     local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
 
@@ -905,7 +909,7 @@ async def upload_model_finish(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _hf_upload_exception(exc, file_name="chunked model", target="model") from exc
     except Exception as exc:
         logger.exception("Chunked model upload failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -925,13 +929,22 @@ async def upload_model(
     """Upload model file via worker → Hugging Face Hub + DB record."""
     _check_upload_config()
     data = await file.read()
-    local_path = await asyncio.to_thread(persist_model_bytes_locally, project_id, file.filename, data)
+    file_name = _safe_filename(file.filename, "model.pt")
+    if settings.local_storage_enabled and not settings.is_vercel:
+        await asyncio.to_thread(persist_model_bytes_locally, project_id, file_name, data)
     if settings.hf_upload_enabled:
-        loc = await asyncio.to_thread(
-            file_storage.upload_model_file, project_id, file.filename, data
-        )
+        try:
+            loc = await asyncio.to_thread(
+                file_storage.upload_model_file, project_id, file_name, data
+            )
+        except Exception as exc:
+            logger.exception("Hugging Face model upload failed project=%s file=%s", project_id, file_name)
+            raise _hf_upload_exception(exc, file_name=file_name, target="model") from exc
     else:
-        loc = {"hfRepo": settings.model_repo_id, "hfPath": file_storage.model_path(project_id, file.filename)}
+        raise HTTPException(
+            status_code=503,
+            detail="Hugging Face upload is disabled. Model uploads require HF_UPLOAD_ENABLED=true and HF_MODEL_REPO.",
+        )
     model = repo.create_model(project_id, {
         "modelName": model_name,
         "modelVersion": model_version,
@@ -997,12 +1010,16 @@ async def reupload_model(
         )
 
     data = local_path.read_bytes()
-    loc = await asyncio.to_thread(
-        file_storage.upload_model_file,
-        project_id,
-        local_path.name,
-        data,
-    )
+    try:
+        loc = await asyncio.to_thread(
+            file_storage.upload_model_file,
+            project_id,
+            local_path.name,
+            data,
+        )
+    except Exception as exc:
+        logger.exception("Hugging Face model reupload failed project=%s model=%s", project_id, model_id)
+        raise _hf_upload_exception(exc, file_name=local_path.name, target="model") from exc
     return await asyncio.to_thread(
         repo.create_model,
         project_id,
@@ -1121,6 +1138,45 @@ async def delete_hf_cleanup(
         "deleted_count": len(files),
         "deleted_files": files,
     }
+
+
+@api_router.get("/admin/hf-storage-check")
+async def hf_storage_check(_: None = Depends(verify_api_key)):
+    result = {
+        "deployTarget": settings.deploy_target,
+        "localStorageEnabled": settings.local_storage_enabled,
+        "hfUploadEnabled": settings.hf_upload_enabled,
+        "hfTokenConfigured": bool(settings.hf_token.strip()),
+        "datasetRepo": settings.dataset_repo_id,
+        "datasetRepoType": settings.dataset_repo_type,
+        "modelRepo": settings.model_repo_id,
+        "modelRepoType": settings.model_repo_type,
+        "datasetRepoAccessible": False,
+        "modelRepoAccessible": False,
+        "datasetFilesCount": 0,
+        "modelFilesCount": 0,
+        "errors": [],
+    }
+    if not settings.hf_token:
+        result["errors"].append("HF_TOKEN is not configured.")
+        return result
+
+    api = _hf_api()
+    for key, repo_id, repo_type in (
+        ("dataset", settings.dataset_repo_id, settings.dataset_repo_type),
+        ("model", settings.model_repo_id, settings.model_repo_type),
+    ):
+        if not repo_id:
+            result["errors"].append(f"{key} repo is not configured.")
+            continue
+        try:
+            files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
+            result[f"{key}RepoAccessible"] = True
+            result[f"{key}FilesCount"] = len(files)
+        except Exception as exc:
+            logger.exception("HF storage check failed for %s repo=%s type=%s", key, repo_id, repo_type)
+            result["errors"].append(f"{key} repo check failed: {exc}")
+    return result
 
 
 @api_router.get("/admin/hf-sync/preview")
@@ -1582,7 +1638,7 @@ async def repair_model_hf_path(
             )
         except Exception as exc:
             logger.exception("Model repair upload failed for %s/%s", project_id, model_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _hf_upload_exception(exc, file_name=local_file.name, target="model") from exc
 
         await asyncio.to_thread(repo.update_model_fields, project_id, model_id, loc)
         return {
