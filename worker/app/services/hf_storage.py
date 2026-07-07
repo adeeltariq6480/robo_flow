@@ -381,9 +381,9 @@ def download_to_local(
     dest = cache_root / file_name
     dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Selected storage path: %s", dest)
-    logger.info("Checking model file: %s", dest)
+    logger.info("Checking file: %s", dest)
     if dest.exists() and dest.stat().st_size > 0:
-        logger.info("Model already exists locally: %s", dest)
+        logger.info("File already exists locally: %s", dest)
         return dest
 
     try:
@@ -397,13 +397,13 @@ def download_to_local(
             )
         )
     except Exception:
-        logger.exception("Model download failed with full error: %s/%s", repo_id, path_in_repo)
+        logger.exception("File download failed with full error: %s/%s", repo_id, path_in_repo)
         raise
 
     if cached.exists():
         if cached.resolve() != dest.resolve():
             dest.write_bytes(cached.read_bytes())
-        logger.info("Model download completed: %s", dest)
+        logger.info("Download completed: %s", dest)
         return dest
 
     raise RuntimeError(f"HF download returned no file for {repo_id}/{path_in_repo}")

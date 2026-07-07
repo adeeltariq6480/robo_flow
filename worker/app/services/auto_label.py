@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import logging
+import os
 from collections import defaultdict
 
 from app.core.jobs import update_job
@@ -13,6 +14,7 @@ from app.services.supabase_repo import (
     save_image_annotations,
     update_image_queue,
     update_image_storage_fields,
+    update_model_status,
 )
 from app.services.storage import (
     build_class_name_map,
@@ -270,6 +272,17 @@ async def run_auto_label(
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
+            try:
+                # Mark model as incompatible runtime when the loader reports that
+                msg = str(exc).lower()
+                if "unsupported/unknown old yolov5" in msg or "old yolov5" in msg or "autoshape" in msg or "can't get attribute" in msg or "mp" in msg:
+                    try:
+                        await asyncio.to_thread(update_model_status, project_id, model_id, {"modelStatus": "incompatible_yolov5_runtime"})
+                        logger.info("Marked model %s as incompatible_yolov5_runtime", model_id)
+                    except Exception:
+                        logger.exception("Failed to update model status for %s", model_id)
+            except Exception:
+                logger.debug("Error inspecting YOLO load exception")
             if isinstance(exc, TimeoutError):
                 model_failures[model_id] = (
                     f"load timed out after {MODEL_WARMUP_TIMEOUT_SECONDS}s"
@@ -289,16 +302,14 @@ async def run_auto_label(
             project_id=project_id,
         )
         model_phase_progress = inference_start
+        low_memory_mode = os.getenv("LOW_MEMORY_MODE", "false").lower() == "true"
+        unload_every = 20 if low_memory_mode else None
 
         try:
             for idx, file_row in enumerate(file_list):
                 file_id = str(file_row["id"])
                 if file_id in prep_failures:
                     continue
-
-                if not await ensure_image(file_id):
-                    continue
-
                 if idx % progress_step == 0 or idx == total - 1:
                     pct = _inference_progress(done_units, work_units, inference_start)
                     await update_job(
@@ -334,6 +345,19 @@ async def run_auto_label(
                         prep_failures[file_id] = f"Inference error: {exc}"
 
                 done_units += 1
+                if unload_every is not None and done_units > 0 and done_units % unload_every == 0:
+                    logger.info("LOW_MEMORY_MODE active: unloading model after %d images", done_units)
+                    await asyncio.to_thread(unload_model, model_path)
+                    gc.collect()
+                    try:
+                        import torch as _torch
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    model_path = await asyncio.to_thread(download_model, model_id, project_id)
+                    logger.info("LOW_MEMORY_MODE: reloaded model after unload for continued inference")
+
         finally:
             await asyncio.to_thread(unload_model, model_path)
             gc.collect()

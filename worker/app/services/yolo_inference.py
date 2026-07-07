@@ -10,6 +10,11 @@ from PIL import Image, ImageOps
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
 from app.services.universal_yolo_loader import UniversalYOLOModel
+import os
+import torch
+
+class MemoryLimitExceeded(Exception):
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,10 @@ def get_model(model_path: Path) -> UniversalYOLOModel:
 
 def prewarm_yolo(model_path: Path) -> None:
     """Load model into memory so the UI can show progress before the first image."""
+    # Allow disabling prewarm (useful on memory-constrained hosts)
+    if os.getenv("DISABLE_MODEL_PREWARM", "true").lower() == "true":
+        logger.info("Model prewarm is disabled by DISABLE_MODEL_PREWARM")
+        return
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
     model = get_model(model_path)
@@ -85,21 +94,27 @@ def run_yolo_inference(
     _log_memory("Memory before image processing")
     prepared_image: Image.Image | None = None
     try:
+        # Resize and prepare image to reduce memory
         with Image.open(image_path) as opened:
-            prepared_image = ImageOps.exif_transpose(opened)
-            if prepared_image.mode != "RGB":
-                prepared_image = prepared_image.convert("RGB")
-            max_side = max(
-                1,
-                min(settings.max_image_size, getattr(config, "image_size", settings.max_image_size)),
-            )
-            if prepared_image.width > max_side or prepared_image.height > max_side:
-                prepared_image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-            prepared_image = prepared_image.copy()
+            img = ImageOps.exif_transpose(opened)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            max_side = int(os.getenv("MAX_IMAGE_SIZE", str(settings.max_image_size)))
+            if img.width > max_side or img.height > max_side:
+                img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            prepared_image = img.copy()
 
         _log_memory("Memory after image processing")
 
-        # Run inference using universal model
+        # Memory guard before inference
+        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "850"))
+        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "1000"))
+        rss = get_process_memory_mb()
+        logger.debug("Memory check before inference: %.1f MB (soft=%d hard=%d)", rss, soft, hard)
+        if rss >= hard:
+            raise MemoryLimitExceeded(f"Memory above hard limit: {rss:.1f} MB >= {hard} MB")
+
+        # Run inference using universal model (single image)
         detections_raw = model.predict(prepared_image)
 
     finally:
@@ -109,7 +124,16 @@ def run_yolo_inference(
             except Exception:
                 pass
         del prepared_image
+        try:
+            del img
+        except Exception:
+            pass
         gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
         _log_memory("Memory after cleanup")
 
     elapsed_ms = (time.perf_counter() - start) * 1000

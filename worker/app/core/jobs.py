@@ -154,6 +154,21 @@ async def process_job(job_id: str) -> None:
             project_id,
             exc,
         )
+        # Special-case memory pause so we don't mark as a hard failure
+        from app.services.yolo_inference import MemoryLimitExceeded
+
+        if isinstance(exc, MemoryLimitExceeded):
+            logger.warning("Job %s paused due to memory limit: %s", job_id, exc)
+            await update_job(
+                job_id,
+                status=JobStatus.PAUSED_MEMORY_LIMIT,
+                progress_message="Paused (memory limit)",
+                error_message=str(exc),
+                mark_completed=True,
+                project_id=project_id,
+            )
+            return
+
         await update_job(
             job_id,
             status=JobStatus.FAILED,

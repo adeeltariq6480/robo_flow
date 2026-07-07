@@ -653,6 +653,23 @@ def delete_model(project_id: str, model_id: str) -> None:
     _sb().table("models").delete().eq("id", model_id).eq("project_id", project_id).execute()
 
 
+def update_model_status(project_id: str, model_id: str, data: dict) -> None:
+    payload: dict = {}
+    if "modelStatus" in data:
+        payload["model_status"] = data["modelStatus"]
+    if not payload:
+        return
+    try:
+        _sb().table("models").update(payload).eq("id", model_id).eq("project_id", project_id).execute()
+    except Exception as exc:
+        message = str(exc).lower()
+        if "column" in message and "does not exist" in message:
+            # Column missing in older schema — ignore
+            logger.info("models.model_status column not present; skipping update for %s", model_id)
+            return
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Labelling jobs
 # ---------------------------------------------------------------------------

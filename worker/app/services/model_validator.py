@@ -77,44 +77,46 @@ def detect_model_type(model_path: str) -> dict:
             "message": f"Unsupported model format: {suffix}. Supported: .pt, .onnx",
         }
     
-    # Try to load with ultralytics first
-    logger.info("Attempting to load model as ultralytics: %s", model_path)
+    # Lightweight inspection to avoid loading full runtimes (prevents double-loading)
+    logger.info("Inspecting model file header for lightweight detection: %s", model_path)
     try:
-        from ultralytics import YOLO
-        
-        model = YOLO(model_path)
-        logger.info("Model loaded successfully as ultralytics: %s", model_path)
-        del model
+        with open(model_path, "rb") as fh:
+            head = fh.read(65536).lower()
+    except Exception as exc:
+        logger.warning("Could not read model file header: %s", exc)
+        head = b""
+
+    head_str = head.decode("latin1", errors="ignore")
+    # Heuristics
+    if "ultralytics" in head_str or "yolov8" in head_str or "yolov11" in head_str:
+        logger.info("Model heuristics indicate ultralytics model: %s", model_path)
         return {
             "valid": True,
             "model_type": "ultralytics_latest",
             "loader": "ultralytics",
             "can_process": True,
-            "message": "YOLOv8/v11 model detected. Use ultralytics loader.",
+            "message": "Likely YOLOv8/v11 ultralytics model (heuristic).",
         }
-    except Exception as exc:
-        error_str = str(exc).lower()
-        if any(
-            phrase in error_str
-            for phrase in ["yolov5", "not forwards compatible", "ultralytics/yolov5"]
-        ):
-            logger.info("Model detected as YOLOv5 legacy: %s", model_path)
-            return {
-                "valid": True,
-                "model_type": "yolov5_legacy",
-                "loader": "yolov5",
-                "can_process": True,
-                "message": "YOLOv5 legacy model detected. Requires torch.hub loader.",
-            }
-        else:
-            logger.warning("Model load failed for %s: %s", model_path, exc)
-            return {
-                "valid": False,
-                "model_type": "invalid",
-                "loader": "none",
-                "can_process": False,
-                "message": f"Model load failed: {exc}",
-            }
+
+    if "yolov5" in head_str or "autoshape" in head_str or "mp" in head_str:
+        logger.info("Model heuristics indicate YOLOv5 legacy: %s", model_path)
+        return {
+            "valid": True,
+            "model_type": "yolov5_legacy",
+            "loader": "yolov5",
+            "can_process": True,
+            "message": "Likely YOLOv5 legacy model (heuristic).",
+        }
+
+    # Fallback: if .pt assume YOLOv5 legacy (safer than rejecting)
+    logger.info("Model heuristics inconclusive, defaulting to YOLOv5 legacy for: %s", model_path)
+    return {
+        "valid": True,
+        "model_type": "yolov5_legacy",
+        "loader": "yolov5",
+        "can_process": True,
+        "message": "Model assumed YOLOv5 legacy (fallback heuristic).",
+    }
 
 
 def validate_model_file(model_path: str) -> dict:

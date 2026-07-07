@@ -75,11 +75,12 @@ class UniversalYOLOModel:
         """Load YOLOv8/v11 model using ultralytics."""
         try:
             from ultralytics import YOLO
+            import os
 
             logger.info("Ultralytics runtime loading for model: %s", self.model_path)
+            # Do not prewarm heavy internals here; loading is deferred to predict
             self.model = YOLO(self.model_path)
-            self.model.to("cpu")
-            logger.info("Ultralytics model loaded successfully")
+            logger.info("Ultralytics model object created (weights not moved).")
         except Exception as exc:
             logger.exception("Ultralytics load failed")
             raise
@@ -100,44 +101,67 @@ class UniversalYOLOModel:
                 os.environ["TORCH_HOME"] = str(settings.torch_home_dir)
 
             repo = os.getenv("YOLOV5_REPO", "ultralytics/yolov5")
-            ref = os.getenv("YOLOV5_REPO_REF", "v5.0")
-            repo_spec = f"{repo}:{ref}"
-            logger.info("YOLOv5 repo ref used: %s", repo_spec)
+            default_ref = os.getenv("YOLOV5_REPO_REF", "v6.2")
+            # Order of fallbacks: v7.0, v6.2, v6.0, v5.0, master
+            preferred_order = ["v7.0", "v6.2", "v6.0", "v5.0", "master"]
+            # Ensure default_ref is tried first if present
+            if default_ref and default_ref not in preferred_order:
+                versions = [default_ref] + preferred_order
+            else:
+                versions = [default_ref] + [v for v in preferred_order if v != default_ref]
 
-            versions = [ref, "v5.0", "v6.0", "v6.2", "v7.0"]
-            if "mp" in str(self.model_path).lower() or "can't get attribute 'mp'" in str(self.model_path).lower():
-                versions = ["v5.0", "v6.0", *versions]
+            logger.info("YOLOv5 loader will try refs: %s", ",".join(versions))
+
+            tried = []
+            last_exc: Exception | None = None
             for attempt_ref in versions:
-                if attempt_ref == ref:
-                    repo_spec = f"{repo}:{attempt_ref}"
-                else:
-                    repo_spec = f"{repo}:{attempt_ref}"
+                repo_spec = f"{repo}:{attempt_ref}"
+                logger.info("Trying YOLOv5 ref %s for model %s", repo_spec, self.model_path)
                 try:
                     self.model = torch.hub.load(
                         repo_spec,
                         "custom",
                         path=self.model_path,
-                        force_reload=False,
                         trust_repo=True,
+                        force_reload=False,
                         device="cpu",
                     )
+                    logger.info("Loaded YOLOv5 model with ref %s", repo_spec)
                     break
                 except Exception as exc:
-                    error_msg = str(exc).lower()
-                    if "urlopen" in error_msg or "connection" in error_msg or "internet" in error_msg:
+                    last_exc = exc
+                    err_str = str(exc)
+                    lower = err_str.lower()
+                    logger.warning("YOLOv5 ref %s failed: %s", repo_spec, err_str)
+                    # If error indicates missing internet/connection, surface immediately
+                    if any(k in lower for k in ("urlopen", "connection", "internet")):
                         raise RuntimeError(
                             "YOLOv5 runtime not available. Add local YOLOv5 runtime or enable internet during first startup."
                         ) from exc
-                    if attempt_ref != versions[-1]:
-                        logger.warning("YOLOv5 load attempt failed for %s: %s", repo_spec, exc)
+
+                    # Errors that indicate incompatible old runtime should try next ref
+                    incompatible_markers = ["autoshape", "auto shape", "mp", "can't get attribute", "cant get attribute"]
+                    if any(m in lower for m in incompatible_markers):
+                        logger.info("Ref %s appears incompatible, trying next ref", attempt_ref)
+                        tried.append(attempt_ref)
                         continue
-                    raise
+                    # For other errors, also try next ref but log
+                    tried.append(attempt_ref)
+                    continue
 
             if self.model is None:
-                raise RuntimeError("YOLOv5 model did not load")
+                logger.error("All YOLOv5 refs failed: tried=%s last_error=%s", tried, last_exc)
+                raise RuntimeError(
+                    "This YOLOv5 model was trained with an unsupported/unknown old YOLOv5 version. Please retrain/export with latest Ultralytics."
+                ) from last_exc
 
             self.model.to("cpu")
-            self.model.eval()
+            # Some legacy YOLOv5 models may not have eval(), but call if present
+            try:
+                if hasattr(self.model, "eval"):
+                    self.model.eval()
+            except Exception:
+                logger.debug("Model eval() failed but continuing")
             logger.info("YOLOv5 model loaded successfully")
         except Exception as exc:
             logger.exception("YOLOv5 load failed")
@@ -203,7 +227,30 @@ class UniversalYOLOModel:
 
     def _predict_ultralytics(self, image: Image.Image) -> list[dict]:
         """Run inference with ultralytics model."""
-        results = self.model.predict(source=image, device="cpu", verbose=False)
+        import os
+        import torch
+
+        low_memory = os.getenv("LOW_MEMORY_MODE", "false").lower() == "true"
+        imgsz = int(os.getenv("YOLO_IMGSZ", "320" if low_memory else "416"))
+        conf = float(os.getenv("YOLO_CONF", "0.25"))
+
+        # Force CPU inference mode and controlled options to reduce memory
+        try:
+            with torch.inference_mode():
+                results = self.model.predict(
+                    image,
+                    device="cpu",
+                    imgsz=imgsz,
+                    conf=conf,
+                    verbose=False,
+                    save=False,
+                    save_txt=False,
+                    save_conf=False,
+                    stream=False,
+                )
+        except Exception:
+            # Fallback to older call signature
+            results = self.model.predict(source=image, device="cpu", verbose=False)
 
         detections = []
         if results and len(results) > 0:

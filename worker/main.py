@@ -32,6 +32,10 @@ async def lifespan(app: FastAPI):
         logger.info("HF_MODEL_REPO=%s", settings.model_repo_id or None)
         logger.info("Selected repo_type for image upload: %s", "dataset")
         logger.info("Selected repo_type for model upload: %s", "model")
+        # YOLO runtime settings
+        import os
+        logger.info("ENABLE_YOLOV5_RUNTIME=%s", os.getenv("ENABLE_YOLOV5_RUNTIME", "false"))
+        logger.info("YOLOV5_REPO_REF=%s", os.getenv("YOLOV5_REPO_REF", "v6.2"))
     except Exception:
         logger.exception("Failed to log HF startup configuration")
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)

@@ -23,6 +23,7 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    PAUSED_MEMORY_LIMIT = "paused_memory_limit"
 
 
 QUEUE_FOR_JOB_TYPE: dict[JobType, JobQueue] = {

@@ -12,6 +12,7 @@ from app.services.supabase_repo import (
     get_image,
     get_model,
     get_project_class_map as _class_map,
+    update_image_storage_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def download_model(model_id: str, project_id: str) -> Path:
             logger.exception("Model download failed with full error for %s", model_id)
             raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
         except Exception as exc:
-            logger.exception("Model download failed with full error for %s", model_id)
+            logger.exception("File download failed with full error for %s", model_id)
             raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
 
         logger.info("Model download completed: %s", downloaded)
@@ -131,11 +132,31 @@ def resolve_image_path(row: dict, image_id: str) -> Path | None:
         logger.info("Auto-label local image missing; falling back to HF for %s", image_id)
 
     try:
-        return file_storage.download_to_local(
+        downloaded = file_storage.download_to_local(
             row.get("hfRepo", settings.dataset_repo_id),
             hf_path,
             repo_type=file_storage.REPO_TYPE_DATASET,
         )
+        # Cache HF images into project dataset local folder for future reuse
+        try:
+            project_id = row.get("projectId") or row.get("project_id")
+            dataset_id = row.get("datasetId") or row.get("dataset_id")
+            file_name = row.get("fileName") or Path(hf_path).name
+            if project_id and dataset_id:
+                dest_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest_path = dest_dir / file_name
+                if not dest_path.exists() or dest_path.stat().st_size == 0:
+                    dest_path.write_bytes(downloaded.read_bytes())
+                    # update DB local path for this image
+                    try:
+                        update_image_storage_fields(str(project_id), image_id, {"localPath": str(dest_path), "storageStatus": "local_ready"})
+                    except Exception:
+                        logger.exception("Failed to update image local path for %s", image_id)
+                return dest_path
+        except Exception:
+            logger.exception("Failed to cache HF image locally for %s", image_id)
+        return downloaded
     except Exception as exc:
         logger.warning("HF image unavailable for %s: %s", image_id, exc)
         return None

@@ -139,7 +139,7 @@ class Settings(BaseSettings):
         ),
     )
     max_image_size: int = Field(
-        default=1280,
+        default=416,
         validation_alias=AliasChoices("MAX_IMAGE_SIZE"),
     )
     hf_hub_disable_xet: bool = Field(
