@@ -1416,12 +1416,31 @@ async def validate_model_file_endpoint(
 @api_router.get("/images/{project_id}/{image_id}/content")
 async def image_content(project_id: str, image_id: str, _: None = Depends(verify_api_key)):
     img = repo.get_image(project_id, image_id)
-    if not img or not img.get("hfRepo") or not img.get("hfPath"):
+    if not img:
         raise HTTPException(status_code=404, detail="Image not found")
-    data = file_storage.download_bytes(
-        img["hfRepo"], img["hfPath"], repo_type=file_storage.REPO_TYPE_DATASET
-    )
-    return Response(content=data, media_type=img.get("mimeType") or "image/jpeg")
+
+    # Prefer local copy if available
+    local_path = img.get("localPath") or img.get("local_path")
+    if local_path:
+        try:
+            p = Path(local_path)
+            if p.exists() and p.is_file():
+                data = p.read_bytes()
+                return Response(content=data, media_type=img.get("mimeType") or "image/jpeg")
+        except Exception:
+            logger.exception("Failed to read local image %s", local_path)
+
+    # Fallback to Hugging Face
+    if img.get("hfRepo") and img.get("hfPath"):
+        try:
+            data = file_storage.download_bytes(
+                img["hfRepo"], img["hfPath"], repo_type=file_storage.REPO_TYPE_DATASET
+            )
+            return Response(content=data, media_type=img.get("mimeType") or "image/jpeg")
+        except Exception:
+            logger.exception("Failed to download image from HF %s/%s", img.get("hfRepo"), img.get("hfPath"))
+
+    raise HTTPException(status_code=404, detail="Image not found")
 
 
 # ===========================================================================
