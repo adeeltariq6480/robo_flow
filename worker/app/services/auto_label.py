@@ -27,7 +27,7 @@ from app.services.storage import (
     get_project_class_map,
     resolve_hf_path_for_image,
 )
-from app.services.yolo_inference import prewarm_yolo, run_yolo_inference, unload_model
+from app.services.yolo_inference import load_yolo_model, run_yolo_inference, unload_model
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +564,7 @@ async def run_auto_label(
             await asyncio.wait_for(
                 _run_with_heartbeat(
                     f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU warmup)…",
-                    asyncio.to_thread(prewarm_yolo, model_path),
+                    asyncio.to_thread(load_yolo_model, model_path),
                     start_progress=download_end,
                     end_progress=load_end,
                 ),

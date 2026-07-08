@@ -55,9 +55,21 @@ class UniversalYOLOModel:
 
         try:
             if self.loader_type == "ultralytics":
-                self._load_ultralytics()
+                try:
+                    self._load_ultralytics()
+                except Exception as exc:
+                    logger.warning("Ultralytics primary load failed, trying YOLOv5 fallback: %s", exc)
+                    self._load_yolov5()
+                    self.loader_type = "yolov5"
+                    self.model_type = "yolov5_legacy"
             elif self.loader_type == "yolov5":
-                self._load_yolov5()
+                try:
+                    self._load_yolov5()
+                except Exception as exc:
+                    logger.warning("YOLOv5 primary load failed, trying Ultralytics fallback: %s", exc)
+                    self._load_ultralytics()
+                    self.loader_type = "ultralytics"
+                    self.model_type = "ultralytics_fallback"
             elif self.loader_type == "onnxruntime":
                 self._load_onnx()
             else:
@@ -96,14 +108,14 @@ class UniversalYOLOModel:
             import torch
 
             logger.info("YOLOv5 runtime loading for model: %s", self.model_path)
+            self._patch_legacy_runtime_compat(torch)
 
             if settings.torch_home_dir:
                 os.environ["TORCH_HOME"] = str(settings.torch_home_dir)
 
             repo = os.getenv("YOLOV5_REPO", "ultralytics/yolov5")
             default_ref = os.getenv("YOLOV5_REPO_REF", "v6.2")
-            # Order of fallbacks: v7.0, v6.2, v6.0, v5.0, master
-            preferred_order = ["v7.0", "v6.2", "v6.0", "v5.0", "master"]
+            preferred_order = ["v7.0", "v6.2", "v6.1", "v6.0", "v5.0", "v4.0", "v3.1", "master"]
             # Ensure default_ref is tried first if present
             if default_ref and default_ref not in preferred_order:
                 versions = [default_ref] + preferred_order
@@ -152,7 +164,8 @@ class UniversalYOLOModel:
             if self.model is None:
                 logger.error("All YOLOv5 refs failed: tried=%s last_error=%s", tried, last_exc)
                 raise RuntimeError(
-                    "This YOLOv5 model was trained with an unsupported/unknown old YOLOv5 version. Please retrain/export with latest Ultralytics."
+                    "Could not load this YOLOv5 checkpoint with available YOLOv5/Ultralytics runtimes. "
+                    "Try setting YOLOV5_REPO_REF to the exact training version, or re-export as ONNX/latest Ultralytics."
                 ) from last_exc
 
             self.model.to("cpu")
@@ -166,6 +179,32 @@ class UniversalYOLOModel:
         except Exception as exc:
             logger.exception("YOLOv5 load failed")
             raise
+
+    def _patch_legacy_runtime_compat(self, torch_module: Any) -> None:
+        """Patch common old YOLOv5 assumptions for modern Python/NumPy/PyTorch."""
+        for alias, target in {
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "object": object,
+        }.items():
+            if not hasattr(np, alias):
+                try:
+                    setattr(np, alias, target)
+                except Exception:
+                    logger.debug("Could not patch numpy.%s", alias)
+
+        original_load = getattr(torch_module, "load", None)
+        if original_load is None or getattr(original_load, "_robo_flow_legacy_patch", False):
+            return
+
+        def patched_load(*args, **kwargs):
+            kwargs.setdefault("weights_only", False)
+            return original_load(*args, **kwargs)
+
+        patched_load._robo_flow_legacy_patch = True
+        torch_module.load = patched_load
+        logger.info("Patched torch.load(weights_only=False) for legacy YOLO checkpoints")
 
     def _load_onnx(self) -> None:
         """Load ONNX model using onnxruntime."""

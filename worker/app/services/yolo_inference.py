@@ -75,6 +75,13 @@ def prewarm_yolo(model_path: Path) -> None:
         model.load()
 
 
+def load_yolo_model(model_path: Path) -> None:
+    """Load the model once, regardless of optional prewarm settings."""
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    get_model(model_path)
+
+
 def run_yolo_inference(
     model_path: Path,
     image_path: Path,
