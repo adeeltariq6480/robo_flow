@@ -14,6 +14,7 @@ from app.services.detection_merge import merge_detections
 from app.services.supabase_repo import (
     classify_queue,
     detections_to_objects,
+    get_model,
     list_dataset_images,
     save_image_annotations,
     update_image_queue,
@@ -52,6 +53,21 @@ async def _safe_update_model_status(project_id: str, model_id: str, status: str)
         )
     except Exception:
         logger.debug("Could not persist model status for %s", model_id, exc_info=True)
+
+
+def _model_display_name(project_id: str, model_id: str) -> str:
+    row = get_model(project_id, model_id)
+    if not row:
+        return model_id[:8]
+    return str(row.get("modelName") or row.get("model_name") or model_id[:8])
+
+
+def _format_model_failures(project_id: str, model_failures: dict[str, str]) -> str:
+    lines = [
+        f"{_model_display_name(project_id, mid)}: {err}"
+        for mid, err in model_failures.items()
+    ]
+    return "; ".join(lines[:5])
 
 
 def _model_failure_message(exc: Exception) -> str:
@@ -896,9 +912,13 @@ async def run_auto_label(
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
 
     if not loaded_model_ids:
-        samples = [f"{mid}: {err}" for mid, err in list(model_failures.items())[:3]]
-        hint = "; ".join(samples) if samples else "unknown model error"
-        raise ValueError(f"No models could be loaded. Examples: {hint}")
+        hint = _format_model_failures(project_id, model_failures)
+        raise ValueError(
+            "No models could be loaded — auto-label needs at least one compatible model. "
+            f"Failed: {hint}. "
+            "Use YOLOv8/v11 (.pt) or ONNX weights. Old YOLOv5/custom checkpoints (e.g. pepsi.pt) "
+            "often fail on Railway — deselect them or re-export and re-upload."
+        )
 
     # --- Merge detections and save to Firestore ---
     labeled = 0

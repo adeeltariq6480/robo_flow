@@ -1,6 +1,10 @@
 "use client";
 
 import type { Model } from "@/lib/types/database";
+import {
+  isLikelyCompatibleModelName,
+  isLikelyLegacyModelName,
+} from "@/lib/model-compatibility";
 
 interface ModelMultiSelectProps {
   models: Model[];
@@ -54,25 +58,54 @@ export function ModelMultiSelect({
         {models.map((m) => {
           const selected = selectedIds.includes(m.id);
           const atLimit = !selected && selectedIds.length >= maxSelected;
+          const legacy = isLikelyLegacyModelName(m.name);
+          const compatible = isLikelyCompatibleModelName(m.name);
           return (
             <button
               key={m.id}
               type="button"
               onClick={() => toggle(m.id)}
               disabled={disabled || atLimit}
-              title={atLimit ? `Maximum ${maxSelected} models` : undefined}
+              title={
+                legacy
+                  ? "Purana/custom YOLO — Railway par fail ho sakta hai. YOLOv8/v11 use karein."
+                  : compatible
+                    ? "YOLOv8/v11 — recommended for auto-label"
+                    : undefined
+              }
               className={`rounded-lg border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                 selected
-                  ? "border-brand-600 bg-brand-50 text-brand-800 ring-1 ring-brand-600/30"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                  ? legacy
+                    ? "border-amber-500 bg-amber-50 text-amber-900 ring-1 ring-amber-500/30"
+                    : "border-brand-600 bg-brand-50 text-brand-800 ring-1 ring-brand-600/30"
+                  : legacy
+                    ? "border-amber-200 bg-amber-50/50 text-amber-800 hover:border-amber-300"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
               }`}
             >
               <span className="font-medium">{m.name}</span>
               <span className="ml-1 text-slate-400">v{m.version}</span>
+              {legacy && (
+                <span className="ml-1 text-xs text-amber-700">(legacy)</span>
+              )}
+              {compatible && !legacy && (
+                <span className="ml-1 text-xs text-green-700">✓</span>
+              )}
             </button>
           );
         })}
       </div>
+
+      {selectedIds.some((id) => {
+        const m = models.find((x) => x.id === id);
+        return m && isLikelyLegacyModelName(m.name);
+      }) && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Legacy/custom models (jaise pepsi.pt) Railway par load nahi hote. Sirf{" "}
+          <strong>yolo11n</strong>, <strong>yolov8</strong> jaisi YOLOv8/v11 weights select
+          karein, ya model ko YOLOv8/v11 mein re-export karke dubara upload karein.
+        </p>
+      )}
 
       {selectedIds.length === 1 && models.length > 1 && (
         <p className="rounded-md border border-brand-100 bg-brand-50/60 px-3 py-2 text-xs text-brand-800">

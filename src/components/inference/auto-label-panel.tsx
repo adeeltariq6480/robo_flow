@@ -17,6 +17,7 @@ import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
 import { Tags, ArrowRight, RotateCcw, Square, Play } from "lucide-react";
 import Link from "next/link";
+import { defaultLabelModelIds, isLikelyLegacyModelName } from "@/lib/model-compatibility";
 import {
   clearActiveInferenceJob,
   readActiveInferenceJob,
@@ -50,8 +51,8 @@ export function AutoLabelPanel({
     defaultDatasetId && datasets.some((d) => d.id === defaultDatasetId)
       ? defaultDatasetId
       : datasets[0]?.id ?? "";
-  const [selectedModelIds, setSelectedModelIds] = useState<string[]>(
-    () => models.map((m) => m.id)
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>(() =>
+    defaultLabelModelIds(models)
   );
   const [datasetId, setDatasetId] = useState(initialDatasetId);
   const [confidence, setConfidence] = useState(0.25);
@@ -91,7 +92,7 @@ export function AutoLabelPanel({
     setSelectedModelIds((prev) => {
       const valid = prev.filter((id) => models.some((m) => m.id === id));
       if (valid.length > 0) return valid;
-      return models.map((m) => m.id);
+      return defaultLabelModelIds(models);
     });
   }, [models]);
 
@@ -114,6 +115,19 @@ export function AutoLabelPanel({
       setError("Select at least one model and a dataset");
       return;
     }
+
+    const allLegacy = selectedModelIds.every((id) => {
+      const m = models.find((x) => x.id === id);
+      return m && isLikelyLegacyModelName(m.name);
+    });
+    if (allLegacy) {
+      setError(
+        "Selected models Railway par compatible nahi (purane YOLOv5/custom). " +
+          "yolo11n ya yolov8 upload karein, ya pepsi.pt ko YOLOv8/v11 mein convert karke dubara upload karein."
+      );
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setCompletedJob(null);
