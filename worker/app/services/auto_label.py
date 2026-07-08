@@ -26,7 +26,9 @@ from app.services.storage import (
     download_image_row,
     download_model,
     get_project_class_map,
+    infer_dataset_image_local_path,
     resolve_hf_path_for_image,
+    sync_local_images_to_hf,
 )
 from app.services.model_errors import IncompatibleModelError
 from app.services.yolo_inference import (
@@ -276,7 +278,10 @@ def _vercel_remote_ready(file_row: dict) -> bool:
 def _local_image_exists(file_row: dict) -> bool:
     row = _normalise_image_row(file_row)
     local_path = _image_local_path(row)
-    return bool(local_path and os.path.exists(local_path))
+    if local_path and os.path.exists(local_path):
+        return True
+    inferred = infer_dataset_image_local_path(row)
+    return inferred is not None
 
 
 def _image_eligible_for_label(
@@ -487,6 +492,21 @@ async def run_auto_label(
     if db_total == 0:
         raise ValueError("Dataset has no files to label")
 
+    synced = await asyncio.to_thread(
+        sync_local_images_to_hf, project_id, dataset_id, db_file_list
+    )
+    if synced:
+        logger.info(
+            "Auto-label uploaded %d local image(s) to HF before labeling project=%s dataset=%s",
+            synced,
+            project_id,
+            dataset_id,
+        )
+        db_file_list = [
+            _normalise_image_row(row)
+            for row in list_dataset_images(project_id, dataset_id)
+        ]
+
     file_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
         project_id, dataset_id, db_file_list
     )
@@ -541,11 +561,9 @@ async def run_auto_label(
     if settings.use_local_images_for_auto_label:
         any_not_ready = False
         for f in file_list:
-            lp = _image_local_path(f)
-            status = f.get("status") or _image_storage_status(f)
-            if not lp or not os.path.exists(lp):
-                # If image is queued (upload session not flushed) or local file missing, mark not ready
-                if status in {"queued", "uploading", "processing", "pending"} or not lp:
+            if not _local_image_exists(f):
+                status = f.get("status") or _image_storage_status(f)
+                if status in {"queued", "uploading", "processing", "pending"}:
                     any_not_ready = True
                     break
         if any_not_ready:
@@ -568,8 +586,7 @@ async def run_auto_label(
     local_found = 0
     hf_available = 0
     for f in file_list:
-        lp = _image_local_path(f)
-        if lp and os.path.exists(lp):
+        if _local_image_exists(f):
             local_found += 1
         if _image_hf_path(f):
             hf_available += 1
@@ -906,7 +923,13 @@ async def run_auto_label(
         ]
         raise ValueError(
             "All images failed during preparation. "
-            f"Examples: {'; '.join(samples)}"
+            f"Examples: {'; '.join(samples)}. "
+            f"Configured HF dataset repo: {settings.dataset_repo_id or '(not set)'} "
+            f"(type={settings.dataset_repo_type}). "
+            "Images are in the database but the actual files are missing on disk and Hugging Face. "
+            "Fix: set HF_DATASET_REPO to a Hugging Face *dataset* repo (not HF_MODEL_REPO), "
+            "re-upload images, or run POST /api/datasets/{project}/{dataset}/finalize-upload "
+            "if files still exist on the Railway volume."
         )
 
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]

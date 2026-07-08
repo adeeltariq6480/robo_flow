@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
+from app.config import settings
 from app.services import hf_storage as file_storage
 
 from app.services.supabase_client import get_supabase
@@ -71,7 +72,7 @@ def _image_row(row: dict) -> dict:
         "projectId": str(row["project_id"]),
         "datasetId": str(row["dataset_id"]),
         "fileName": row["file_name"],
-        "hfRepo": row.get("hf_repo", "datasets"),
+        "hfRepo": row.get("hf_repo") or settings.dataset_repo_id or "",
         "hfPath": row["hf_path"],
         "localPath": row.get("local_path"),
         "storageStatus": row.get("storage_status", "local_ready" if row.get("local_path") else "pending"),
@@ -423,7 +424,7 @@ def _build_image_insert_payload(project_id: str, dataset_id: str, data: dict) ->
         "project_id": project_id,
         "dataset_id": dataset_id,
         "file_name": data["fileName"],
-        "hf_repo": data.get("hfRepo", "datasets"),
+        "hf_repo": data.get("hfRepo") or settings.dataset_repo_id or "",
         "hf_path": data["hfPath"],
         "width": data.get("width"),
         "height": data.get("height"),

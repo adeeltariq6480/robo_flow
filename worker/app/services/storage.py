@@ -48,15 +48,130 @@ def _row_hf_path(row: dict) -> str:
 
 
 def _row_hf_repo(row: dict) -> str:
-    return str(_get_first(row, "hfRepo", "hf_repo") or settings.dataset_repo_id or "")
+    stored = str(_get_first(row, "hfRepo", "hf_repo") or "")
+    hf_path = _row_hf_path(row)
+    configured = settings.dataset_repo_id or ""
+    # Dataset image paths must use the configured HF dataset repo.
+    if hf_path.startswith("datasets/") and configured:
+        if stored and stored != configured:
+            logger.info(
+                "Using configured dataset repo %s instead of stored %s for %s",
+                configured,
+                stored,
+                hf_path,
+            )
+        return configured
+    return stored or configured or ""
 
 
 def _row_model_hf_repo(row: dict) -> str:
     return str(_get_first(row, "hfRepo", "hf_repo") or settings.model_repo_id or "")
 
 
-def _row_local_path(row: dict) -> str:
-    return str(_get_first(row, "localPath", "local_path") or "")
+def infer_dataset_image_local_path(row: dict) -> Path | None:
+    """Standard on-disk layout when DB local_path is missing."""
+    row = _normalise_row(row)
+    project_id = _row_project_id(row)
+    dataset_id = _row_dataset_id(row)
+    file_name = _row_file_name(row)
+    if not (project_id and dataset_id and file_name):
+        return None
+    candidate = settings.dataset_files_dir / project_id / dataset_id / "images" / file_name
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def sync_local_images_to_hf(
+    project_id: str, dataset_id: str, file_list: list[dict]
+) -> int:
+    """Upload local dataset images that never reached Hugging Face."""
+    if not file_storage.hf_dataset_upload_enabled():
+        return 0
+
+    pending: list[tuple[str, bytes, str, str]] = []
+    for raw in file_list:
+        row = _normalise_row(raw)
+        image_id = str(_get_first(row, "id") or "")
+        file_name = _row_file_name(row)
+        if not image_id or not file_name:
+            continue
+        if _image_hf_sync_status(row) == "synced":
+            hf_path = _row_hf_path(row)
+            repo = _row_hf_repo(row)
+            if hf_path and repo and file_storage._repo_file_exists(
+                repo, settings.dataset_repo_type, hf_path
+            ):
+                continue
+
+        local = _row_local_path(row)
+        local_path = Path(local) if local else None
+        if not local_path or not local_path.exists():
+            inferred = infer_dataset_image_local_path(row)
+            if inferred is not None:
+                local_path = inferred
+
+        if local_path is None or not local_path.exists():
+            continue
+
+        try:
+            pending.append((file_name, local_path.read_bytes(), image_id, str(local_path)))
+        except Exception as exc:
+            logger.warning("Could not read local image %s: %s", local_path, exc)
+
+    if not pending:
+        return 0
+
+    uploaded = 0
+    chunk_size = 100
+    for offset in range(0, len(pending), chunk_size):
+        chunk = pending[offset : offset + chunk_size]
+        payload = [(name, data) for name, data, _, _ in chunk]
+        try:
+            file_storage.upload_dataset_images_batch(project_id, dataset_id, payload)
+        except Exception as exc:
+            logger.exception(
+                "HF sync batch failed project=%s dataset=%s offset=%d: %s",
+                project_id,
+                dataset_id,
+                offset,
+                exc,
+            )
+            continue
+
+        for file_name, _, image_id, local_str in chunk:
+            try:
+                update_image_storage_fields(
+                    project_id,
+                    image_id,
+                    {
+                        "hfRepo": settings.dataset_repo_id,
+                        "hfPath": file_storage.dataset_image_path(
+                            project_id, dataset_id, file_name
+                        ),
+                        "localPath": local_str,
+                        "storage_status": "remote_ready",
+                        "hf_sync_status": "synced",
+                        "status": "uploaded",
+                    },
+                )
+                uploaded += 1
+            except Exception:
+                logger.exception("Failed to update image after HF sync %s", image_id)
+
+    if uploaded:
+        logger.info(
+            "Synced %d local image(s) to HF project=%s dataset=%s repo=%s",
+            uploaded,
+            project_id,
+            dataset_id,
+            settings.dataset_repo_id,
+        )
+    return uploaded
+
+
+def _image_hf_sync_status(row: dict) -> str:
+    return str(_get_first(row, "hfSyncStatus", "hf_sync_status") or "")
 
 
 def _normalise_row(row: dict) -> dict:
@@ -371,14 +486,18 @@ def resolve_hf_path_for_image(row: dict, image_id: str) -> str | None:
 def resolve_image_path(row: dict, image_id: str) -> Path | None:
     row = _normalise_row(row)
 
-    local_path = _row_local_path(row)
+    if _should_use_local_auto_label_image():
+        local_path = _row_local_path(row)
+        if local_path:
+            candidate = Path(local_path)
+            if candidate.exists() and candidate.is_file():
+                logger.info("Auto-label using local image %s for %s", candidate, image_id)
+                return candidate
 
-    if _should_use_local_auto_label_image() and local_path:
-        candidate = Path(local_path)
-
-        if candidate.exists() and candidate.is_file():
-            logger.info("Auto-label using local image %s for %s", candidate, image_id)
-            return candidate
+        inferred = infer_dataset_image_local_path(row)
+        if inferred is not None:
+            logger.info("Auto-label using inferred local image %s for %s", inferred, image_id)
+            return inferred
 
         logger.info("Auto-label local image missing or unavailable for %s", image_id)
 
