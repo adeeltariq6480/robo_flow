@@ -36,6 +36,66 @@ MODEL_DOWNLOAD_TIMEOUT_SECONDS = 600
 MODEL_WARMUP_TIMEOUT_SECONDS = 600
 
 
+def _get_first(row: dict, *keys: str):
+    """Return first non-empty value from snake_case/camelCase aliases."""
+    for key in keys:
+        value = row.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _image_id(row: dict) -> str:
+    return str(_get_first(row, "id") or "")
+
+
+def _image_file_name(row: dict) -> str:
+    return str(_get_first(row, "fileName", "file_name", "filename", "name") or "")
+
+
+def _image_hf_path(row: dict) -> str:
+    return str(_get_first(row, "hfPath", "hf_path") or "")
+
+
+def _image_hf_sync_status(row: dict) -> str:
+    return str(_get_first(row, "hfSyncStatus", "hf_sync_status") or "")
+
+
+def _image_storage_status(row: dict) -> str:
+    return str(_get_first(row, "storageStatus", "storage_status") or "")
+
+
+def _image_local_path(row: dict) -> str:
+    return str(_get_first(row, "localPath", "local_path") or "")
+
+
+def _normalise_image_row(row: dict) -> dict:
+    """Keep both aliases in memory because repo rows may be camelCase while DB is snake_case."""
+    filename = _image_file_name(row)
+    hf_path = _image_hf_path(row)
+    hf_sync_status = _image_hf_sync_status(row)
+    storage_status = _image_storage_status(row)
+    local_path = _image_local_path(row)
+
+    if filename:
+        row["fileName"] = filename
+        row["file_name"] = filename
+    if hf_path:
+        row["hfPath"] = hf_path
+        row["hf_path"] = hf_path
+    if hf_sync_status:
+        row["hfSyncStatus"] = hf_sync_status
+        row["hf_sync_status"] = hf_sync_status
+    if storage_status:
+        row["storageStatus"] = storage_status
+        row["storage_status"] = storage_status
+    if local_path:
+        row["localPath"] = local_path
+        row["local_path"] = local_path
+
+    return row
+
+
 def _resolve_model_ids(data: dict) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
@@ -60,10 +120,23 @@ def _resolve_model_ids(data: dict) -> list[str]:
 
 
 def _is_image_row(file_row: dict) -> bool:
-    mime = file_row.get("mimeType") or ""
-    name = file_row.get("file_name", "").lower()
-    return mime.startswith("image/") or any(name.endswith(ext) for ext in IMAGE_EXTS)
+    mime = (
+        file_row.get("mimeType")
+        or file_row.get("mime_type")
+        or ""
+    )
 
+    name = (
+        file_row.get("fileName")
+        or file_row.get("file_name")
+        or file_row.get("filename")
+        or file_row.get("name")
+        or ""
+    ).lower()
+
+    return mime.startswith("image/") or any(
+        name.endswith(ext) for ext in IMAGE_EXTS
+    )
 
 def _progress_interval(total: int) -> int:
     if total <= 50:
@@ -112,16 +185,27 @@ def _no_images_message() -> str:
 
 
 def _status_counts(file_list: list[dict], key: str) -> dict[str, int]:
-    return dict(Counter(str(f.get(key) or "missing") for f in file_list))
+    aliases = {
+        "hfSyncStatus": ("hfSyncStatus", "hf_sync_status"),
+        "hf_sync_status": ("hfSyncStatus", "hf_sync_status"),
+        "storageStatus": ("storageStatus", "storage_status"),
+        "storage_status": ("storageStatus", "storage_status"),
+        "hfPath": ("hfPath", "hf_path"),
+        "hf_path": ("hfPath", "hf_path"),
+    }
+    keys = aliases.get(key, (key,))
+    return dict(Counter(str(_get_first(_normalise_image_row(f), *keys) or "missing") for f in file_list))
 
 
 def _vercel_remote_ready(file_row: dict) -> bool:
-    return bool(file_row.get("hfPath")) and (
-        file_row.get("hfSyncStatus") == "synced"
-        or file_row.get("storageStatus") == "remote_ready"
+    hf_path = file_row.get("hfPath") or file_row.get("hf_path")
+    hf_status = file_row.get("hfSyncStatus") or file_row.get("hf_sync_status")
+    storage_status = file_row.get("storageStatus") or file_row.get("storage_status")
+
+    return bool(hf_path) and (
+        hf_status == "synced"
+        or storage_status == "remote_ready"
     )
-
-
 def _remote_image_mode() -> bool:
     return (
         settings.is_vercel
@@ -155,32 +239,47 @@ def _list_remote_image_files(project_id: str, dataset_id: str) -> tuple[set[str]
 def _repair_remote_image_rows(project_id: str, dataset_id: str, file_list: list[dict]) -> int:
     remote_files, remote_by_name = _list_remote_image_files(project_id, dataset_id)
     if not remote_files:
+        logger.warning(
+            "Auto-label HF repo scan found 0 files for project=%s dataset=%s",
+            project_id,
+            dataset_id,
+        )
         return 0
 
     repaired = 0
     for row in file_list:
-        image_id = str(row.get("id") or "")
-        filename = row.get("file_name") or row.get("file_name")
-        existing_hf_path = row.get("hf_path") or row.get("hf_path")
+        row = _normalise_image_row(row)
+
+        image_id = _image_id(row)
+        filename = _image_file_name(row)
+        existing_hf_path = _image_hf_path(row)
         resolved_hf_path = None
 
         if existing_hf_path and existing_hf_path in remote_files:
             resolved_hf_path = existing_hf_path
         elif filename:
             expected_path = file_storage.dataset_image_path(project_id, dataset_id, filename)
-            resolved_hf_path = expected_path if expected_path in remote_files else remote_by_name.get(filename)
+            resolved_hf_path = (
+                expected_path
+                if expected_path in remote_files
+                else remote_by_name.get(filename)
+            )
 
         if not image_id or not resolved_hf_path:
             continue
 
         needs_update = (
-            row.get("hfPath") != resolved_hf_path
-            or row.get("hfSyncStatus") != "synced"
-            or row.get("storageStatus") != "remote_ready"
+            _image_hf_path(row) != resolved_hf_path
+            or _image_hf_sync_status(row) != "synced"
+            or _image_storage_status(row) != "remote_ready"
         )
+
         row["hfPath"] = resolved_hf_path
+        row["hf_path"] = resolved_hf_path
         row["hfSyncStatus"] = "synced"
+        row["hf_sync_status"] = "synced"
         row["storageStatus"] = "remote_ready"
+        row["storage_status"] = "remote_ready"
 
         if not needs_update:
             continue
@@ -190,9 +289,10 @@ def _repair_remote_image_rows(project_id: str, dataset_id: str, file_list: list[
                 project_id,
                 image_id,
                 {
-                    "hfPath": resolved_hf_path,
-                    "hfSyncStatus": "synced",
-                    "storageStatus": "remote_ready",
+                    "hf_path": resolved_hf_path,
+                    "hf_sync_status": "synced",
+                    "storage_status": "remote_ready",
+                    "last_error": None,
                 },
             )
             repaired += 1
@@ -222,8 +322,17 @@ async def run_auto_label(
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
-    db_file_list = list_dataset_images(project_id, dataset_id)
+    db_file_list = [_normalise_image_row(row) for row in list_dataset_images(project_id, dataset_id)]
     db_total = len(db_file_list)
+
+    logger.info(
+        "AUTO_LABEL_DEBUG job_id=%s project_id=%s dataset_id=%s db_count=%d first_row=%s",
+        job_id,
+        project_id,
+        dataset_id,
+        db_total,
+        db_file_list[0] if db_file_list else None,
+    )
 
     if db_total == 0:
         raise ValueError("Dataset has no files to label")
@@ -232,12 +341,16 @@ async def run_auto_label(
     if remote_image_mode:
         repaired = _repair_remote_image_rows(project_id, dataset_id, db_file_list)
         for f in db_file_list:
-            image_id = str(f.get("id"))
+            f = _normalise_image_row(f)
+            image_id = _image_id(f)
             hf_path = resolve_hf_path_for_image(f, image_id)
-            if hf_path and not f.get("hfPath"):
+            if hf_path and not _image_hf_path(f):
                 f["hfPath"] = hf_path
+                f["hf_path"] = hf_path
                 f["hfSyncStatus"] = "synced"
+                f["hf_sync_status"] = "synced"
                 f["storageStatus"] = "remote_ready"
+                f["storage_status"] = "remote_ready"
                 repaired += 1
         if repaired:
             logger.info("Auto-label repaired %d missing HF path(s) before filtering", repaired)
@@ -257,10 +370,10 @@ async def run_auto_label(
         "Auto-label DB image state: db_images_count=%d eligible_images=%d images_with_hf_path=%d hf_sync_status_counts=%s storage_status_counts=%s hf_path_examples=%s",
         db_total,
         total,
-        sum(1 for f in db_file_list if f.get("hfPath")),
+        sum(1 for f in db_file_list if _image_hf_path(f)),
         _status_counts(db_file_list, "hfSyncStatus"),
         _status_counts(db_file_list, "storageStatus"),
-        [f.get("hfPath") for f in db_file_list if f.get("hfPath")][:5],
+        [_image_hf_path(f) for f in db_file_list if _image_hf_path(f)][:5],
     )
 
     if total == 0:
@@ -271,8 +384,8 @@ async def run_auto_label(
     if settings.use_local_images_for_auto_label:
         any_not_ready = False
         for f in file_list:
-            lp = f.get("localPath") or f.get("local_path")
-            status = f.get("status") or f.get("storageStatus") or f.get("storage_status")
+            lp = _image_local_path(f)
+            status = f.get("status") or _image_storage_status(f)
             if not lp or not os.path.exists(lp):
                 # If image is queued (upload session not flushed) or local file missing, mark not ready
                 if status in {"queued", "uploading", "processing", "pending"} or not lp:
@@ -298,10 +411,10 @@ async def run_auto_label(
     local_found = 0
     hf_available = 0
     for f in file_list:
-        lp = f.get("localPath") or f.get("local_path")
+        lp = _image_local_path(f)
         if lp and os.path.exists(lp):
             local_found += 1
-        if f.get("hfPath"):
+        if _image_hf_path(f):
             hf_available += 1
     local_missing = total - local_found
     logger.info(
@@ -373,7 +486,7 @@ async def run_auto_label(
             return True
         except Exception as exc:
             logger.warning("Image preparation failed %s: %s", file_id, exc)
-            if row.get("hfPath") and ("404" in str(exc) or "not found" in str(exc).lower()):
+            if _image_hf_path(row) and ("404" in str(exc) or "not found" in str(exc).lower()):
                 update_image_storage_fields(
                     project_id,
                     file_id,
@@ -568,7 +681,14 @@ async def run_auto_label(
         )
 
     if len(prep_failures) == total:
-        raise ValueError(_no_images_message())
+        samples = [
+            f"{fid}: {err}"
+            for fid, err in list(prep_failures.items())[:5]
+        ]
+        raise ValueError(
+            "All images failed during preparation. "
+            f"Examples: {'; '.join(samples)}"
+        )
 
     loaded_model_ids = [mid for mid in model_ids if mid not in model_failures]
 
@@ -634,7 +754,7 @@ async def run_auto_label(
                 from app.services.export_builder import _class_index_map
 
                 class_index = _class_index_map(project_id)
-                stem = (file_row.get("file_name") or str(file_row.get("id"))).rsplit(".", 1)[0]
+                stem = (_image_file_name(file_row) or str(file_row.get("id"))).rsplit(".", 1)[0]
                 labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
                 labels_dir.mkdir(parents=True, exist_ok=True)
                 lines = []
