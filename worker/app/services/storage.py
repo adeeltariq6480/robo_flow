@@ -68,6 +68,10 @@ def _row_model_hf_repo(row: dict) -> str:
     return str(_get_first(row, "hfRepo", "hf_repo") or settings.model_repo_id or "")
 
 
+def _row_local_path(row: dict) -> str:
+    return str(_get_first(row, "localPath", "local_path") or "")
+
+
 def infer_dataset_image_local_path(row: dict) -> Path | None:
     """Standard on-disk layout when DB local_path is missing."""
     row = _normalise_row(row)

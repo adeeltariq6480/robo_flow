@@ -74,12 +74,18 @@ function uploadForm<T>(
   path: string,
   form: FormData,
   onProgress?: (percent: number) => void,
-  timeoutMs = UPLOAD_TIMEOUT_MS
+  timeoutMs = UPLOAD_TIMEOUT_MS,
+  signal?: AbortSignal
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE_URL}${path}`);
     xhr.timeout = timeoutMs;
+
+    const onAbort = () => {
+      xhr.abort();
+    };
+    signal?.addEventListener("abort", onAbort);
 
     xhr.upload.onprogress = (e) => {
       if (onProgress && e.lengthComputable) {
@@ -88,6 +94,7 @@ function uploadForm<T>(
     };
 
     xhr.onload = () => {
+      signal?.removeEventListener("abort", onAbort);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(xhr.responseText ? JSON.parse(xhr.responseText) : ({} as T));
@@ -112,15 +119,24 @@ function uploadForm<T>(
       reject(new Error(message));
     };
 
-    xhr.onerror = () =>
+    xhr.onerror = () => {
+      signal?.removeEventListener("abort", onAbort);
       reject(
         new Error(
           "Connection lost while uploading — batch may be too large or the server timed out."
         )
       );
+    };
 
-    xhr.ontimeout = () =>
+    xhr.ontimeout = () => {
+      signal?.removeEventListener("abort", onAbort);
       reject(new Error("Upload timed out — retrying with a smaller batch."));
+    };
+
+    xhr.onabort = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("Upload cancelled"));
+    };
 
     xhr.send(form);
   });
@@ -167,13 +183,23 @@ function mergeResults(
   return target;
 }
 
+export interface UploadImagesOptions {
+  onProgress?: (percent: number) => void;
+  signal?: AbortSignal;
+  uploadSessionId?: string;
+  startBatchIndex?: number;
+  onWorkerSessionId?: (sessionId: string) => void;
+  onBatchComplete?: (batchIndex: number, completedFiles: number) => void;
+}
+
 function uploadImagesBatch(
   projectId: string,
   datasetId: string,
   files: File[],
   uploadSessionId: string,
   finalizeSession: boolean,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal
 ): Promise<UploadImagesResult> {
   const form = new FormData();
   form.append("project_id", projectId);
@@ -181,7 +207,7 @@ function uploadImagesBatch(
   form.append("upload_session_id", uploadSessionId);
   form.append("finalize_session", String(finalizeSession));
   for (const f of files) form.append("files", f);
-  return uploadForm("/api/upload-images", form, onProgress);
+  return uploadForm("/api/upload-images", form, onProgress, UPLOAD_TIMEOUT_MS, signal);
 }
 
 async function uploadBatchWithRetry(
@@ -190,13 +216,17 @@ async function uploadBatchWithRetry(
   batch: File[],
   uploadSessionId: string,
   finalizeSession: boolean,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal
 ): Promise<UploadImagesResult> {
   if (batch.length === 0) return emptyResult();
 
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+    if (signal?.aborted) {
+      throw new Error("Upload cancelled");
+    }
     try {
       return await uploadImagesBatch(
         projectId,
@@ -204,10 +234,12 @@ async function uploadBatchWithRetry(
         batch,
         uploadSessionId,
         finalizeSession,
-        onProgress
+        onProgress,
+        signal
       );
     } catch (err) {
       lastError = err instanceof Error ? err : new Error("Upload failed");
+      if (lastError.message === "Upload cancelled") throw lastError;
       const msg = lastError.message;
 
       if (isConnectionError(msg) && batch.length > 1) {
@@ -218,7 +250,8 @@ async function uploadBatchWithRetry(
           batch.slice(0, mid),
           uploadSessionId,
           false,
-          onProgress
+          onProgress,
+          signal
         );
         const right = await uploadBatchWithRetry(
           projectId,
@@ -226,7 +259,8 @@ async function uploadBatchWithRetry(
           batch.slice(mid),
           uploadSessionId,
           finalizeSession,
-          onProgress
+          onProgress,
+          signal
         );
         return mergeResults(left, right);
       }
@@ -245,20 +279,37 @@ export async function uploadImages(
   projectId: string,
   datasetId: string,
   files: File[],
-  onProgress?: (percent: number) => void
+  options: UploadImagesOptions = {}
 ): Promise<UploadImagesResult> {
   if (files.length === 0) return emptyResult();
+
+  const {
+    onProgress,
+    signal,
+    uploadSessionId: existingSessionId,
+    startBatchIndex = 0,
+    onWorkerSessionId,
+    onBatchComplete,
+  } = options;
 
   const combined = emptyResult();
   const batches = buildUploadBatches(files);
   const uploadSessionId =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
+    existingSessionId ??
+    (typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  let completedFiles = 0;
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  onWorkerSessionId?.(uploadSessionId);
+
+  let completedFiles = batches
+    .slice(0, startBatchIndex)
+    .reduce((sum, batch) => sum + batch.length, 0);
   const totalFiles = files.length;
 
-  for (let i = 0; i < batches.length; i++) {
+  for (let i = startBatchIndex; i < batches.length; i++) {
+    if (signal?.aborted) {
+      throw new Error("Upload cancelled");
+    }
     const batch = batches[i];
     const batchStart = completedFiles;
 
@@ -274,15 +325,71 @@ export async function uploadImages(
             const overall = ((batchStart + doneInBatch) / totalFiles) * 100;
             onProgress(Math.min(99, Math.round(overall)));
           }
-        : undefined
+        : undefined,
+      signal
     );
 
     mergeResults(combined, result);
     completedFiles += batch.length;
+    onBatchComplete?.(i + 1, completedFiles);
     onProgress?.(Math.min(99, Math.round((completedFiles / totalFiles) * 100)));
   }
 
   return combined;
+}
+
+export interface HfFileCheckResult {
+  dbImagesCount: number;
+  remoteFilesCount: number;
+  matchedByFilename: number;
+  missingRemote: number;
+}
+
+export async function finalizeDatasetHfUpload(
+  projectId: string,
+  datasetId: string
+): Promise<{ ok?: boolean; count?: number }> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/datasets/${projectId}/${datasetId}/finalize-upload`,
+    { method: "POST", cache: "no-store" }
+  );
+  if (!res.ok) {
+    const raw = await res.text();
+    let message = `HF sync failed (${res.status})`;
+    try {
+      const body = JSON.parse(raw) as { detail?: string };
+      if (body.detail) message = body.detail;
+    } catch {
+      if (raw) message = raw.slice(0, 300);
+    }
+    throw new Error(message);
+  }
+  return res.json() as Promise<{ ok?: boolean; count?: number }>;
+}
+
+export async function checkDatasetHfFiles(
+  projectId: string,
+  datasetId: string
+): Promise<HfFileCheckResult> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/admin/datasets/${projectId}/${datasetId}/hf-file-check`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) {
+    throw new Error(`Could not check Hugging Face files (${res.status})`);
+  }
+  const data = (await res.json()) as HfFileCheckResult & {
+    db_images_count?: number;
+    remote_files_count?: number;
+    matched_by_filename?: number;
+    missing_remote?: number;
+  };
+  return {
+    dbImagesCount: data.dbImagesCount ?? data.db_images_count ?? 0,
+    remoteFilesCount: data.remoteFilesCount ?? data.remote_files_count ?? 0,
+    matchedByFilename: data.matchedByFilename ?? data.matched_by_filename ?? 0,
+    missingRemote: data.missingRemote ?? data.missing_remote ?? 0,
+  };
 }
 
 export function uploadZip(

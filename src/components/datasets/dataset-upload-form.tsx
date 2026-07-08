@@ -1,18 +1,32 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { uploadImages, uploadZip } from "@/lib/api/uploads";
+import {
+  buildUploadBatches,
+  checkDatasetHfFiles,
+  finalizeDatasetHfUpload,
+  uploadImages,
+  uploadZip,
+} from "@/lib/api/uploads";
 import { revalidateProject } from "@/lib/actions/revalidate";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import type { Class } from "@/lib/types/database";
 import { ALL_CLASS_ID } from "@/lib/classes/constants";
+import {
+  clearUploadSession,
+  loadUploadFiles,
+  loadUploadSession,
+  saveUploadFiles,
+  saveUploadSession,
+  type PersistedUploadSession,
+} from "@/lib/upload/upload-session-store";
 import { ClassSelect } from "@/components/ui/class-select";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { FileImage, X, CheckCircle } from "lucide-react";
+import { FileImage, X, CheckCircle, PauseCircle, Play, CloudUpload } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 
 interface DatasetUploadFormProps {
@@ -28,6 +42,8 @@ interface QueuedFile {
   preview?: string;
 }
 
+type UploadPhase = "idle" | "uploading" | "paused" | "hf_syncing" | "done";
+
 export function DatasetUploadForm({
   projectId,
   datasetId,
@@ -36,13 +52,17 @@ export function DatasetUploadForm({
 }: DatasetUploadFormProps) {
   const router = useRouter();
   const projectDrop = useProjectDrop();
+  const abortRef = useRef<AbortController | null>(null);
+
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [defaultClassId, setDefaultClassId] = useState(ALL_CLASS_ID);
-  const [uploading, setUploading] = useState(false);
+  const [phase, setPhase] = useState<UploadPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [hfStatus, setHfStatus] = useState<string | null>(null);
+  const [restoredSession, setRestoredSession] =
+    useState<PersistedUploadSession | null>(null);
   const [uploadSummary, setUploadSummary] = useState<{
     uploaded: number;
     skipped: { fileName: string; reason?: string; message?: string }[];
@@ -50,10 +70,247 @@ export function DatasetUploadForm({
   } | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
 
+  const uploading = phase === "uploading" || phase === "hf_syncing";
+  const paused = phase === "paused";
+  const done = phase === "done";
+
+  const persistSession = useCallback(
+    (patch: Partial<PersistedUploadSession>) => {
+      const base: PersistedUploadSession = {
+        projectId,
+        datasetId,
+        datasetName,
+        workerSessionId: restoredSession?.workerSessionId ?? "",
+        status:
+          phase === "hf_syncing"
+            ? "hf_syncing"
+            : phase === "paused"
+              ? "paused"
+              : phase === "done"
+                ? "completed"
+                : phase === "uploading"
+                  ? "uploading"
+                  : "uploading",
+        totalFiles: restoredSession?.totalFiles ?? queue.length,
+        completedFiles: restoredSession?.completedFiles ?? 0,
+        completedBatches: restoredSession?.completedBatches ?? 0,
+        totalBatches: restoredSession?.totalBatches ?? buildUploadBatches(queue.map((q) => q.file)).length,
+        progress,
+        fileNames: restoredSession?.fileNames ?? queue.map((q) => q.file.name),
+        processing,
+        updatedAt: Date.now(),
+        ...patch,
+      };
+      saveUploadSession(base);
+      setRestoredSession(base);
+    },
+    [projectId, datasetId, datasetName, phase, progress, queue, restoredSession, processing]
+  );
+
+  const runHfFinalize = useCallback(async () => {
+    setPhase("hf_syncing");
+    setHfStatus("Pushing images to Hugging Face…");
+    persistSession({ status: "hf_syncing" });
+    try {
+      await finalizeDatasetHfUpload(projectId, datasetId);
+      const check = await checkDatasetHfFiles(projectId, datasetId);
+      setHfStatus(
+        `${check.matchedByFilename}/${check.dbImagesCount} images found on Hugging Face`
+      );
+      if (check.missingRemote > 0) {
+        setHfStatus(
+          `${check.matchedByFilename} on HF · ${check.missingRemote} still missing — check HF_DATASET_REPO on Railway`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "HF sync failed";
+      setHfStatus(message);
+      setError(message);
+    }
+  }, [projectId, datasetId, persistSession]);
+
+  const runUpload = useCallback(
+    async (
+      files: File[],
+      options?: {
+        resume?: boolean;
+        workerSessionId?: string;
+        startBatchIndex?: number;
+        completedFiles?: number;
+      }
+    ) => {
+      if (files.length === 0) return;
+
+      const batches = buildUploadBatches(files);
+      const workerSessionId = options?.workerSessionId;
+      const startBatchIndex = options?.startBatchIndex ?? 0;
+      const initialCompleted = options?.completedFiles ?? 0;
+
+      if (!options?.resume) {
+        await saveUploadFiles(projectId, datasetId, files);
+      }
+
+      abortRef.current = new AbortController();
+      setPhase("uploading");
+      setError(null);
+      setProgress(
+        files.length > 0
+          ? Math.round((initialCompleted / files.length) * 100)
+          : 0
+      );
+      setProcessing(false);
+      setHfStatus(null);
+
+      persistSession({
+        status: "uploading",
+        totalFiles: files.length,
+        completedFiles: initialCompleted,
+        completedBatches: startBatchIndex,
+        totalBatches: batches.length,
+        fileNames: files.map((f) => f.name),
+        workerSessionId: workerSessionId ?? "",
+        progress: Math.round((initialCompleted / files.length) * 100),
+      });
+
+      const zips = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+      const images = files.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
+
+      const summary = {
+        uploaded: options?.resume ? (restoredSession?.summary?.uploaded ?? 0) : 0,
+        skipped: [...(restoredSession?.summary?.skipped ?? [])],
+        adjusted: [...(restoredSession?.summary?.adjusted ?? [])],
+      };
+
+      let queuedBackgroundUpload = false;
+      let activeWorkerSessionId = workerSessionId;
+
+      try {
+        if (images.length > 0) {
+          const result = await uploadImages(projectId, datasetId, images, {
+            signal: abortRef.current.signal,
+            uploadSessionId: workerSessionId,
+            startBatchIndex,
+            onWorkerSessionId: (id) => {
+              activeWorkerSessionId = id;
+              persistSession({ workerSessionId: id });
+            },
+            onProgress: (p) => {
+              setProgress(Math.min(99, p));
+              persistSession({ progress: Math.min(99, p) });
+            },
+            onBatchComplete: (batchIndex, completedFiles) => {
+              persistSession({
+                completedBatches: batchIndex,
+                completedFiles,
+                workerSessionId: activeWorkerSessionId ?? "",
+              });
+            },
+          });
+          summary.uploaded += result.uploaded;
+          summary.skipped.push(...(result.skipped ?? []));
+          summary.adjusted.push(...(result.adjusted ?? []));
+          queuedBackgroundUpload = Boolean(result.processing);
+        }
+
+        for (const zip of zips) {
+          const result = await uploadZip(projectId, datasetId, zip, (p) =>
+            setProgress(Math.min(99, p))
+          );
+          summary.uploaded += result.uploaded;
+          summary.skipped.push(...(result.skipped ?? []));
+          summary.adjusted.push(...(result.adjusted ?? []));
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Upload failed";
+        if (message === "Upload cancelled") {
+          setPhase("paused");
+          persistSession({
+            status: "paused",
+            error: "Upload paused",
+            summary,
+          });
+          return;
+        }
+        setPhase("paused");
+        setError(message);
+        persistSession({ status: "paused", error: message, summary });
+        return;
+      }
+
+      setProgress(100);
+      setUploadSummary(summary);
+      setProcessing(queuedBackgroundUpload);
+      persistSession({
+        status: "hf_syncing",
+        progress: 100,
+        summary,
+        processing: queuedBackgroundUpload,
+        completedFiles: files.length,
+        completedBatches: batches.length,
+      });
+
+      await runHfFinalize();
+
+      setPhase("done");
+      persistSession({ status: "completed", progress: 100, summary });
+      await clearUploadSession(projectId, datasetId);
+      setRestoredSession(null);
+      setQueue([]);
+
+      await revalidateProject(projectId);
+      router.refresh();
+    },
+    [projectId, datasetId, persistSession, restoredSession, router, runHfFinalize]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = loadUploadSession(projectId, datasetId);
+      if (!saved || cancelled) return;
+      if (saved.status === "completed") {
+        await clearUploadSession(projectId, datasetId);
+        return;
+      }
+      setRestoredSession(saved);
+      setUploadSummary(saved.summary ?? null);
+      setProgress(saved.progress);
+      setProcessing(Boolean(saved.processing));
+      if (saved.status === "paused") {
+        setPhase("paused");
+        setError(saved.error ?? "Upload was interrupted");
+      } else if (saved.status === "hf_syncing") {
+        setPhase("hf_syncing");
+        setHfStatus("Finishing Hugging Face upload…");
+        void runHfFinalize().then(() => {
+          if (!cancelled) setPhase("done");
+        });
+      } else if (saved.status === "uploading") {
+        setPhase("paused");
+        setError("Upload was interrupted — tap Resume to continue");
+      } else if (saved.status === "failed") {
+        setPhase("paused");
+        setError(saved.error ?? "Upload failed");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, datasetId, runHfFinalize]);
+
+  useEffect(() => {
+    if (!uploading) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [uploading]);
+
   const addFilesToQueue = useCallback(
     async (files: File[]) => {
       const newItems: QueuedFile[] = [];
-
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         newItems.push({
@@ -63,12 +320,10 @@ export function DatasetUploadForm({
             ? URL.createObjectURL(file)
             : undefined,
         });
-
         if (i > 0 && i % 50 === 0) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
       }
-
       setQueue((prev) => [...prev, ...newItems]);
     },
     [defaultClassId]
@@ -98,63 +353,43 @@ export function DatasetUploadForm({
 
   async function handleUpload() {
     if (queue.length === 0) return;
-    setUploading(true);
-    setError(null);
-    setProgress(0);
-    setProcessing(false);
-    let queuedBackgroundUpload = false;
+    await runUpload(queue.map((q) => q.file));
+  }
 
-    const zips = queue
-      .map((q) => q.file)
-      .filter((f) => f.name.toLowerCase().endsWith(".zip"));
-    const images = queue
-      .map((q) => q.file)
-      .filter((f) => !f.name.toLowerCase().endsWith(".zip"));
-
-    const summary = {
-      uploaded: 0,
-      skipped: [] as { fileName: string; reason?: string; message?: string }[],
-      adjusted: [] as { fileName: string; message?: string }[],
-    };
-
-    try {
-      if (images.length > 0) {
-        const result = await uploadImages(projectId, datasetId, images, (p) =>
-          setProgress(Math.min(99, p))
-        );
-        summary.uploaded += result.uploaded;
-        summary.skipped.push(...(result.skipped ?? []));
-        summary.adjusted.push(...(result.adjusted ?? []));
-        queuedBackgroundUpload = Boolean(result.processing);
-      }
-      for (const zip of zips) {
-        const result = await uploadZip(projectId, datasetId, zip, (p) =>
-          setProgress(Math.min(99, p))
-        );
-        summary.uploaded += result.uploaded;
-        summary.skipped.push(...(result.skipped ?? []));
-        summary.adjusted.push(...(result.adjusted ?? []));
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-      setUploading(false);
+  async function handleResume() {
+    const saved = restoredSession ?? loadUploadSession(projectId, datasetId);
+    const files = await loadUploadFiles(projectId, datasetId);
+    if (files.length === 0) {
+      setError("Saved files not found — add images again and upload.");
+      await clearUploadSession(projectId, datasetId);
+      setPhase("idle");
+      setRestoredSession(null);
       return;
     }
+    await runUpload(files, {
+      resume: true,
+      workerSessionId: saved?.workerSessionId || undefined,
+      startBatchIndex: saved?.completedBatches ?? 0,
+      completedFiles: saved?.completedFiles ?? 0,
+    });
+  }
 
-    setProgress(100);
-    setUploadSummary(summary);
-    setDone(true);
-    setUploading(false);
-    setProcessing(queuedBackgroundUpload);
-    if (!queuedBackgroundUpload) {
-      await revalidateProject(projectId);
-      router.refresh();
-    } else {
-      setTimeout(async () => {
-        await revalidateProject(projectId);
-        router.refresh();
-      }, 7000);
-    }
+  async function handleCancel() {
+    abortRef.current?.abort();
+    await clearUploadSession(projectId, datasetId);
+    setRestoredSession(null);
+    setPhase("idle");
+    setProgress(0);
+    setError(null);
+    setHfStatus(null);
+    setUploadSummary(null);
+    setProcessing(false);
+    setQueue([]);
+  }
+
+  async function handleRetryHf() {
+    setError(null);
+    await runHfFinalize();
   }
 
   if (done) {
@@ -165,16 +400,17 @@ export function DatasetUploadForm({
 
     return (
       <Card className="text-center">
-        <CheckCircle className={`mx-auto h-12 w-12 ${processing ? "text-amber-500" : "text-green-500"}`} />
-        <h2 className="mt-4 text-lg font-semibold">
-          {processing ? "Upload queued" : "Upload complete"}
-        </h2>
+        <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
+        <h2 className="mt-4 text-lg font-semibold">Upload complete</h2>
         <p className="mt-2 text-sm text-slate-500">
           {uploaded} image{uploaded !== 1 ? "s" : ""} saved to {datasetName}
         </p>
+        {hfStatus && (
+          <p className="mt-2 text-sm text-slate-600">{hfStatus}</p>
+        )}
         {processing && (
           <p className="mt-2 text-sm text-amber-700">
-            Files are saved locally and queued. Hugging Face upload is finishing in the background.
+            Worker is finishing background processing.
           </p>
         )}
 
@@ -194,16 +430,16 @@ export function DatasetUploadForm({
           </div>
         )}
 
-        <div className="mt-6 flex justify-center gap-3">
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Button
             variant="secondary"
             onClick={() => {
-              setDone(false);
-              setProcessing(false);
+              setPhase("idle");
               setQueue([]);
               setProgress(0);
               setUploadSummary(null);
               setShowReportModal(false);
+              setHfStatus(null);
             }}
           >
             Upload more
@@ -269,6 +505,80 @@ export function DatasetUploadForm({
     );
   }
 
+  if (uploading || paused || phase === "hf_syncing") {
+    const total = restoredSession?.totalFiles ?? queue.length;
+    const completed = restoredSession?.completedFiles ?? 0;
+
+    return (
+      <Card>
+        <div className="text-center">
+          {phase === "hf_syncing" ? (
+            <CloudUpload className="mx-auto h-12 w-12 text-brand-600" />
+          ) : paused ? (
+            <PauseCircle className="mx-auto h-12 w-12 text-amber-500" />
+          ) : (
+            <FileImage className="mx-auto h-12 w-12 text-brand-600" />
+          )}
+
+          <h2 className="mt-4 text-lg font-semibold">
+            {phase === "hf_syncing"
+              ? "Syncing to Hugging Face"
+              : paused
+                ? "Upload paused"
+                : "Uploading images"}
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-500">
+            {phase === "hf_syncing"
+              ? hfStatus ?? "Pushing files to your HF dataset repo…"
+              : `${completed} of ${total} files sent to server · ${progress}%`}
+          </p>
+
+          {phase !== "hf_syncing" && (
+            <div className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full bg-slate-200">
+              <div
+                className="h-full rounded-full bg-brand-600 transition-all"
+                style={{ width: `${Math.max(progress, 2)}%` }}
+              />
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-4">
+              <Alert variant="error">{error}</Alert>
+            </div>
+          )}
+
+          {hfStatus && phase === "hf_syncing" && (
+            <p className="mt-3 text-sm text-slate-600">{hfStatus}</p>
+          )}
+
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            {paused && (
+              <Button onClick={handleResume}>
+                <Play className="h-4 w-4" />
+                Resume upload
+              </Button>
+            )}
+            {(paused || phase === "hf_syncing") && (
+              <Button variant="secondary" onClick={handleRetryHf}>
+                <CloudUpload className="h-4 w-4" />
+                Retry HF sync
+              </Button>
+            )}
+            <Button variant="secondary" onClick={handleCancel}>
+              {uploading ? "Stop upload" : "Cancel"}
+            </Button>
+          </div>
+
+          <p className="mt-4 text-xs text-slate-500">
+            You can reload this page — progress is saved. Use Resume to continue.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {error && <Alert variant="error">{error}</Alert>}
@@ -276,7 +586,7 @@ export function DatasetUploadForm({
       <Card>
         <CardHeader
           title={`Upload to ${datasetName}`}
-          description="Images are auto-rotated to portrait when needed. Blurry photos are skipped."
+          description="Images are auto-rotated to portrait when needed. Blurry photos are skipped. Progress survives page reload."
         />
 
         {classes.length > 0 && (
