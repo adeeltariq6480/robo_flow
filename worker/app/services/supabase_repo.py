@@ -680,9 +680,15 @@ def update_model_status(project_id: str, model_id: str, data: dict) -> None:
         _sb().table("models").update(payload).eq("id", model_id).eq("project_id", project_id).execute()
     except Exception as exc:
         message = str(exc).lower()
-        if "column" in message and "does not exist" in message:
-            # Column missing in older schema — ignore
-            logger.info("models.model_status column not present; skipping update for %s", model_id)
+        if (
+            ("column" in message and "does not exist" in message)
+            or "pgrst204" in message
+            or "schema cache" in message
+        ):
+            logger.info(
+                "models.model_status column not present; skipping update for %s",
+                model_id,
+            )
             return
         raise
 

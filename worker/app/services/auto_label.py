@@ -27,13 +27,49 @@ from app.services.storage import (
     get_project_class_map,
     resolve_hf_path_for_image,
 )
-from app.services.yolo_inference import load_yolo_model, run_yolo_inference, unload_model
+from app.services.model_errors import IncompatibleModelError
+from app.services.yolo_inference import (
+    MemoryLimitExceeded,
+    load_yolo_model,
+    run_yolo_inference,
+    unload_model,
+)
 
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 MODEL_DOWNLOAD_TIMEOUT_SECONDS = 600
-MODEL_WARMUP_TIMEOUT_SECONDS = 600
+MODEL_WARMUP_TIMEOUT_SECONDS = 900
+
+
+async def _safe_update_model_status(project_id: str, model_id: str, status: str) -> None:
+    try:
+        await asyncio.to_thread(
+            update_model_status,
+            project_id,
+            model_id,
+            {"modelStatus": status},
+        )
+    except Exception:
+        logger.debug("Could not persist model status for %s", model_id, exc_info=True)
+
+
+def _model_failure_message(exc: Exception) -> str:
+    if isinstance(exc, IncompatibleModelError):
+        return str(exc)
+    if isinstance(exc, FileNotFoundError):
+        return str(exc)
+    if isinstance(exc, TimeoutError):
+        return "Model load timed out — try fewer models or a smaller checkpoint."
+    if isinstance(exc, MemoryLimitExceeded):
+        return f"Out of memory: {exc}"
+    text = str(exc).lower()
+    if "can't get attribute" in text or "mp" in text or "yolov5" in text:
+        return (
+            "Model incompatible with worker runtime. "
+            "Re-export as YOLOv8/v11 (.pt) or ONNX, then re-upload."
+        )
+    return str(exc)
 
 
 def _get_first(row: dict, *keys: str):
@@ -154,12 +190,13 @@ def _compact_job_result(
     labeled: int,
     failed: int,
     all_results: list[dict],
+    model_failures: dict[str, str] | None = None,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
-    return {
+    result = {
         "job_type": "auto_label",
         "dataset_id": dataset_id,
-        "model_id": model_ids[0],
+        "model_id": model_ids[0] if model_ids else None,
         "model_ids": model_ids,
         "models_used": len(model_ids),
         "total_files": total,
@@ -168,6 +205,12 @@ def _compact_job_result(
         "files": error_rows[:25],
         "files_truncated": len(error_rows) > 25,
     }
+    if model_failures:
+        result["model_failures"] = [
+            {"model_id": mid, "error": err}
+            for mid, err in list(model_failures.items())[:10]
+        ]
+    return result
 
 
 def _no_images_message() -> str:
@@ -481,7 +524,7 @@ async def run_auto_label(
                 project_id=project_id,
             )
             pulse = min(pulse + 1, end_progress)
-            await asyncio.sleep(20)
+            await asyncio.sleep(10)
         return await task
 
     def _cleanup_image_path(path: object) -> None:
@@ -540,10 +583,11 @@ async def run_auto_label(
         inference_end = min(inference_start + 20, 85)
 
         logger.info("Job %s: model %d/%d id=%s — using local model path if available", job_id, mi + 1, num_models, model_id)
+        local_hint = "checking local cache, then Hugging Face if needed"
         await update_job(
             job_id,
             progress=phase_start,
-            progress_message=f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
+            progress_message=f"Model {mi + 1}/{num_models}: {local_hint}…",
             processed_items=done_units,
             project_id=project_id,
         )
@@ -551,7 +595,7 @@ async def run_auto_label(
         try:
             model_path = await asyncio.wait_for(
                 _run_with_heartbeat(
-                    f"Model {mi + 1}/{num_models}: downloading weights from Hugging Face…",
+                    f"Model {mi + 1}/{num_models}: {local_hint}…",
                     asyncio.to_thread(download_model, model_id, project_id),
                     start_progress=phase_start,
                     end_progress=download_end,
@@ -560,28 +604,26 @@ async def run_auto_label(
             )
         except FileNotFoundError as exc:
             logger.warning("model skipped %s: %s", model_id, exc)
-            model_failures[model_id] = str(exc)
+            model_failures[model_id] = _model_failure_message(exc)
             logger.info("continuing with next model")
             continue
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
-            if isinstance(exc, TimeoutError):
-                model_failures[model_id] = (
-                    f"download timed out after {MODEL_DOWNLOAD_TIMEOUT_SECONDS}s"
-                )
-            else:
-                model_failures[model_id] = f"download failed: {exc}"
+            model_failures[model_id] = _model_failure_message(exc)
             logger.info("continuing with next model")
             continue
 
-        logger.info("Job %s: model %s file ready at %s", job_id, model_id, model_path)
+        using_local = str(model_path).startswith(str(settings.model_files_dir))
+        load_label = (
+            f"Model {mi + 1}/{num_models}: loading from local disk…"
+            if using_local
+            else f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU, 1–5 min)…"
+        )
+        logger.info("Job %s: model %s file ready at %s (local=%s)", job_id, model_id, model_path, using_local)
         await update_job(
             job_id,
             progress=download_end,
-            progress_message=(
-                f"Model {mi + 1}/{num_models}: loading YOLO into memory "
-                f"(first time can take 1–3 min on CPU)…"
-            ),
+            progress_message=load_label,
             processed_items=done_units,
             project_id=project_id,
         )
@@ -589,33 +631,49 @@ async def run_auto_label(
         try:
             await asyncio.wait_for(
                 _run_with_heartbeat(
-                    f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU warmup)…",
+                    load_label,
                     asyncio.to_thread(load_yolo_model, model_path),
                     start_progress=download_end,
                     end_progress=load_end,
                 ),
                 timeout=MODEL_WARMUP_TIMEOUT_SECONDS,
             )
+        except IncompatibleModelError as exc:
+            logger.warning("model skipped (incompatible) %s: %s", model_id, exc)
+            await asyncio.to_thread(unload_model, model_path)
+            await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
+            model_failures[model_id] = _model_failure_message(exc)
+            logger.info("continuing with next model")
+            continue
+        except MemoryLimitExceeded as exc:
+            logger.warning("model skipped (OOM during load) %s: %s", model_id, exc)
+            await asyncio.to_thread(unload_model, model_path)
+            gc.collect()
+            model_failures[model_id] = _model_failure_message(exc)
+            logger.info("continuing with next model")
+            continue
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
-            try:
-                # Mark model as incompatible runtime when the loader reports that
-                msg = str(exc).lower()
-                if "unsupported/unknown old yolov5" in msg or "old yolov5" in msg or "autoshape" in msg or "can't get attribute" in msg or "mp" in msg:
-                    try:
-                        await asyncio.to_thread(update_model_status, project_id, model_id, {"modelStatus": "incompatible_yolov5_runtime"})
-                        logger.info("Marked model %s as incompatible_yolov5_runtime", model_id)
-                    except Exception:
-                        logger.exception("Failed to update model status for %s", model_id)
-            except Exception:
-                logger.debug("Error inspecting YOLO load exception")
+            msg = str(exc).lower()
+            if any(
+                token in msg
+                for token in (
+                    "unsupported/unknown old yolov5",
+                    "old yolov5",
+                    "autoshape",
+                    "can't get attribute",
+                    "mp",
+                    "incompatible",
+                )
+            ):
+                await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
             if isinstance(exc, TimeoutError):
                 model_failures[model_id] = (
                     f"load timed out after {MODEL_WARMUP_TIMEOUT_SECONDS}s"
                 )
             else:
-                model_failures[model_id] = f"load failed: {exc}"
+                model_failures[model_id] = _model_failure_message(exc)
             logger.warning("model skipped %s", model_id)
             logger.info("continuing with next model")
             continue
@@ -630,7 +688,7 @@ async def run_auto_label(
         )
         model_phase_progress = inference_start
         low_memory_mode = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
-        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "1" if low_memory_mode else "0")
+        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "50" if low_memory_mode else "0")
         try:
             unload_every_value = int(unload_every_raw)
         except ValueError:
@@ -671,6 +729,18 @@ async def run_auto_label(
                             model_name=model_id,
                             class_id_map=class_id_map,
                         )
+                    except MemoryLimitExceeded as mem_exc:
+                        logger.warning(
+                            "OOM during inference job=%s model=%s image=%s: %s",
+                            job_id,
+                            model_id,
+                            file_id,
+                            mem_exc,
+                        )
+                        await asyncio.to_thread(unload_model, model_path)
+                        gc.collect()
+                        prep_failures[file_id] = f"Out of memory during inference: {mem_exc}"
+                        break
                     finally:
                         _cleanup_image_path(image_path)
                     per_image_dets[file_id].extend(inference.detections)
@@ -688,7 +758,7 @@ async def run_auto_label(
 
                 done_units += 1
                 if unload_every is not None and done_units > 0 and done_units % unload_every == 0:
-                    logger.info("LOW_MEMORY_MODE active: unloading model after %d images", done_units)
+                    logger.info("LOW_MEMORY_MODE: periodic unload after %d inferences", done_units)
                     await asyncio.to_thread(unload_model, model_path)
                     gc.collect()
                     try:
@@ -697,8 +767,8 @@ async def run_auto_label(
                             _torch.cuda.empty_cache()
                     except Exception:
                         pass
-                    model_path = await asyncio.to_thread(download_model, model_id, project_id)
-                    logger.info("LOW_MEMORY_MODE: reloaded model after unload for continued inference")
+                    await asyncio.to_thread(load_yolo_model, model_path)
+                    logger.info("LOW_MEMORY_MODE: model reloaded after periodic unload")
 
         finally:
             await asyncio.to_thread(unload_model, model_path)
@@ -875,4 +945,5 @@ async def run_auto_label(
         labeled=labeled,
         failed=failed,
         all_results=all_results,
+        model_failures=model_failures or None,
     )

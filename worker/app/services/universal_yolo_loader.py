@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from app.config import settings
+from app.services.model_errors import IncompatibleModelError
 from app.services.model_validator import detect_model_type
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,25 @@ def _clear_runtime_memory() -> None:
             torch.cuda.empty_cache()
     except Exception:
         logger.debug("Torch memory cleanup skipped", exc_info=True)
+
+
+def _is_incompatible_runtime_error(exc: Exception) -> bool:
+    return _looks_like_yolov7_error(exc) or any(
+        marker in str(exc).lower()
+        for marker in (
+            "autoshape",
+            "auto shape",
+            "can't get attribute",
+            "cant get attribute",
+            "could not load this yolov5 checkpoint",
+            "unsupported/unknown old yolov5",
+        )
+    )
+
+
+def _raise_if_incompatible(model_path: str, exc: Exception) -> None:
+    if _is_incompatible_runtime_error(exc):
+        raise IncompatibleModelError(model_path, str(exc)) from exc
 
 
 def _looks_like_yolov7_error(exc: Exception) -> bool:
@@ -89,22 +109,49 @@ class UniversalYOLOModel:
                 try:
                     self._load_ultralytics()
                 except Exception as exc:
-                    logger.warning("Ultralytics primary load failed, trying YOLOv5 fallback: %s", exc)
-                    self.model = None
-                    _clear_runtime_memory()
-                    try:
-                        self._load_yolov5()
-                        self.loader_type = "yolov5"
-                        self.model_type = "yolov5_legacy"
-                    except Exception as yolov5_exc:
-                        if not _looks_like_yolov7_error(exc) and not _looks_like_yolov7_error(yolov5_exc):
-                            raise
-                        logger.warning("YOLOv5 fallback also looks like YOLOv7 mismatch, trying YOLOv7: %s", yolov5_exc)
+                    if _is_incompatible_runtime_error(exc):
+                        if ENABLE_YOLOV7_RUNTIME:
+                            logger.warning(
+                                "Ultralytics load failed with legacy checkpoint markers, trying YOLOv7: %s",
+                                exc,
+                            )
+                            self.model = None
+                            _clear_runtime_memory()
+                            try:
+                                self._load_yolov7()
+                                self.loader_type = "yolov7"
+                                self.model_type = "yolov7_legacy"
+                            except Exception as yolov7_exc:
+                                _raise_if_incompatible(self.model_path, yolov7_exc)
+                                raise
+                        else:
+                            _raise_if_incompatible(self.model_path, exc)
+                    elif ENABLE_YOLOV5_RUNTIME and not _low_memory_mode():
+                        logger.warning("Ultralytics primary load failed, trying YOLOv5 fallback: %s", exc)
                         self.model = None
                         _clear_runtime_memory()
-                        self._load_yolov7()
-                        self.loader_type = "yolov7"
-                        self.model_type = "yolov7_legacy"
+                        try:
+                            self._load_yolov5()
+                            self.loader_type = "yolov5"
+                            self.model_type = "yolov5_legacy"
+                        except Exception as yolov5_exc:
+                            if ENABLE_YOLOV7_RUNTIME and (
+                                _looks_like_yolov7_error(exc) or _looks_like_yolov7_error(yolov5_exc)
+                            ):
+                                logger.warning(
+                                    "YOLOv5 fallback looks like YOLOv7 mismatch, trying YOLOv7: %s",
+                                    yolov5_exc,
+                                )
+                                self.model = None
+                                _clear_runtime_memory()
+                                self._load_yolov7()
+                                self.loader_type = "yolov7"
+                                self.model_type = "yolov7_legacy"
+                            else:
+                                _raise_if_incompatible(self.model_path, yolov5_exc)
+                                raise
+                    else:
+                        raise
             elif self.loader_type == "yolov5":
                 try:
                     self._load_yolov5()
@@ -141,9 +188,16 @@ class UniversalYOLOModel:
             logger.info(
                 "Model loaded successfully: type=%s loader=%s", self.model_type, self.loader_type
             )
+        except IncompatibleModelError:
+            self.model = None
+            raise
         except Exception as exc:
             logger.exception("Failed to load model: %s", exc)
             self.model = None
+            if isinstance(exc, IncompatibleModelError):
+                raise
+            if _is_incompatible_runtime_error(exc):
+                _raise_if_incompatible(self.model_path, exc)
             raise RuntimeError(f"Model load failed: {exc}") from exc
 
     def _load_ultralytics(self) -> None:
@@ -225,6 +279,7 @@ class UniversalYOLOModel:
 
             if self.model is None:
                 logger.error("All YOLOv5 refs failed: tried=%s last_error=%s", tried, last_exc)
+                _raise_if_incompatible(self.model_path, last_exc or RuntimeError("YOLOv5 load failed"))
                 raise RuntimeError(
                     "Could not load this YOLOv5 checkpoint with available YOLOv5/Ultralytics runtimes. "
                     "Try setting YOLOV5_REPO_REF to the exact training version, or re-export as ONNX/latest Ultralytics."

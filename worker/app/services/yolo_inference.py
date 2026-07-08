@@ -9,6 +9,7 @@ from PIL import Image, ImageOps
 
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
+from app.services.model_errors import IncompatibleModelError
 from app.services.universal_yolo_loader import UniversalYOLOModel
 import os
 import torch
@@ -72,8 +73,12 @@ def get_model(model_path: Path) -> UniversalYOLOModel:
         try:
             model = UniversalYOLOModel(str(model_path))
             model.load()
+        except IncompatibleModelError:
+            raise
         except Exception as exc:
             logger.exception("Model loading failed with full error: %s", model_path)
+            if "model load failed" in str(exc).lower():
+                raise
             raise RuntimeError(f"Model loading failed for {model_path}: {exc}") from exc
 
         _yolo_models[key] = model
@@ -127,7 +132,7 @@ def run_yolo_inference(
             if img.mode != "RGB":
                 img = img.convert("RGB")
             low_memory = _low_memory_mode()
-            default_max_side = "256" if low_memory else str(settings.max_image_size)
+            default_max_side = "192" if low_memory else str(settings.max_image_size)
             max_side = int(os.getenv("MAX_IMAGE_SIZE", default_max_side))
             if img.width > max_side or img.height > max_side:
                 img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
@@ -135,11 +140,20 @@ def run_yolo_inference(
 
         _log_memory("Memory after image processing")
 
-        # Memory guard before inference
-        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "2400"))
-        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "3000"))
+        # Memory guard before inference (Railway hobby ~512MB–2GB; tune via env)
+        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "900" if _low_memory_mode() else "2400"))
+        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "1200" if _low_memory_mode() else "3000"))
         rss = get_process_memory_mb()
         logger.debug("Memory check before inference: %.1f MB (soft=%d hard=%d)", rss, soft, hard)
+        if rss >= soft:
+            logger.warning("Memory above soft limit (%.1f MB >= %d MB) — running gc before inference", rss, soft)
+            gc.collect()
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            rss = get_process_memory_mb()
         if rss >= hard:
             raise MemoryLimitExceeded(f"Memory above hard limit: {rss:.1f} MB >= {hard} MB")
 

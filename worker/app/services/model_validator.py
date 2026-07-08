@@ -87,8 +87,12 @@ def detect_model_type(model_path: str) -> dict:
         head = b""
 
     head_str = head.decode("latin1", errors="ignore")
-    # Heuristics
-    if "ultralytics" in head_str or "yolov8" in head_str or "yolov11" in head_str:
+
+    yolov7_markers = ("yolov7", "sppcspc", "repconv", "models.yolo", "mp")
+    yolov5_markers = ("yolov5", "autoshape", "models.common")
+    ultralytics_markers = ("ultralytics", "yolov8", "yolov9", "yolov10", "yolov11", "yolo11")
+
+    if any(marker in head_str for marker in ultralytics_markers):
         logger.info("Model heuristics indicate ultralytics model: %s", model_path)
         return {
             "valid": True,
@@ -98,7 +102,17 @@ def detect_model_type(model_path: str) -> dict:
             "message": "Likely YOLOv8/v11 ultralytics model (heuristic).",
         }
 
-    if "yolov5" in head_str or "autoshape" in head_str or "mp" in head_str:
+    if any(marker in head_str for marker in yolov7_markers):
+        logger.info("Model heuristics indicate YOLOv7 legacy: %s", model_path)
+        return {
+            "valid": True,
+            "model_type": "yolov7_legacy",
+            "loader": "yolov7",
+            "can_process": True,
+            "message": "Likely YOLOv7 legacy model (heuristic).",
+        }
+
+    if any(marker in head_str for marker in yolov5_markers):
         logger.info("Model heuristics indicate YOLOv5 legacy: %s", model_path)
         return {
             "valid": True,
@@ -108,14 +122,14 @@ def detect_model_type(model_path: str) -> dict:
             "message": "Likely YOLOv5 legacy model (heuristic).",
         }
 
-    # Fallback: if .pt assume YOLOv5 legacy (safer than rejecting)
-    logger.info("Model heuristics inconclusive, defaulting to YOLOv5 legacy for: %s", model_path)
+    # Unknown .pt — try ultralytics first (lighter than torch.hub on Railway).
+    logger.info("Model heuristics inconclusive, defaulting to ultralytics for: %s", model_path)
     return {
         "valid": True,
-        "model_type": "yolov5_legacy",
-        "loader": "yolov5",
+        "model_type": "ultralytics_latest",
+        "loader": "ultralytics",
         "can_process": True,
-        "message": "Model assumed YOLOv5 legacy (fallback heuristic).",
+        "message": "Unknown .pt checkpoint — will try ultralytics runtime first.",
     }
 
 
