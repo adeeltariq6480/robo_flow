@@ -140,15 +140,22 @@ def _format_hf_error(exc: Exception) -> str:
 
 
 def _verify_repo_file(repo_id: str, repo_type: str, path_in_repo: str) -> None:
+    _verify_repo_files(repo_id, repo_type, [path_in_repo])
+
+
+def _verify_repo_files(repo_id: str, repo_type: str, paths_in_repo: list[str]) -> None:
     try:
         files = _api().list_repo_files(repo_id=repo_id, repo_type=repo_type)
     except Exception as exc:
         raise RuntimeError(
-            f"Uploaded {path_in_repo}, but could not verify Hugging Face repo files: {_format_hf_error(exc)}"
+            f"Uploaded files, but could not verify Hugging Face repo files: {_format_hf_error(exc)}"
         ) from exc
-    if path_in_repo not in files:
+    file_set = set(files)
+    missing = [path for path in paths_in_repo if path not in file_set]
+    if missing:
         raise RuntimeError(
-            f"Hugging Face upload did not make {path_in_repo} available in repo {repo_id} ({repo_type})."
+            f"Hugging Face upload did not make {len(missing)} file(s) available in repo {repo_id} ({repo_type}). "
+            f"Examples: {missing[:5]}"
         )
 
 
@@ -363,8 +370,11 @@ def upload_dataset_images_batch(
 
             _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
 
-    for local_name in local_names:
-        _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_name}")
+    _verify_repo_files(
+        repo_id,
+        settings.dataset_repo_type,
+        [f"{repo_folder}/{local_name}" for local_name in local_names],
+    )
 
     return {"hfRepo": repo_id, "count": len(items), "localNames": local_names}
 
@@ -393,9 +403,11 @@ def upload_dataset_images_from_folder(
             )
 
         _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
-    for local_file in Path(folder_path).iterdir():
-        if local_file.is_file():
-            _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_file.name}")
+    _verify_repo_files(
+        repo_id,
+        settings.dataset_repo_type,
+        [f"{repo_folder}/{local_file.name}" for local_file in Path(folder_path).iterdir() if local_file.is_file()],
+    )
     return {"hfRepo": repo_id, "count": count}
 
 
@@ -423,9 +435,11 @@ def upload_labels_from_folder(
             )
 
         _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
-    for local_file in Path(folder_path).iterdir():
-        if local_file.is_file():
-            _verify_repo_file(repo_id, settings.dataset_repo_type, f"{repo_folder}/{local_file.name}")
+    _verify_repo_files(
+        repo_id,
+        settings.dataset_repo_type,
+        [f"{repo_folder}/{local_file.name}" for local_file in Path(folder_path).iterdir() if local_file.is_file()],
+    )
     return {"hfRepo": repo_id, "count": count}
 
 

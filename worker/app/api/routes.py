@@ -593,6 +593,7 @@ async def upload_images(
     created: list[dict] = []
     skipped: list[dict] = []
     adjusted: list[dict] = []
+    prepared: list[dict] = []
 
     session_id = (upload_session_id or uuid4().hex).strip() or uuid4().hex
     session = _ensure_upload_session(project_id, dataset_id, session_id)
@@ -619,39 +620,67 @@ async def upload_images(
                 raise HTTPException(status_code=500, detail="Upload session expired")
             stored_name = _safe_local_name(filename, session_state["used_names"])
 
-        remote_uploaded = False
+        prepared.append(
+            {
+                "stored_name": stored_name,
+                "result": result,
+                "content_type": f.content_type,
+            }
+        )
+
+    if not prepared:
+        return {
+            "uploaded": 0,
+            "images": [],
+            "queued": 0,
+            "skipped": skipped,
+            "adjusted": adjusted,
+        }
+
+    remote_uploaded = False
+    if _should_upload_dataset_images_to_hf():
+        batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
+        try:
+            loc = await asyncio.to_thread(
+                file_storage.upload_dataset_images_batch,
+                project_id,
+                dataset_id,
+                batch_items,
+            )
+            remote_uploaded = True
+            logger.info(
+                "Images uploaded to HF in one commit project=%s dataset=%s count=%d repo=%s",
+                project_id,
+                dataset_id,
+                len(batch_items),
+                loc.get("hfRepo") if isinstance(loc, dict) else None,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Hugging Face batch image upload failed project=%s dataset=%s count=%d: %s",
+                project_id,
+                dataset_id,
+                len(batch_items),
+                exc,
+            )
+            raise _hf_upload_exception(exc, file_name=f"{len(batch_items)} image(s)", target="image") from exc
+
+    for item in prepared:
+        stored_name = item["stored_name"]
+        result = item["result"]
+        content_type = item["content_type"]
         local_path = None
-        if _should_upload_dataset_images_to_hf():
+        if remote_uploaded and settings.local_storage_enabled and not settings.is_vercel:
             try:
-                loc = await asyncio.to_thread(
-                    file_storage.upload_dataset_image,
-                    project_id,
-                    dataset_id,
-                    stored_name,
-                    result.data,
-                )
-                remote_uploaded = True
-                logger.info(
-                    "Image uploaded immediately to HF project=%s dataset=%s file=%s hfPath=%s",
-                    project_id,
-                    dataset_id,
-                    stored_name,
-                    loc.get("hfPath") if isinstance(loc, dict) else None,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "Hugging Face upload failed on Vercel for %s/%s: %s",
-                    project_id,
-                    stored_name,
-                    exc,
-                )
-                raise _hf_upload_exception(exc, file_name=stored_name, target="image") from exc
-        else:
+                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+            except Exception:
+                logger.exception("Failed to persist local copy after HF upload for %s", stored_name)
+        elif not remote_uploaded:
             local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
             logger.info(
                 "Image received session=%s file=%s stored=%s local=%s",
                 session_id,
-                filename,
+                stored_name,
                 stored_name,
                 local_path,
             )
@@ -662,7 +691,7 @@ async def upload_images(
             "hfPath": file_storage.dataset_image_path(project_id, dataset_id, stored_name),
             "width": result.width,
             "height": result.height,
-            "mimeType": result.mime_type or f.content_type,
+            "mimeType": result.mime_type or content_type,
             "fileSize": len(result.data),
             "status": "uploaded" if remote_uploaded else "queued",
             "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
@@ -693,15 +722,6 @@ async def upload_images(
             logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
         else:
             logger.info("Image recorded as remote_ready and synced session=%s file=%s", session_id, stored_name)
-
-    if not created:
-        return {
-            "uploaded": 0,
-            "images": [],
-            "queued": 0,
-            "skipped": skipped,
-            "adjusted": adjusted,
-        }
 
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
@@ -741,6 +761,7 @@ async def upload_zip(
     created: list[dict] = []
     skipped: list[dict] = []
     adjusted: list[dict] = []
+    prepared: list[dict] = []
 
     session_id = uuid4().hex
     session = _ensure_upload_session(project_id, dataset_id, session_id)
@@ -768,86 +789,96 @@ async def upload_zip(
                         raise HTTPException(status_code=500, detail="Upload session expired")
                     stored_name = _safe_local_name(filename, session_state["used_names"])
 
-                remote_uploaded = False
-                local_path = None
-                if _should_upload_dataset_images_to_hf():
-                    try:
-                        loc = await asyncio.to_thread(
-                            file_storage.upload_dataset_image,
-                            project_id,
-                            dataset_id,
-                            stored_name,
-                            result.data,
-                        )
-                        remote_uploaded = True
-                        logger.info(
-                            "ZIP image uploaded immediately to HF project=%s dataset=%s file=%s hfPath=%s",
-                            project_id,
-                            dataset_id,
-                            stored_name,
-                            loc.get("hfPath") if isinstance(loc, dict) else None,
-                        )
-                    except Exception as exc:
-                        logger.exception(
-                            "Hugging Face upload failed on Vercel for ZIP %s/%s: %s",
-                            project_id,
-                            stored_name,
-                            exc,
-                        )
-                        raise _hf_upload_exception(exc, file_name=stored_name, target="image") from exc
-                else:
-                    local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
-
-                record_data = {
-                    "fileName": stored_name,
-                    "hfRepo": settings.dataset_repo_id,
-                    "hfPath": file_storage.dataset_image_path(
-                        project_id, dataset_id, stored_name
-                    ),
-                    "width": result.width,
-                    "height": result.height,
-                    "mimeType": result.mime_type or file.content_type,
-                    "fileSize": len(result.data),
-                    "status": "uploaded" if remote_uploaded else "queued",
-                    "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
-                    "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
-                }
-                if local_path:
-                    record_data["localPath"] = str(local_path)
-
-                record = await asyncio.to_thread(
-                    repo.create_image,
-                    project_id,
-                    dataset_id,
-                    record_data,
+                prepared.append(
+                    {
+                        "stored_name": stored_name,
+                        "result": result,
+                        "content_type": file.content_type,
+                    }
                 )
-                created.append(record)
-
-                if not remote_uploaded:
-                    with _upload_sessions_lock:
-                        session_state = _upload_sessions.get(session_id)
-                        if session_state is not None:
-                            session_state["items"].append(
-                                {
-                                    "image_id": record["id"],
-                                    "stored_name": stored_name,
-                                    "local_path": str(local_path),
-                                }
-                            )
-                    logger.info(
-                        "ZIP image staged session=%s file=%s stored=%s",
-                        session_id,
-                        filename,
-                        stored_name,
-                    )
-                else:
-                    logger.info(
-                        "ZIP image recorded as remote_ready and synced session=%s file=%s",
-                        session_id,
-                        stored_name,
-                    )
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
+
+    remote_uploaded = False
+    if prepared and _should_upload_dataset_images_to_hf():
+        batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
+        try:
+            loc = await asyncio.to_thread(
+                file_storage.upload_dataset_images_batch,
+                project_id,
+                dataset_id,
+                batch_items,
+            )
+            remote_uploaded = True
+            logger.info(
+                "ZIP images uploaded to HF in one commit project=%s dataset=%s count=%d repo=%s",
+                project_id,
+                dataset_id,
+                len(batch_items),
+                loc.get("hfRepo") if isinstance(loc, dict) else None,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Hugging Face batch ZIP image upload failed project=%s dataset=%s count=%d: %s",
+                project_id,
+                dataset_id,
+                len(batch_items),
+                exc,
+            )
+            raise _hf_upload_exception(exc, file_name=f"{len(batch_items)} ZIP image(s)", target="image") from exc
+
+    for item in prepared:
+        stored_name = item["stored_name"]
+        result = item["result"]
+        content_type = item["content_type"]
+        local_path = None
+        if remote_uploaded and settings.local_storage_enabled and not settings.is_vercel:
+            try:
+                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+            except Exception:
+                logger.exception("Failed to persist local ZIP copy after HF upload for %s", stored_name)
+        elif not remote_uploaded:
+            local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+
+        record_data = {
+            "fileName": stored_name,
+            "hfRepo": settings.dataset_repo_id,
+            "hfPath": file_storage.dataset_image_path(
+                project_id, dataset_id, stored_name
+            ),
+            "width": result.width,
+            "height": result.height,
+            "mimeType": result.mime_type or content_type,
+            "fileSize": len(result.data),
+            "status": "uploaded" if remote_uploaded else "queued",
+            "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
+            "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
+        }
+        if local_path:
+            record_data["localPath"] = str(local_path)
+
+        record = await asyncio.to_thread(
+            repo.create_image,
+            project_id,
+            dataset_id,
+            record_data,
+        )
+        created.append(record)
+
+        if not remote_uploaded:
+            with _upload_sessions_lock:
+                session_state = _upload_sessions.get(session_id)
+                if session_state is not None:
+                    session_state["items"].append(
+                        {
+                            "image_id": record["id"],
+                            "stored_name": stored_name,
+                            "local_path": str(local_path),
+                        }
+                    )
+            logger.info("ZIP image staged session=%s file=%s", session_id, stored_name)
+        else:
+            logger.info("ZIP image recorded as remote_ready and synced session=%s file=%s", session_id, stored_name)
 
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
