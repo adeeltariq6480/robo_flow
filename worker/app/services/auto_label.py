@@ -33,7 +33,9 @@ from app.services.storage import (
 from app.services.model_errors import IncompatibleModelError
 from app.services.yolo_inference import (
     MemoryLimitExceeded,
+    get_process_memory_mb,
     load_yolo_model,
+    release_all_models,
     run_yolo_inference,
     unload_model,
 )
@@ -492,20 +494,27 @@ async def run_auto_label(
     if db_total == 0:
         raise ValueError("Dataset has no files to label")
 
-    synced = await asyncio.to_thread(
-        sync_local_images_to_hf, project_id, dataset_id, db_file_list
-    )
-    if synced:
-        logger.info(
-            "Auto-label uploaded %d local image(s) to HF before labeling project=%s dataset=%s",
-            synced,
-            project_id,
-            dataset_id,
+    # Free RAM from any prior jobs before touching images or models.
+    await asyncio.to_thread(release_all_models)
+    gc.collect()
+
+    sync_hf_before = os.getenv("AUTO_LABEL_SYNC_HF_BEFORE_START", "false").lower() == "true"
+    if sync_hf_before:
+        synced = await asyncio.to_thread(
+            sync_local_images_to_hf, project_id, dataset_id, db_file_list
         )
-        db_file_list = [
-            _normalise_image_row(row)
-            for row in list_dataset_images(project_id, dataset_id)
-        ]
+        if synced:
+            logger.info(
+                "Auto-label uploaded %d local image(s) to HF before labeling project=%s dataset=%s",
+                synced,
+                project_id,
+                dataset_id,
+            )
+            db_file_list = [
+                _normalise_image_row(row)
+                for row in list_dataset_images(project_id, dataset_id)
+            ]
+        gc.collect()
 
     file_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
         project_id, dataset_id, db_file_list
@@ -734,6 +743,27 @@ async def run_auto_label(
             else f"Model {mi + 1}/{num_models}: loading YOLO into memory (CPU, 1–5 min)…"
         )
         logger.info("Job %s: model %s file ready at %s (local=%s)", job_id, model_id, model_path, using_local)
+        low_memory_mode = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "900" if low_memory_mode else "3000"))
+        await asyncio.to_thread(release_all_models)
+        gc.collect()
+        rss_before = get_process_memory_mb()
+        logger.info(
+            "Auto-label model %s memory before load: %.1f MB (hard limit %d MB)",
+            model_id,
+            rss_before,
+            hard,
+        )
+        if rss_before >= hard * 0.85:
+            gc.collect()
+            rss_before = get_process_memory_mb()
+        if rss_before >= hard:
+            model_failures[model_id] = (
+                f"Memory too high before model load: {rss_before:.0f} MB (limit {hard} MB)"
+            )
+            logger.warning("model skipped (memory) %s", model_id)
+            continue
+
         await update_job(
             job_id,
             progress=download_end,
@@ -801,13 +831,18 @@ async def run_auto_label(
             project_id=project_id,
         )
         model_phase_progress = inference_start
-        low_memory_mode = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
-        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "50" if low_memory_mode else "0")
+        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "15" if low_memory_mode else "0")
+        gc_every_raw = os.getenv("AUTO_LABEL_GC_EVERY_IMAGES", "5" if low_memory_mode else "0")
         try:
             unload_every_value = int(unload_every_raw)
         except ValueError:
-            unload_every_value = 1 if low_memory_mode else 0
+            unload_every_value = 15 if low_memory_mode else 0
+        try:
+            gc_every_value = int(gc_every_raw)
+        except ValueError:
+            gc_every_value = 5 if low_memory_mode else 0
         unload_every = unload_every_value if unload_every_value > 0 else None
+        gc_every = gc_every_value if gc_every_value > 0 else None
 
         try:
             for idx, file_row in enumerate(file_list):
@@ -882,6 +917,8 @@ async def run_auto_label(
                         prep_failures[file_id] = f"Inference error: {exc}"
 
                 done_units += 1
+                if gc_every is not None and done_units > 0 and done_units % gc_every == 0:
+                    gc.collect()
                 if unload_every is not None and done_units > 0 and done_units % unload_every == 0:
                     logger.info("LOW_MEMORY_MODE: periodic unload after %d inferences", done_units)
                     await asyncio.to_thread(unload_model, model_path)

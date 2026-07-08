@@ -1,6 +1,8 @@
 """Resolve model/image files from local storage first, then Hugging Face Hub."""
 
+import gc
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -93,7 +95,47 @@ def sync_local_images_to_hf(
     if not file_storage.hf_dataset_upload_enabled():
         return 0
 
-    pending: list[tuple[str, bytes, str, str]] = []
+    chunk_size = max(1, int(os.getenv("HF_SYNC_CHUNK_SIZE", "10")))
+    uploaded = 0
+    chunk: list[tuple[str, bytes, str, str]] = []
+
+    def _flush_chunk() -> None:
+        nonlocal uploaded, chunk
+        if not chunk:
+            return
+        payload = [(name, data) for name, data, _, _ in chunk]
+        try:
+            file_storage.upload_dataset_images_batch(project_id, dataset_id, payload)
+            for file_name, _, image_id, local_str in chunk:
+                try:
+                    update_image_storage_fields(
+                        project_id,
+                        image_id,
+                        {
+                            "hfRepo": settings.dataset_repo_id,
+                            "hfPath": file_storage.dataset_image_path(
+                                project_id, dataset_id, file_name
+                            ),
+                            "localPath": local_str,
+                            "storage_status": "remote_ready",
+                            "hf_sync_status": "synced",
+                            "status": "uploaded",
+                        },
+                    )
+                    uploaded += 1
+                except Exception:
+                    logger.exception("Failed to update image after HF sync %s", image_id)
+        except Exception as exc:
+            logger.exception(
+                "HF sync batch failed project=%s dataset=%s: %s",
+                project_id,
+                dataset_id,
+                exc,
+            )
+        finally:
+            chunk = []
+            gc.collect()
+
     for raw in file_list:
         row = _normalise_row(raw)
         image_id = str(_get_first(row, "id") or "")
@@ -119,49 +161,15 @@ def sync_local_images_to_hf(
             continue
 
         try:
-            pending.append((file_name, local_path.read_bytes(), image_id, str(local_path)))
+            chunk.append((file_name, local_path.read_bytes(), image_id, str(local_path)))
         except Exception as exc:
             logger.warning("Could not read local image %s: %s", local_path, exc)
-
-    if not pending:
-        return 0
-
-    uploaded = 0
-    chunk_size = 100
-    for offset in range(0, len(pending), chunk_size):
-        chunk = pending[offset : offset + chunk_size]
-        payload = [(name, data) for name, data, _, _ in chunk]
-        try:
-            file_storage.upload_dataset_images_batch(project_id, dataset_id, payload)
-        except Exception as exc:
-            logger.exception(
-                "HF sync batch failed project=%s dataset=%s offset=%d: %s",
-                project_id,
-                dataset_id,
-                offset,
-                exc,
-            )
             continue
 
-        for file_name, _, image_id, local_str in chunk:
-            try:
-                update_image_storage_fields(
-                    project_id,
-                    image_id,
-                    {
-                        "hfRepo": settings.dataset_repo_id,
-                        "hfPath": file_storage.dataset_image_path(
-                            project_id, dataset_id, file_name
-                        ),
-                        "localPath": local_str,
-                        "storage_status": "remote_ready",
-                        "hf_sync_status": "synced",
-                        "status": "uploaded",
-                    },
-                )
-                uploaded += 1
-            except Exception:
-                logger.exception("Failed to update image after HF sync %s", image_id)
+        if len(chunk) >= chunk_size:
+            _flush_chunk()
+
+    _flush_chunk()
 
     if uploaded:
         logger.info(

@@ -14,6 +14,11 @@ from app.services.universal_yolo_loader import UniversalYOLOModel
 import os
 import torch
 
+# Keep CPU inference threads low on small Railway containers.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 class MemoryLimitExceeded(Exception):
     pass
 
@@ -25,6 +30,48 @@ _yolo_lock = threading.Lock()
 
 def _low_memory_mode() -> bool:
     return os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+
+
+def inference_max_side() -> int:
+    """Primary auto-label resolution — separate from upload quality."""
+    raw = os.getenv("INFERENCE_MAX_IMAGE_SIZE") or os.getenv("MAX_IMAGE_SIZE")
+    if raw:
+        try:
+            return max(128, int(raw))
+        except ValueError:
+            pass
+    return 416 if _low_memory_mode() else int(settings.max_image_size)
+
+
+def inference_min_side() -> int:
+    """OOM fallback — only used when primary size exhausts Railway RAM."""
+    raw = os.getenv("INFERENCE_MIN_IMAGE_SIZE")
+    if raw:
+        try:
+            return max(128, int(raw))
+        except ValueError:
+            pass
+    return int(getattr(settings, "inference_min_image_size", 256) or 256)
+
+
+def inference_imgsz_for(side: int) -> int:
+    """Keep YOLO imgsz aligned with the prepared image side."""
+    raw = os.getenv("YOLO_IMGSZ")
+    if raw:
+        try:
+            return max(128, int(raw))
+        except ValueError:
+            pass
+    return max(128, side)
+
+
+def inference_size_ladder() -> list[int]:
+    """Try best quality first, fall back only if memory is tight."""
+    primary = inference_max_side()
+    minimum = min(inference_min_side(), primary)
+    if minimum >= primary:
+        return [primary]
+    return [primary, minimum]
 
 
 def get_process_memory_mb() -> float:
@@ -122,62 +169,75 @@ def run_yolo_inference(
 
     model = get_model(model_path)
     start = time.perf_counter()
+    soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "700" if _low_memory_mode() else "2400"))
+    hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "900" if _low_memory_mode() else "3000"))
 
-    _log_memory("Memory before image processing")
-    prepared_image: Image.Image | None = None
-    try:
-        # Resize and prepare image to reduce memory
-        with Image.open(image_path) as opened:
-            img = ImageOps.exif_transpose(opened)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            low_memory = _low_memory_mode()
-            default_max_side = "192" if low_memory else str(settings.max_image_size)
-            max_side = int(os.getenv("MAX_IMAGE_SIZE", default_max_side))
-            if img.width > max_side or img.height > max_side:
-                img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-            prepared_image = img.copy()
+    last_memory_error: MemoryLimitExceeded | None = None
+    detections_raw: list[dict] = []
 
-        _log_memory("Memory after image processing")
+    for max_side in inference_size_ladder():
+        prepared_image: Image.Image | None = None
+        _log_memory(f"Memory before image processing ({max_side}px)")
+        try:
+            prepared_image = _prepare_inference_image(image_path, max_side)
+            _log_memory("Memory after image processing")
 
-        # Memory guard before inference (Railway hobby ~512MB–2GB; tune via env)
-        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "900" if _low_memory_mode() else "2400"))
-        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "1200" if _low_memory_mode() else "3000"))
-        rss = get_process_memory_mb()
-        logger.debug("Memory check before inference: %.1f MB (soft=%d hard=%d)", rss, soft, hard)
-        if rss >= soft:
-            logger.warning("Memory above soft limit (%.1f MB >= %d MB) — running gc before inference", rss, soft)
+            rss = get_process_memory_mb()
+            if rss >= soft:
+                logger.warning(
+                    "Memory above soft limit (%.1f MB >= %d MB) — running gc before inference",
+                    rss,
+                    soft,
+                )
+                gc.collect()
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                rss = get_process_memory_mb()
+            if rss >= hard:
+                raise MemoryLimitExceeded(
+                    f"Memory above hard limit: {rss:.1f} MB >= {hard} MB"
+                )
+
+            imgsz = inference_imgsz_for(max_side)
+            detections_raw = model.predict(prepared_image, imgsz=imgsz)
+            if max_side != inference_max_side():
+                logger.info(
+                    "Inference used fallback resolution %dpx (primary=%dpx)",
+                    max_side,
+                    inference_max_side(),
+                )
+            break
+        except MemoryLimitExceeded as exc:
+            last_memory_error = exc
+            logger.warning(
+                "OOM at %dpx for %s — %s",
+                max_side,
+                image_path.name,
+                exc,
+            )
+            if max_side == inference_size_ladder()[-1]:
+                raise
+            continue
+        finally:
+            if prepared_image is not None:
+                try:
+                    prepared_image.close()
+                except Exception:
+                    pass
+            del prepared_image
             gc.collect()
             try:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            rss = get_process_memory_mb()
-        if rss >= hard:
-            raise MemoryLimitExceeded(f"Memory above hard limit: {rss:.1f} MB >= {hard} MB")
+            _log_memory("Memory after cleanup")
 
-        # Run inference using universal model (single image)
-        detections_raw = model.predict(prepared_image)
-
-    finally:
-        if prepared_image is not None:
-            try:
-                prepared_image.close()
-            except Exception:
-                pass
-        del prepared_image
-        try:
-            del img
-        except Exception:
-            pass
-        gc.collect()
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        _log_memory("Memory after cleanup")
+    if last_memory_error and not detections_raw:
+        raise last_memory_error
 
     elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -218,6 +278,41 @@ def unload_model(model_path: Path) -> None:
         logger.info("Unloading YOLO model %s", model_path.name)
         model.unload()
     _yolo_models.pop(key, None)
+
+
+def release_all_models() -> None:
+    """Drop every cached YOLO runtime — use before auto-label on small hosts."""
+    with _yolo_lock:
+        if not _yolo_models:
+            return
+        logger.info("Releasing %d cached YOLO model(s) from memory", len(_yolo_models))
+        for cached in list(_yolo_models.values()):
+            try:
+                cached.unload()
+            except Exception:
+                logger.debug("Failed to unload cached model", exc_info=True)
+        _yolo_models.clear()
+    gc.collect()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _prepare_inference_image(image_path: Path, max_side: int) -> Image.Image:
+    """Decode images without loading full 4K bitmap into RAM."""
+    with Image.open(image_path) as opened:
+        try:
+            opened.draft("RGB", (max_side, max_side))
+        except Exception:
+            pass
+        img = ImageOps.exif_transpose(opened)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.width > max_side or img.height > max_side:
+            img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        return img.copy()
 
 
 def is_model_loaded(model_path: Path) -> bool:

@@ -73,6 +73,7 @@ export function DatasetUploadForm({
   const uploading = phase === "uploading" || phase === "hf_syncing";
   const paused = phase === "paused";
   const done = phase === "done";
+  const [preparing, setPreparing] = useState(false);
 
   const persistSession = useCallback(
     (patch: Partial<PersistedUploadSession>) => {
@@ -147,7 +148,9 @@ export function DatasetUploadForm({
       const initialCompleted = options?.completedFiles ?? 0;
 
       if (!options?.resume) {
+        setPreparing(true);
         await saveUploadFiles(projectId, datasetId, files);
+        setPreparing(false);
       }
 
       abortRef.current = new AbortController();
@@ -353,7 +356,30 @@ export function DatasetUploadForm({
 
   async function handleUpload() {
     if (queue.length === 0) return;
-    await runUpload(queue.map((q) => q.file));
+    const files = queue.map((q) => q.file);
+    setPhase("uploading");
+    setProgress(0);
+    setError(null);
+    setHfStatus(null);
+    setRestoredSession({
+      projectId,
+      datasetId,
+      datasetName,
+      workerSessionId: "",
+      status: "uploading",
+      totalFiles: files.length,
+      completedFiles: 0,
+      completedBatches: 0,
+      totalBatches: buildUploadBatches(files).length,
+      progress: 0,
+      fileNames: files.map((f) => f.name),
+      updatedAt: Date.now(),
+    });
+    await runUpload(files);
+  }
+
+  function handlePause() {
+    abortRef.current?.abort();
   }
 
   async function handleResume() {
@@ -510,77 +536,89 @@ export function DatasetUploadForm({
     const completed = restoredSession?.completedFiles ?? 0;
 
     return (
-      <Card>
-        <div className="text-center">
-          {phase === "hf_syncing" ? (
-            <CloudUpload className="mx-auto h-12 w-12 text-brand-600" />
-          ) : paused ? (
-            <PauseCircle className="mx-auto h-12 w-12 text-amber-500" />
-          ) : (
-            <FileImage className="mx-auto h-12 w-12 text-brand-600" />
-          )}
-
-          <h2 className="mt-4 text-lg font-semibold">
-            {phase === "hf_syncing"
-              ? "Syncing to Hugging Face"
-              : paused
-                ? "Upload paused"
-                : "Uploading images"}
-          </h2>
-
-          <p className="mt-2 text-sm text-slate-500">
-            {phase === "hf_syncing"
-              ? hfStatus ?? "Pushing files to your HF dataset repo…"
-              : `${completed} of ${total} files sent to server · ${progress}%`}
-          </p>
-
-          {phase !== "hf_syncing" && (
-            <div className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full bg-slate-200">
-              <div
-                className="h-full rounded-full bg-brand-600 transition-all"
-                style={{ width: `${Math.max(progress, 2)}%` }}
-              />
-            </div>
-          )}
-
-          {error && (
-            <div className="mt-4">
-              <Alert variant="error">{error}</Alert>
-            </div>
-          )}
-
-          {hfStatus && phase === "hf_syncing" && (
-            <p className="mt-3 text-sm text-slate-600">{hfStatus}</p>
-          )}
-
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            {paused && (
-              <Button onClick={handleResume}>
-                <Play className="h-4 w-4" />
-                Resume upload
-              </Button>
+      <div className="relative pb-28">
+        <Card>
+          <div className="text-center">
+            {phase === "hf_syncing" ? (
+              <CloudUpload className="mx-auto h-12 w-12 text-brand-600" />
+            ) : paused ? (
+              <PauseCircle className="mx-auto h-12 w-12 text-amber-500" />
+            ) : (
+              <FileImage className="mx-auto h-12 w-12 text-brand-600" />
             )}
-            {(paused || phase === "hf_syncing") && (
-              <Button variant="secondary" onClick={handleRetryHf}>
-                <CloudUpload className="h-4 w-4" />
-                Retry HF sync
-              </Button>
+
+            <h2 className="mt-4 text-lg font-semibold">
+              {phase === "hf_syncing"
+                ? "Syncing to Hugging Face"
+                : paused
+                  ? "Upload paused"
+                  : preparing
+                    ? "Preparing upload"
+                    : "Uploading images"}
+            </h2>
+
+            <p className="mt-2 text-sm text-slate-500">
+              {phase === "hf_syncing"
+                ? hfStatus ?? "Pushing files to your HF dataset repo…"
+                : preparing
+                  ? `Saving ${total} file${total !== 1 ? "s" : ""} locally before upload…`
+                  : `${completed} of ${total} files sent to server · ${progress}%`}
+            </p>
+
+            {phase !== "hf_syncing" && (
+              <div className="mx-auto mt-4 h-2 max-w-md overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-brand-600 transition-all"
+                  style={{ width: `${Math.max(progress, preparing ? 5 : 2)}%` }}
+                />
+              </div>
             )}
-            <Button variant="secondary" onClick={handleCancel}>
-              {uploading ? "Stop upload" : "Cancel"}
-            </Button>
+
+            {error && (
+              <div className="mt-4">
+                <Alert variant="error">{error}</Alert>
+              </div>
+            )}
+
+            {hfStatus && phase === "hf_syncing" && (
+              <p className="mt-3 text-sm text-slate-600">{hfStatus}</p>
+            )}
+
+            <p className="mt-4 text-xs text-slate-500">
+              You can reload this page — progress is saved. Use Resume to continue.
+            </p>
           </div>
+        </Card>
 
-          <p className="mt-4 text-xs text-slate-500">
-            You can reload this page — progress is saved. Use Resume to continue.
-          </p>
+        <div className="fixed bottom-6 left-1/2 z-50 flex w-[min(100%,40rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+          {paused && (
+            <Button onClick={handleResume}>
+              <Play className="h-4 w-4" />
+              Resume
+            </Button>
+          )}
+          {uploading && !preparing && (
+            <Button variant="secondary" onClick={handlePause}>
+              <PauseCircle className="h-4 w-4" />
+              Pause
+            </Button>
+          )}
+          {(paused || phase === "hf_syncing") && (
+            <Button variant="secondary" onClick={handleRetryHf}>
+              <CloudUpload className="h-4 w-4" />
+              Retry HF sync
+            </Button>
+          )}
+          <Button variant="secondary" onClick={handleCancel}>
+            Cancel
+          </Button>
         </div>
-      </Card>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6 pb-6">
       {error && <Alert variant="error">{error}</Alert>}
 
       <Card>
@@ -668,14 +706,16 @@ export function DatasetUploadForm({
               ))}
             </ul>
 
-            <div className="mt-4 flex gap-3">
-              <Button onClick={handleUpload} loading={uploading}>
-                {uploading ? "Uploading…" : `Upload ${queue.length} file${queue.length !== 1 ? "s" : ""}`}
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button onClick={handleUpload} loading={uploading || preparing}>
+                {uploading || preparing
+                  ? "Uploading…"
+                  : `Upload ${queue.length} file${queue.length !== 1 ? "s" : ""}`}
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setQueue([])}
-                disabled={uploading}
+                disabled={uploading || preparing}
               >
                 Clear queue
               </Button>

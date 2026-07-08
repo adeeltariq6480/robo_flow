@@ -167,8 +167,18 @@ class Settings(BaseSettings):
     )
     max_image_size: int = Field(
         default=416,
-        validation_alias=AliasChoices("MAX_IMAGE_SIZE"),
-        description="Inference-only resize — does not affect uploaded image storage",
+        validation_alias=AliasChoices("MAX_IMAGE_SIZE", "INFERENCE_MAX_IMAGE_SIZE"),
+        description="Primary inference resize — does not affect uploaded image storage",
+    )
+    inference_min_image_size: int = Field(
+        default=256,
+        validation_alias=AliasChoices("INFERENCE_MIN_IMAGE_SIZE"),
+        description="Fallback inference size when Railway runs low on memory",
+    )
+    yolo_imgsz: int = Field(
+        default=416,
+        validation_alias=AliasChoices("YOLO_IMGSZ"),
+        description="YOLO model input size for auto-label (match INFERENCE_MAX_IMAGE_SIZE)",
     )
     hf_hub_disable_xet: bool = Field(
         default=True,
