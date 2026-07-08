@@ -1,7 +1,5 @@
 "use client";
 
-import type { UploadImagesResult } from "@/lib/api/uploads";
-
 const DB_NAME = "robo-flow-uploads";
 const DB_VERSION = 1;
 const FILES_STORE = "files";
@@ -16,8 +14,19 @@ export type UploadSessionStatus =
 
 export interface PersistedUploadSummary {
   uploaded: number;
-  skipped: UploadImagesResult["skipped"];
-  adjusted: UploadImagesResult["adjusted"];
+  skipped: { fileName: string; reason?: string; message?: string }[];
+  adjusted: { fileName: string; message?: string }[];
+}
+
+export function normalizeUploadSummary(
+  summary?: PersistedUploadSummary | null
+): PersistedUploadSummary | null {
+  if (!summary) return null;
+  return {
+    uploaded: summary.uploaded,
+    skipped: summary.skipped ?? [],
+    adjusted: summary.adjusted ?? [],
+  };
 }
 
 export interface PersistedUploadSession {

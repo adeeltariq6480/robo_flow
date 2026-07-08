@@ -19,6 +19,8 @@ import {
   loadUploadSession,
   saveUploadFiles,
   saveUploadSession,
+  normalizeUploadSummary,
+  type PersistedUploadSummary,
   type PersistedUploadSession,
 } from "@/lib/upload/upload-session-store";
 import { ClassSelect } from "@/components/ui/class-select";
@@ -63,11 +65,9 @@ export function DatasetUploadForm({
   const [hfStatus, setHfStatus] = useState<string | null>(null);
   const [restoredSession, setRestoredSession] =
     useState<PersistedUploadSession | null>(null);
-  const [uploadSummary, setUploadSummary] = useState<{
-    uploaded: number;
-    skipped: { fileName: string; reason?: string; message?: string }[];
-    adjusted: { fileName: string; message?: string }[];
-  } | null>(null);
+  const [uploadSummary, setUploadSummary] = useState<PersistedUploadSummary | null>(
+    null
+  );
   const [showReportModal, setShowReportModal] = useState(false);
 
   const uploading = phase === "uploading" || phase === "hf_syncing";
@@ -241,12 +241,12 @@ export function DatasetUploadForm({
       }
 
       setProgress(100);
-      setUploadSummary(summary);
+      setUploadSummary(normalizeUploadSummary(summary));
       setProcessing(queuedBackgroundUpload);
       persistSession({
         status: "hf_syncing",
         progress: 100,
-        summary,
+        summary: normalizeUploadSummary(summary) ?? undefined,
         processing: queuedBackgroundUpload,
         completedFiles: files.length,
         completedBatches: batches.length,
@@ -276,7 +276,7 @@ export function DatasetUploadForm({
         return;
       }
       setRestoredSession(saved);
-      setUploadSummary(saved.summary ?? null);
+      setUploadSummary(normalizeUploadSummary(saved.summary));
       setProgress(saved.progress);
       setProcessing(Boolean(saved.processing));
       if (saved.status === "paused") {
@@ -531,7 +531,7 @@ export function DatasetUploadForm({
     );
   }
 
-  if (uploading || paused || phase === "hf_syncing") {
+  if (uploading || paused) {
     const total = restoredSession?.totalFiles ?? queue.length;
     const completed = restoredSession?.completedFiles ?? 0;
 
