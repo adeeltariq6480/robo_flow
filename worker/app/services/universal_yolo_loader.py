@@ -135,11 +135,15 @@ class UniversalYOLOModel:
             repo = os.getenv("YOLOV5_REPO", "ultralytics/yolov5")
             default_ref = os.getenv("YOLOV5_REPO_REF", "v6.2")
             preferred_order = ["v7.0", "v6.2", "v6.1", "v6.0", "v5.0", "v4.0", "v3.1", "master"]
-            # Ensure default_ref is tried first if present
-            if default_ref and default_ref not in preferred_order:
+            try_all_refs = os.getenv("YOLOV5_TRY_ALL_REFS", "false" if _low_memory_mode() else "true").lower() == "true"
+            extra_refs = [ref.strip() for ref in os.getenv("YOLOV5_EXTRA_REFS", "").split(",") if ref.strip()]
+            if not try_all_refs:
+                versions = [default_ref, *extra_refs]
+            elif default_ref and default_ref not in preferred_order:
                 versions = [default_ref] + preferred_order
             else:
                 versions = [default_ref] + [v for v in preferred_order if v != default_ref]
+            versions = [ref for idx, ref in enumerate(versions) if ref and ref not in versions[:idx]]
 
             logger.info("YOLOv5 loader will try refs: %s", ",".join(versions))
 
@@ -291,7 +295,7 @@ class UniversalYOLOModel:
         import torch
 
         low_memory = _low_memory_mode()
-        imgsz = int(os.getenv("YOLO_IMGSZ", "320" if low_memory else "416"))
+        imgsz = int(os.getenv("YOLO_IMGSZ", "256" if low_memory else "416"))
         conf = float(os.getenv("YOLO_CONF", "0.25"))
 
         # Force CPU inference mode and controlled options to reduce memory

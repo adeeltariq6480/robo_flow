@@ -107,7 +107,7 @@ def run_yolo_inference(
             if img.mode != "RGB":
                 img = img.convert("RGB")
             low_memory = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
-            default_max_side = "320" if low_memory else str(settings.max_image_size)
+            default_max_side = "256" if low_memory else str(settings.max_image_size)
             max_side = int(os.getenv("MAX_IMAGE_SIZE", default_max_side))
             if img.width > max_side or img.height > max_side:
                 img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)

@@ -433,8 +433,8 @@ async def run_auto_label(
         project_id=project_id,
     )
 
-    # Lazy image paths — download each image once when first needed (no bulk pre-download).
-    image_paths: dict[str, object] = {}
+    # Download one image at a time. Keeping many temp image paths/files around can
+    # push small Railway containers into OOM when model runtimes are also loaded.
     prep_failures: dict[str, str] = {}
     model_failures: dict[str, str] = {}
     file_by_id: dict[str, dict] = {str(f["id"]): f for f in file_list}
@@ -467,23 +467,30 @@ async def run_auto_label(
             await asyncio.sleep(20)
         return await task
 
-    async def ensure_image(file_id: str) -> bool:
-        if file_id in image_paths:
-            return True
+    def _cleanup_image_path(path: object) -> None:
+        try:
+            image_path = Path(path)
+            if _remote_image_mode() or str(image_path).startswith(str(settings.storage_base_path)):
+                if image_path.exists():
+                    image_path.unlink()
+                parent = image_path.parent
+                if parent.name.startswith("hf-temp-"):
+                    shutil.rmtree(parent, ignore_errors=True)
+        except Exception:
+            logger.debug("Failed to delete temporary auto-label image %s", path)
+
+    async def prepare_image(file_id: str) -> Path | None:
         if file_id in prep_failures:
-            return False
+            return None
         row = file_by_id.get(file_id)
         if not row:
             prep_failures[file_id] = "Image record missing"
-            return False
+            return None
         if not _is_image_row(row):
             prep_failures[file_id] = "Not an image file"
-            return False
+            return None
         try:
-            image_paths[file_id] = await asyncio.to_thread(
-                download_image_row, row, file_id
-            )
-            return True
+            return await asyncio.to_thread(download_image_row, row, file_id)
         except Exception as exc:
             logger.warning("Image preparation failed %s: %s", file_id, exc)
             if _image_hf_path(row) and ("404" in str(exc) or "not found" in str(exc).lower()):
@@ -498,7 +505,7 @@ async def run_auto_label(
                     },
                 )
             prep_failures[file_id] = str(exc)
-            return False
+            return None
 
     ready_ids = [str(f["id"]) for f in file_list if str(f["id"]) not in prep_failures]
     work_units = max(len(ready_ids) * num_models, 1)
@@ -604,11 +611,11 @@ async def run_auto_label(
         )
         model_phase_progress = inference_start
         low_memory_mode = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
-        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "10" if low_memory_mode else "0")
+        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "1" if low_memory_mode else "0")
         try:
             unload_every_value = int(unload_every_raw)
         except ValueError:
-            unload_every_value = 10 if low_memory_mode else 0
+            unload_every_value = 1 if low_memory_mode else 0
         unload_every = unload_every_value if unload_every_value > 0 else None
 
         try:
@@ -629,16 +636,20 @@ async def run_auto_label(
                     )
 
                 try:
-                    if not await ensure_image(file_id):
+                    image_path = await prepare_image(file_id)
+                    if image_path is None:
                         continue
-                    inference = await asyncio.to_thread(
-                        run_yolo_inference,
-                        model_path,
-                        image_paths[file_id],
-                        config,
-                        model_name=model_id,
-                        class_id_map=class_id_map,
-                    )
+                    try:
+                        inference = await asyncio.to_thread(
+                            run_yolo_inference,
+                            model_path,
+                            image_path,
+                            config,
+                            model_name=model_id,
+                            class_id_map=class_id_map,
+                        )
+                    finally:
+                        _cleanup_image_path(image_path)
                     per_image_dets[file_id].extend(inference.detections)
                     per_image_models[file_id][model_id] = len(inference.detections)
                 except Exception as exc:
@@ -806,18 +817,6 @@ async def run_auto_label(
                 )
             except Exception as exc:
                 logger.exception("Failed to upload auto-label label files to HF for %s/%s: %s", project_id, dataset_id, exc)
-
-    for path in image_paths.values():
-        try:
-            image_path = Path(path)
-            if _remote_image_mode() or str(image_path).startswith(str(settings.storage_base_path)):
-                if image_path.exists():
-                    image_path.unlink()
-                parent = image_path.parent
-                if parent.name.startswith("hf-temp-"):
-                    shutil.rmtree(parent, ignore_errors=True)
-        except Exception:
-            logger.debug("Failed to delete temporary auto-label image %s", path)
 
     if model_failures:
         logger.warning(
