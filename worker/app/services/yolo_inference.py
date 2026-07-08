@@ -22,6 +22,10 @@ _yolo_models: dict[str, UniversalYOLOModel] = {}
 _yolo_lock = threading.Lock()
 
 
+def _low_memory_mode() -> bool:
+    return os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+
+
 def get_process_memory_mb() -> float:
     return psutil.Process().memory_info().rss / 1024 / 1024
 
@@ -33,6 +37,7 @@ def _log_memory(label: str) -> None:
 def get_model(model_path: Path) -> UniversalYOLOModel:
     """Load and cache a YOLO model by path (supports multiple formats)."""
     key = str(model_path.resolve())
+    low_memory = _low_memory_mode()
     if key in _yolo_models:
         model = _yolo_models[key]
         if not model.is_loaded():
@@ -40,6 +45,21 @@ def get_model(model_path: Path) -> UniversalYOLOModel:
         return model
 
     with _yolo_lock:
+        if low_memory and _yolo_models:
+            logger.info("LOW_MEMORY_MODE: clearing %d cached model(s) before loading %s", len(_yolo_models), model_path)
+            for cached in list(_yolo_models.values()):
+                try:
+                    cached.unload()
+                except Exception:
+                    logger.debug("Failed to unload cached model", exc_info=True)
+            _yolo_models.clear()
+            gc.collect()
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         if key in _yolo_models:
             model = _yolo_models[key]
             if not model.is_loaded():
@@ -106,7 +126,7 @@ def run_yolo_inference(
             img = ImageOps.exif_transpose(opened)
             if img.mode != "RGB":
                 img = img.convert("RGB")
-            low_memory = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+            low_memory = _low_memory_mode()
             default_max_side = "256" if low_memory else str(settings.max_image_size)
             max_side = int(os.getenv("MAX_IMAGE_SIZE", default_max_side))
             if img.width > max_side or img.height > max_side:

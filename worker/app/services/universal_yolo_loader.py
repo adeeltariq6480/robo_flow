@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Enable/disable optional runtimes via environment
 ENABLE_YOLOV5_RUNTIME = os.getenv("ENABLE_YOLOV5_RUNTIME", "false").lower() == "true"
+ENABLE_YOLOV7_RUNTIME = os.getenv("ENABLE_YOLOV7_RUNTIME", "true").lower() == "true"
 ENABLE_ONNX_RUNTIME = os.getenv("ENABLE_ONNX_RUNTIME", "true").lower() == "true"
 
 
@@ -32,6 +33,21 @@ def _clear_runtime_memory() -> None:
             torch.cuda.empty_cache()
     except Exception:
         logger.debug("Torch memory cleanup skipped", exc_info=True)
+
+
+def _looks_like_yolov7_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "can't get attribute 'mp'",
+            "cant get attribute 'mp'",
+            "attribute 'mp'",
+            "sppcspc",
+            "repconv",
+            "yolov7",
+        )
+    )
 
 
 class UniversalYOLOModel:
@@ -76,19 +92,47 @@ class UniversalYOLOModel:
                     logger.warning("Ultralytics primary load failed, trying YOLOv5 fallback: %s", exc)
                     self.model = None
                     _clear_runtime_memory()
-                    self._load_yolov5()
-                    self.loader_type = "yolov5"
-                    self.model_type = "yolov5_legacy"
+                    try:
+                        self._load_yolov5()
+                        self.loader_type = "yolov5"
+                        self.model_type = "yolov5_legacy"
+                    except Exception as yolov5_exc:
+                        if not _looks_like_yolov7_error(exc) and not _looks_like_yolov7_error(yolov5_exc):
+                            raise
+                        logger.warning("YOLOv5 fallback also looks like YOLOv7 mismatch, trying YOLOv7: %s", yolov5_exc)
+                        self.model = None
+                        _clear_runtime_memory()
+                        self._load_yolov7()
+                        self.loader_type = "yolov7"
+                        self.model_type = "yolov7_legacy"
             elif self.loader_type == "yolov5":
                 try:
                     self._load_yolov5()
                 except Exception as exc:
-                    logger.warning("YOLOv5 primary load failed, trying Ultralytics fallback: %s", exc)
+                    if _looks_like_yolov7_error(exc):
+                        logger.warning("YOLOv5 load looks like YOLOv7 checkpoint, trying YOLOv7 fallback: %s", exc)
+                        self.model = None
+                        _clear_runtime_memory()
+                        self._load_yolov7()
+                        self.loader_type = "yolov7"
+                        self.model_type = "yolov7_legacy"
+                    else:
+                        logger.warning("YOLOv5 primary load failed, trying Ultralytics fallback: %s", exc)
+                        self.model = None
+                        _clear_runtime_memory()
+                        self._load_ultralytics()
+                        self.loader_type = "ultralytics"
+                        self.model_type = "ultralytics_fallback"
+            elif self.loader_type == "yolov7":
+                try:
+                    self._load_yolov7()
+                except Exception as exc:
+                    logger.warning("YOLOv7 primary load failed, trying YOLOv5 fallback: %s", exc)
                     self.model = None
                     _clear_runtime_memory()
-                    self._load_ultralytics()
-                    self.loader_type = "ultralytics"
-                    self.model_type = "ultralytics_fallback"
+                    self._load_yolov5()
+                    self.loader_type = "yolov5"
+                    self.model_type = "yolov5_legacy"
             elif self.loader_type == "onnxruntime":
                 self._load_onnx()
             else:
@@ -153,14 +197,7 @@ class UniversalYOLOModel:
                 repo_spec = f"{repo}:{attempt_ref}"
                 logger.info("Trying YOLOv5 ref %s for model %s", repo_spec, self.model_path)
                 try:
-                    self.model = torch.hub.load(
-                        repo_spec,
-                        "custom",
-                        path=self.model_path,
-                        trust_repo=True,
-                        force_reload=False,
-                        device="cpu",
-                    )
+                    self.model = self._torch_hub_custom_load(torch, repo_spec, device="cpu")
                     logger.info("Loaded YOLOv5 model with ref %s", repo_spec)
                     break
                 except Exception as exc:
@@ -204,6 +241,60 @@ class UniversalYOLOModel:
         except Exception as exc:
             logger.exception("YOLOv5 load failed")
             raise
+
+    def _load_yolov7(self) -> None:
+        """Load YOLOv7-style checkpoints that contain layers like MP/SPPCSPC."""
+        if not ENABLE_YOLOV7_RUNTIME:
+            raise RuntimeError("YOLOv7 runtime is disabled. Set ENABLE_YOLOV7_RUNTIME=true to enable.")
+
+        try:
+            import torch
+
+            self._patch_legacy_runtime_compat(torch)
+            if settings.torch_home_dir:
+                os.environ["TORCH_HOME"] = str(settings.torch_home_dir)
+
+            repo = os.getenv("YOLOV7_REPO", "WongKinYiu/yolov7")
+            ref = os.getenv("YOLOV7_REPO_REF", "main")
+            repo_spec = f"{repo}:{ref}" if ref else repo
+            logger.info("YOLOv7 runtime loading repo=%s model=%s", repo_spec, self.model_path)
+            self.model = self._torch_hub_custom_load(torch, repo_spec, device="cpu")
+            try:
+                if hasattr(self.model, "to"):
+                    self.model.to("cpu")
+                if hasattr(self.model, "eval"):
+                    self.model.eval()
+            except Exception:
+                logger.debug("YOLOv7 model CPU/eval setup failed but continuing", exc_info=True)
+            logger.info("YOLOv7 model loaded successfully")
+        except Exception:
+            logger.exception("YOLOv7 load failed")
+            raise
+
+    def _torch_hub_custom_load(self, torch_module: Any, repo_spec: str, *, device: str = "cpu") -> Any:
+        """Handle old hubconf signatures: some use path=, others positional path_or_model."""
+        common_kwargs = {
+            "trust_repo": True,
+            "force_reload": False,
+            "device": device,
+        }
+        try:
+            return torch_module.hub.load(
+                repo_spec,
+                "custom",
+                path=self.model_path,
+                **common_kwargs,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument 'path'" not in str(exc):
+                raise
+            logger.info("Hub custom loader does not accept path=; retrying with positional weights")
+            return torch_module.hub.load(
+                repo_spec,
+                "custom",
+                self.model_path,
+                **common_kwargs,
+            )
 
     def _patch_legacy_runtime_compat(self, torch_module: Any) -> None:
         """Patch common old YOLOv5 assumptions for modern Python/NumPy/PyTorch."""
@@ -280,6 +371,8 @@ class UniversalYOLOModel:
             if self.loader_type == "ultralytics":
                 return self._predict_ultralytics(image)
             elif self.loader_type == "yolov5":
+                return self._predict_yolov5(image)
+            elif self.loader_type == "yolov7":
                 return self._predict_yolov5(image)
             elif self.loader_type == "onnxruntime":
                 return self._predict_onnx(image)

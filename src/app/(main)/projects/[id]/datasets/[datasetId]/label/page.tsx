@@ -41,8 +41,7 @@ export default async function DatasetLabelPage({
             Label dataset: {dataset.name}
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            {dataset.file_count} image{dataset.file_count !== 1 ? "s" : ""} — ek ya zyada
-            YOLO models se sab par bounding boxes lagayenge
+            {dataset.file_count} image{dataset.file_count !== 1 ? "s" : ""} 
           </p>
         </div>
 
