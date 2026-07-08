@@ -129,6 +129,7 @@ export async function submitAutoLabel(body: {
   model_id?: string;
   model_ids: string[];
   dataset_id: string;
+  skip_labeled?: boolean;
   config?: JobConfig;
 }) {
   return workerFetch<{ job_id: string; queue_name: string; message: string }>(

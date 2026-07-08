@@ -68,6 +68,17 @@ export function AutoLabelPanel({
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
   const isRunning = !!jobId && !completedJob;
   const labeled = labeledCount(completedJob);
+  const dbTotal =
+    completedJob?.result && typeof completedJob.result === "object"
+      ? ((completedJob.result as { db_total?: number }).db_total ??
+        (completedJob.result as { total_files?: number }).total_files ??
+        0)
+      : 0;
+  const canLabelRemaining =
+    completedJob?.status === "completed" &&
+    labeled > 0 &&
+    dbTotal > labeled &&
+    !isRunning;
   const canReview =
     !!reviewHref &&
     completedJob &&
@@ -98,7 +109,7 @@ export function AutoLabelPanel({
     setCompletedJob(null);
   }, [projectId, datasets]);
 
-  async function handleRun() {
+  async function handleRun(skipLabeled = false) {
     if (selectedModelIds.length === 0 || !datasetId) {
       setError("Select at least one model and a dataset");
       return;
@@ -107,11 +118,17 @@ export function AutoLabelPanel({
     setError(null);
     setCompletedJob(null);
 
-    const result = await startAutoLabel(projectId, selectedModelIds, datasetId, {
-      confidence,
-      iou,
-      save_to_dataset: saveToDataset,
-    });
+    const result = await startAutoLabel(
+      projectId,
+      selectedModelIds,
+      datasetId,
+      {
+        confidence,
+        iou,
+        save_to_dataset: saveToDataset,
+      },
+      { skipLabeled }
+    );
 
     if ("error" in result && result.error) {
       setError(result.error);
@@ -265,7 +282,7 @@ export function AutoLabelPanel({
         </label>
 
         <Button
-          onClick={handleRun}
+          onClick={() => handleRun(false)}
           loading={loading}
           disabled={isRunning || selectedModelIds.length === 0}
         >
@@ -347,10 +364,23 @@ export function AutoLabelPanel({
           </Link>
         )}
 
+        {canLabelRemaining && (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => handleRun(true)}
+            loading={loading}
+            disabled={isRunning}
+          >
+            <Tags className="h-4 w-4" />
+            Label remaining ({dbTotal - labeled} images)
+          </Button>
+        )}
+
         {completedJob && (
           <Button type="button" variant="secondary" onClick={handleReset}>
             <RotateCcw className="h-4 w-4" />
-            Label again
+            Start over
           </Button>
         )}
       </div>

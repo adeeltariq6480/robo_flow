@@ -26,9 +26,14 @@ export function DetectionResults({ job }: { job: JobResponse }) {
     const labeled = (result.labeled as number) ?? 0;
     const failed = (result.failed as number) ?? 0;
     const total = (result.total_files as number) ?? 0;
+    const dbTotal = (result.db_total as number) ?? total;
+    const skippedNotEligible = (result.skipped_not_eligible as number) ?? 0;
     const modelsUsed = (result.models_used as number) ?? 1;
+    const modelFailures = Array.isArray(result.model_failures)
+      ? (result.model_failures as Array<{ model_id: string; error: string }>)
+      : [];
     const variant =
-      labeled === 0 ? "error" : failed > 0 ? "warning" : "success";
+      labeled === 0 ? "error" : failed > 0 || skippedNotEligible > 0 ? "warning" : "success";
     const border =
       variant === "error"
         ? "border-red-200 bg-red-50 text-red-800"
@@ -43,8 +48,26 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         <p className="mt-1">
           {labeled}/{total} files labeled using {modelsUsed} model
           {modelsUsed !== 1 ? "s" : ""}
+          {dbTotal > total && ` · ${dbTotal} total in dataset`}
           {failed > 0 && ` · ${failed} failed`}
+          {skippedNotEligible > 0 &&
+            ` · ${skippedNotEligible} skipped (no HF/local file found)`}
         </p>
+        {labeled > 0 && labeled < dbTotal && (
+          <p className="mt-2 text-amber-800">
+            Baqi images ke liye &quot;Label remaining&quot; dabao — pehle se labeled skip ho
+            jayengi.
+          </p>
+        )}
+        {modelFailures.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
+            {modelFailures.slice(0, 3).map((m) => (
+              <li key={m.model_id}>
+                Model {m.model_id.slice(0, 8)}…: {m.error}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     );
   }

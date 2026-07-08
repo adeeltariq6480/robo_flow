@@ -191,6 +191,8 @@ def _compact_job_result(
     failed: int,
     all_results: list[dict],
     model_failures: dict[str, str] | None = None,
+    db_total: int | None = None,
+    skipped_not_eligible: int = 0,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
     result = {
@@ -205,6 +207,10 @@ def _compact_job_result(
         "files": error_rows[:25],
         "files_truncated": len(error_rows) > 25,
     }
+    if db_total is not None:
+        result["db_total"] = db_total
+    if skipped_not_eligible:
+        result["skipped_not_eligible"] = skipped_not_eligible
     if model_failures:
         result["model_failures"] = [
             {"model_id": mid, "error": err}
@@ -249,6 +255,90 @@ def _vercel_remote_ready(file_row: dict) -> bool:
         hf_status == "synced"
         or storage_status == "remote_ready"
     )
+
+
+def _local_image_exists(file_row: dict) -> bool:
+    row = _normalise_image_row(file_row)
+    local_path = _image_local_path(row)
+    return bool(local_path and os.path.exists(local_path))
+
+
+def _image_eligible_for_label(
+    file_row: dict,
+    *,
+    remote_by_name: dict[str, str] | None = None,
+) -> bool:
+    """Include images we can realistically fetch (local disk, HF path, or HF filename match)."""
+    row = _normalise_image_row(file_row)
+    if not _is_image_row(row):
+        return False
+    if _local_image_exists(row):
+        return True
+    if _image_hf_path(row):
+        return True
+    filename = _image_file_name(row)
+    if filename and remote_by_name and filename in remote_by_name:
+        return True
+    return False
+
+
+def _build_label_file_list(
+    project_id: str,
+    dataset_id: str,
+    db_file_list: list[dict],
+) -> tuple[list[dict], int, dict[str, str]]:
+    """Repair HF metadata, then return every image that can be labeled."""
+    remote_image_mode = _remote_image_mode()
+    remote_by_name: dict[str, str] = {}
+
+    if remote_image_mode:
+        _repair_remote_image_rows(project_id, dataset_id, db_file_list)
+        _, remote_by_name = _list_remote_image_files(project_id, dataset_id)
+        for row in db_file_list:
+            row = _normalise_image_row(row)
+            image_id = _image_id(row)
+            hf_path = resolve_hf_path_for_image(row, image_id)
+            if hf_path and not _image_hf_path(row):
+                row["hfPath"] = hf_path
+                row["hf_path"] = hf_path
+                row["hfSyncStatus"] = "synced"
+                row["hf_sync_status"] = "synced"
+                row["storageStatus"] = "remote_ready"
+                row["storage_status"] = "remote_ready"
+    elif settings.local_storage_enabled:
+        _, remote_by_name = _list_remote_image_files(project_id, dataset_id)
+
+    eligible = [
+        row
+        for row in db_file_list
+        if _image_eligible_for_label(row, remote_by_name=remote_by_name or None)
+    ]
+
+    # Attach resolved HF path from filename map when DB path is missing.
+    for row in eligible:
+        row = _normalise_image_row(row)
+        if _image_hf_path(row):
+            continue
+        filename = _image_file_name(row)
+        if filename and remote_by_name and filename in remote_by_name:
+            resolved = remote_by_name[filename]
+            row["hfPath"] = resolved
+            row["hf_path"] = resolved
+            row["hfSyncStatus"] = "synced"
+            row["hf_sync_status"] = "synced"
+            row["storageStatus"] = "remote_ready"
+            row["storage_status"] = "remote_ready"
+
+    skipped = len(db_file_list) - len(eligible)
+    if skipped:
+        logger.warning(
+            "Auto-label skipping %d/%d images with no local file, HF path, or HF filename match",
+            skipped,
+            len(db_file_list),
+        )
+    return eligible, skipped, remote_by_name
+
+
 def _remote_image_mode() -> bool:
     return (
         settings.is_vercel
@@ -381,33 +471,23 @@ async def run_auto_label(
     if db_total == 0:
         raise ValueError("Dataset has no files to label")
 
+    file_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
+        project_id, dataset_id, db_file_list
+    )
     remote_image_mode = _remote_image_mode()
-    if remote_image_mode:
-        repaired = _repair_remote_image_rows(project_id, dataset_id, db_file_list)
-        for f in db_file_list:
-            f = _normalise_image_row(f)
-            image_id = _image_id(f)
-            hf_path = resolve_hf_path_for_image(f, image_id)
-            if hf_path and not _image_hf_path(f):
-                f["hfPath"] = hf_path
-                f["hf_path"] = hf_path
-                f["hfSyncStatus"] = "synced"
-                f["hf_sync_status"] = "synced"
-                f["storageStatus"] = "remote_ready"
-                f["storage_status"] = "remote_ready"
-                repaired += 1
-        if repaired:
-            logger.info("Auto-label repaired %d missing HF path(s) before filtering", repaired)
-        file_list = [f for f in db_file_list if _vercel_remote_ready(f)]
-    else:
-        file_list = db_file_list
 
-    if (data.get("input_payload") or {}).get("resumed_from_job_id"):
+    if (data.get("input_payload") or {}).get("resumed_from_job_id") or (
+        data.get("input_payload") or {}
+    ).get("skip_labeled"):
         before_resume_filter = len(file_list)
-        file_list = [f for f in file_list if not f.get("autoLabeledAt")]
+        file_list = [
+            f
+            for f in file_list
+            if not (f.get("autoLabeledAt") or f.get("auto_labeled_at"))
+        ]
         skipped = before_resume_filter - len(file_list)
         if skipped:
-            logger.info("Auto-label resume skipped %d already labeled image(s)", skipped)
+            logger.info("Auto-label skipped %d already labeled image(s)", skipped)
 
     total = len(file_list)
 
@@ -418,9 +498,10 @@ async def run_auto_label(
         settings.auto_label_use_local_images,
     )
     logger.info(
-        "Auto-label DB image state: db_images_count=%d eligible_images=%d images_with_hf_path=%d hf_sync_status_counts=%s storage_status_counts=%s hf_path_examples=%s",
+        "Auto-label DB image state: db_images_count=%d eligible_images=%d skipped_not_eligible=%d images_with_hf_path=%d hf_sync_status_counts=%s storage_status_counts=%s hf_path_examples=%s",
         db_total,
         total,
+        skipped_not_eligible,
         sum(1 for f in db_file_list if _image_hf_path(f)),
         _status_counts(db_file_list, "hfSyncStatus"),
         _status_counts(db_file_list, "storageStatus"),
@@ -731,16 +812,27 @@ async def run_auto_label(
                         )
                     except MemoryLimitExceeded as mem_exc:
                         logger.warning(
-                            "OOM during inference job=%s model=%s image=%s: %s",
+                            "OOM during inference job=%s model=%s image=%s: %s — skipping image, reloading model",
                             job_id,
                             model_id,
                             file_id,
                             mem_exc,
                         )
+                        prep_failures[file_id] = f"Out of memory during inference: {mem_exc}"
                         await asyncio.to_thread(unload_model, model_path)
                         gc.collect()
-                        prep_failures[file_id] = f"Out of memory during inference: {mem_exc}"
-                        break
+                        try:
+                            await asyncio.to_thread(load_yolo_model, model_path)
+                        except Exception as reload_exc:
+                            logger.error(
+                                "Could not reload model after OOM job=%s model=%s: %s",
+                                job_id,
+                                model_id,
+                                reload_exc,
+                            )
+                            model_failures[model_id] = _model_failure_message(reload_exc)
+                            break
+                        continue
                     finally:
                         _cleanup_image_path(image_path)
                     per_image_dets[file_id].extend(inference.detections)
@@ -946,4 +1038,6 @@ async def run_auto_label(
         failed=failed,
         all_results=all_results,
         model_failures=model_failures or None,
+        db_total=db_total,
+        skipped_not_eligible=skipped_not_eligible,
     )

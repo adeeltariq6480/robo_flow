@@ -1867,7 +1867,10 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         body.project_id, JobType.AUTO_LABEL,
         model_id=model_ids[0], model_ids=model_ids,
         dataset_id=body.dataset_id, config=body.config, total_items=total_work_items,
-        input_payload={"model_ids": model_ids},
+        input_payload={
+            "model_ids": model_ids,
+            "skip_labeled": body.skip_labeled,
+        },
     )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,

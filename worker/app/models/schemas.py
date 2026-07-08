@@ -61,6 +61,7 @@ class AutoLabelRequest(BaseModel):
     dataset_id: str
     model_id: str | None = None
     model_ids: list[str] = Field(default_factory=list, max_length=10)
+    skip_labeled: bool = False
     config: JobConfig = Field(default_factory=JobConfig)
 
     @model_validator(mode="after")

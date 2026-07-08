@@ -32,7 +32,8 @@ export async function startAutoLabel(
   projectId: string,
   modelIds: string[],
   datasetId: string,
-  config?: JobConfig
+  config?: JobConfig,
+  options?: { skipLabeled?: boolean }
 ) {
   if (modelIds.length === 0) {
     return { error: "Select at least one model" };
@@ -43,6 +44,7 @@ export async function startAutoLabel(
       model_id: modelIds[0],
       model_ids: modelIds,
       dataset_id: datasetId,
+      skip_labeled: options?.skipLabeled ?? false,
       config,
     });
   } catch (e) {
