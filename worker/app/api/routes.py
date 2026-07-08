@@ -58,8 +58,8 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 _upload_sessions: dict[str, dict] = {}
 _upload_sessions_lock = threading.Lock()
-_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "200"))
-_UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "60.0"))
+_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "50"))
+_UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "300.0"))
 
 
 async def verify_api_key(x_worker_key: str = Header(default="")) -> None:
@@ -114,6 +114,10 @@ def _hf_api() -> HfApi:
 
 def _should_upload_dataset_images_to_hf() -> bool:
     return file_storage.hf_dataset_upload_enabled()
+
+
+def _can_stage_hf_upload_batch() -> bool:
+    return settings.local_storage_enabled and not settings.is_vercel
 
 
 def _require_hf_dataset_upload_for_deploy() -> None:
@@ -358,20 +362,47 @@ async def _flush_upload_session(session_id: str, *, initial_delay: float) -> Non
         )
 
         try:
-            # Do not commit to Hugging Face during upload flush. Only persist
-            # local files and mark DB records as ready for later finalization.
-            logger.info("Upload session flushed locally session=%s count=%d", session_id, len(items))
-            for item in items:
+            if _should_upload_dataset_images_to_hf():
+                payload = []
+                for item in items:
+                    data = (batch_root / item["stored_name"]).read_bytes()
+                    payload.append((item["stored_name"], data))
                 await asyncio.to_thread(
-                    repo.update_image_storage_fields,
+                    file_storage.upload_dataset_images_batch,
                     session["project_id"],
-                    item["image_id"],
-                    {
-                        "status": "uploaded",
-                        "storage_status": "local_ready",
-                        "hf_sync_status": "pending",
-                    },
+                    session["dataset_id"],
+                    payload,
                 )
+                logger.info("Upload session committed to HF session=%s count=%d", session_id, len(items))
+                for item in items:
+                    await asyncio.to_thread(
+                        repo.update_image_storage_fields,
+                        session["project_id"],
+                        item["image_id"],
+                        {
+                            "status": "uploaded",
+                            "storage_status": "remote_ready",
+                            "hf_sync_status": "synced",
+                            "hfPath": file_storage.dataset_image_path(
+                                session["project_id"],
+                                session["dataset_id"],
+                                item["stored_name"],
+                            ),
+                        },
+                    )
+            else:
+                logger.info("Upload session flushed locally session=%s count=%d", session_id, len(items))
+                for item in items:
+                    await asyncio.to_thread(
+                        repo.update_image_storage_fields,
+                        session["project_id"],
+                        item["image_id"],
+                        {
+                            "status": "uploaded",
+                            "storage_status": "local_ready",
+                            "hf_sync_status": "pending",
+                        },
+                    )
         except Exception as exc:
             logger.exception(
                 "Upload failed after retries session=%s count=%d: %s",
@@ -433,8 +464,16 @@ def _ensure_upload_session(project_id: str, dataset_id: str, session_id: str) ->
 def _schedule_upload_flush(session_id: str, *, immediate: bool) -> None:
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
-        if not session or session.get("flush_task") is not None:
+        if not session:
             return
+        existing = session.get("flush_task")
+        if existing is not None:
+            if not immediate:
+                return
+            if session.get("uploading"):
+                return
+            existing.cancel()
+            session["flush_task"] = None
         delay = 0.0 if immediate else _UPLOAD_FLUSH_DELAY_SECONDS
         session["flush_task"] = asyncio.create_task(
             _flush_upload_session(session_id, initial_delay=delay)
@@ -638,7 +677,8 @@ async def upload_images(
         }
 
     remote_uploaded = False
-    if _should_upload_dataset_images_to_hf():
+    immediate_hf_batch = _should_upload_dataset_images_to_hf() and not _can_stage_hf_upload_batch()
+    if immediate_hf_batch:
         batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
         try:
             loc = await asyncio.to_thread(
@@ -670,12 +710,7 @@ async def upload_images(
         result = item["result"]
         content_type = item["content_type"]
         local_path = None
-        if remote_uploaded and settings.local_storage_enabled and not settings.is_vercel:
-            try:
-                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
-            except Exception:
-                logger.exception("Failed to persist local copy after HF upload for %s", stored_name)
-        elif not remote_uploaded:
+        if _can_stage_hf_upload_batch() or not remote_uploaded:
             local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
             logger.info(
                 "Image received session=%s file=%s stored=%s local=%s",
@@ -695,7 +730,7 @@ async def upload_images(
             "fileSize": len(result.data),
             "status": "uploaded" if remote_uploaded else "queued",
             "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
-            "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
+            "hfSyncStatus": "synced" if remote_uploaded else ("pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped"),
         }
         if local_path:
             record_data["localPath"] = str(local_path)
@@ -800,7 +835,8 @@ async def upload_zip(
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
     remote_uploaded = False
-    if prepared and _should_upload_dataset_images_to_hf():
+    immediate_hf_batch = _should_upload_dataset_images_to_hf() and not _can_stage_hf_upload_batch()
+    if prepared and immediate_hf_batch:
         batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
         try:
             loc = await asyncio.to_thread(
@@ -832,12 +868,7 @@ async def upload_zip(
         result = item["result"]
         content_type = item["content_type"]
         local_path = None
-        if remote_uploaded and settings.local_storage_enabled and not settings.is_vercel:
-            try:
-                local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
-            except Exception:
-                logger.exception("Failed to persist local ZIP copy after HF upload for %s", stored_name)
-        elif not remote_uploaded:
+        if _can_stage_hf_upload_batch() or not remote_uploaded:
             local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
 
         record_data = {
@@ -852,7 +883,7 @@ async def upload_zip(
             "fileSize": len(result.data),
             "status": "uploaded" if remote_uploaded else "queued",
             "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
-            "hfSyncStatus": "synced" if remote_uploaded else ("queued" if file_storage.hf_upload_enabled() else "skipped"),
+            "hfSyncStatus": "synced" if remote_uploaded else ("pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped"),
         }
         if local_path:
             record_data["localPath"] = str(local_path)
@@ -1422,7 +1453,14 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        res = await asyncio.to_thread(file_storage.upload_labels_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+        batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "50")))
+        res = await asyncio.to_thread(
+            file_storage.upload_labels_from_folder_batched,
+            project_id,
+            dataset_id,
+            str(folder),
+            batch_size=batch_size,
+        )
     except Exception as exc:
         logger.exception("Finalize labels failed for %s/%s: %s", project_id, dataset_id, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

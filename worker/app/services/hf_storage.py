@@ -159,6 +159,21 @@ def _verify_repo_files(repo_id: str, repo_type: str, paths_in_repo: list[str]) -
         )
 
 
+def _repo_file_exists(repo_id: str, repo_type: str, path_in_repo: str) -> bool:
+    try:
+        files = _api().list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        logger.warning(
+            "Could not check Hugging Face file existence repo=%s repo_type=%s path=%s: %s",
+            repo_id,
+            repo_type,
+            path_in_repo,
+            _format_hf_error(exc),
+        )
+        return False
+    return path_in_repo in set(files)
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
@@ -443,6 +458,59 @@ def upload_labels_from_folder(
     return {"hfRepo": repo_id, "count": count}
 
 
+def upload_labels_from_folder_batched(
+    project_id: str,
+    dataset_id: str,
+    folder_path: str,
+    *,
+    batch_size: int = 50,
+) -> dict:
+    """Upload label files in batches to avoid HF commit rate spikes."""
+    folder = Path(folder_path)
+    files = [p for p in folder.iterdir() if p.is_file()] if folder.exists() else []
+    if not files:
+        return {"hfRepo": settings.dataset_repo_id, "count": 0, "batches": 0}
+    if not hf_dataset_upload_enabled():
+        logger.info("HF upload disabled; skipping batched labels upload for dataset %s", dataset_id)
+        return {"hfRepo": settings.dataset_repo_id, "count": len(files), "batches": 0}
+
+    repo_id = settings.dataset_repo_id
+    _ensure_repo(repo_id, settings.dataset_repo_type)
+    repo_folder = f"datasets/{project_id}/{dataset_id}/labels"
+    batch_size = max(1, batch_size)
+    uploaded = 0
+    batches = 0
+
+    for start in range(0, len(files), batch_size):
+        batch = files[start : start + batch_size]
+        with tempfile.TemporaryDirectory(dir=_temp_dir()) as tmp:
+            tmp_path = Path(tmp)
+            for source in batch:
+                (tmp_path / source.name).write_bytes(source.read_bytes())
+
+            with _hf_commit_lock:
+                def _do_upload():
+                    _api().upload_folder(
+                        folder_path=str(tmp_path),
+                        repo_id=repo_id,
+                        repo_type=settings.dataset_repo_type,
+                        path_in_repo=repo_folder,
+                        commit_message=f"Upload {len(batch)} labels to dataset {dataset_id}",
+                    )
+
+                _upload_with_retry(f"upload_folder:{repo_folder}:labels:{start}", _do_upload)
+
+        _verify_repo_files(
+            repo_id,
+            settings.dataset_repo_type,
+            [f"{repo_folder}/{source.name}" for source in batch],
+        )
+        uploaded += len(batch)
+        batches += 1
+
+    return {"hfRepo": repo_id, "count": uploaded, "batches": batches}
+
+
 def upload_dataset_zip(
     project_id: str, dataset_id: str, file_name: str, data: bytes
 ) -> dict:
@@ -453,15 +521,41 @@ def upload_dataset_zip(
     )
 
 
-def upload_model_file(project_id: str, file_name: str, data: bytes) -> dict:
-    logger.info("Selected repo for model upload: %s (model) target=%s", settings.model_repo_id, model_path(project_id, file_name))
+def upload_model_file(
+    project_id: str,
+    file_name: str,
+    data: bytes,
+    *,
+    skip_if_exists: bool = True,
+) -> dict:
+    target_path = model_path(project_id, file_name)
+    logger.info("Selected repo for model upload: %s (model) target=%s", settings.model_repo_id, target_path)
     if not hf_model_upload_enabled():
         logger.info("Hugging Face upload is disabled; skipping model upload %s", file_name)
-        return {"hfRepo": settings.model_repo_id, "hfPath": model_path(project_id, file_name), "repoType": settings.model_repo_type}
+        return {"hfRepo": settings.model_repo_id, "hfPath": target_path, "repoType": settings.model_repo_type}
+
+    repo_id = settings.model_repo_id
+    repo_type = settings.model_repo_type
+    _ensure_repo(repo_id, repo_type)
+    if skip_if_exists and _repo_file_exists(repo_id, repo_type, target_path):
+        logger.info(
+            "Model already exists on Hugging Face; reusing without new commit repo=%s repo_type=%s path=%s",
+            repo_id,
+            repo_type,
+            target_path,
+        )
+        return {
+            "hfRepo": repo_id,
+            "hfPath": target_path,
+            "repoType": repo_type,
+            "alreadyExists": True,
+        }
+
     return upload_bytes(
         data,
-        repo_type=settings.model_repo_type,
-        path_in_repo=model_path(project_id, file_name),
+        repo_type=repo_type,
+        path_in_repo=target_path,
+        commit_message=f"Upload model {file_name}",
     )
 
 
@@ -486,6 +580,8 @@ def download_to_local(
 ) -> Path:
     """Download a file from HF Hub with a persistent local cache copy."""
     logger.debug("HF download %s (%s) %s", repo_id, repo_type, path_in_repo)
+    if repo_type == settings.model_repo_type:
+        logger.info("Model HF download only; no Hugging Face commit will be created path=%s", path_in_repo)
 
     if repo_type == settings.model_repo_type:
         cache_root = settings.model_files_dir

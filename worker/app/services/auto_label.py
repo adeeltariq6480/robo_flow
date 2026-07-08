@@ -9,6 +9,7 @@ from app.config import settings
 
 from app.core.jobs import update_job
 from app.models.schemas import DetectionBox, JobConfig
+from app.services import hf_storage as file_storage
 from app.services.detection_merge import merge_detections
 from app.services.supabase_repo import (
     classify_queue,
@@ -102,6 +103,11 @@ def _no_images_message() -> str:
             "No remote Hugging Face images found for this dataset. "
             "Run HF sync or repair HF paths. Local storage is disabled on Vercel."
         )
+    if _remote_image_mode():
+        return (
+            "No remote Hugging Face images found for this dataset. "
+            "Run HF sync or repair HF paths. Local image storage is disabled for auto-label."
+        )
     return "No local images found. Run repair-local-paths or HF sync."
 
 
@@ -113,6 +119,14 @@ def _vercel_remote_ready(file_row: dict) -> bool:
     return bool(file_row.get("hfPath")) and (
         file_row.get("hfSyncStatus") == "synced"
         or file_row.get("storageStatus") == "remote_ready"
+    )
+
+
+def _remote_image_mode() -> bool:
+    return (
+        settings.is_vercel
+        or not settings.local_storage_enabled
+        or not settings.auto_label_use_local_images
     )
 
 
@@ -134,7 +148,8 @@ async def run_auto_label(
     if db_total == 0:
         raise ValueError("Dataset has no files to label")
 
-    if settings.is_vercel:
+    remote_image_mode = _remote_image_mode()
+    if remote_image_mode:
         repaired = 0
         for f in db_file_list:
             image_id = str(f.get("id"))
@@ -565,10 +580,32 @@ async def run_auto_label(
     await update_job(job_id, processed_items=total, project_id=project_id)
     logger.info("Job %s done: labeled=%d failed=%d", job_id, labeled, failed)
 
+    if settings.auto_commit_after_labels:
+        labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
+        if labels_dir.exists():
+            try:
+                batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "50")))
+                label_commit = await asyncio.to_thread(
+                    file_storage.upload_labels_from_folder_batched,
+                    project_id,
+                    dataset_id,
+                    str(labels_dir),
+                    batch_size=batch_size,
+                )
+                logger.info(
+                    "Auto-label labels uploaded to HF project=%s dataset=%s count=%s batches=%s",
+                    project_id,
+                    dataset_id,
+                    label_commit.get("count"),
+                    label_commit.get("batches"),
+                )
+            except Exception as exc:
+                logger.exception("Failed to upload auto-label label files to HF for %s/%s: %s", project_id, dataset_id, exc)
+
     for path in image_paths.values():
         try:
             image_path = Path(path)
-            if settings.is_vercel or str(image_path).startswith(str(settings.storage_base_path)):
+            if _remote_image_mode() or str(image_path).startswith(str(settings.storage_base_path)):
                 if image_path.exists():
                     image_path.unlink()
                 parent = image_path.parent
@@ -588,10 +625,10 @@ async def run_auto_label(
     if labeled == 0 and failed > 0:
         samples = [str(r.get("error", "unknown")) for r in all_results if r.get("error")][:3]
         hint = "; ".join(samples) if samples else "unknown error"
-        if settings.is_vercel:
+        if _remote_image_mode():
             raise ValueError(
                 f"All {failed} image(s) failed. Check HF_TOKEN, HF_MODEL_REPO, HF_DATASET_REPO "
-                f"on Vercel and run repair HF paths if needed. Examples: {hint}"
+                f"and run repair HF paths if needed. Examples: {hint}"
             )
         raise ValueError(
             f"All {failed} image(s) failed. Check HF_TOKEN, HF_MODEL_REPO, HF_DATASET_REPO "

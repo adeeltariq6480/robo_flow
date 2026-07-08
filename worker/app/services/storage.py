@@ -186,7 +186,7 @@ def resolve_image_path(row: dict, image_id: str) -> Path | None:
     try:
         download_fn = (
             file_storage.download_to_temp
-            if settings.is_vercel or not settings.local_storage_enabled
+            if not settings.use_local_images_for_auto_label
             else file_storage.download_to_local
         )
         downloaded = download_fn(
@@ -205,7 +205,7 @@ def resolve_image_path(row: dict, image_id: str) -> Path | None:
                     try:
                         download_fn = (
                             file_storage.download_to_temp
-                            if settings.is_vercel or not settings.local_storage_enabled
+                            if not settings.use_local_images_for_auto_label
                             else file_storage.download_to_local
                         )
                         downloaded = download_fn(
@@ -233,7 +233,7 @@ def resolve_image_path(row: dict, image_id: str) -> Path | None:
         logger.warning("HF image unavailable for %s: %s", image_id, exc)
         return None
 
-    if not settings.local_storage_enabled or settings.is_vercel:
+    if not settings.use_local_images_for_auto_label:
         return downloaded
 
     try:
