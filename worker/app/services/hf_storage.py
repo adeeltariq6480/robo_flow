@@ -463,7 +463,7 @@ def upload_labels_from_folder_batched(
     dataset_id: str,
     folder_path: str,
     *,
-    batch_size: int = 50,
+    batch_size: int = 200,
 ) -> dict:
     """Upload label files in batches to avoid HF commit rate spikes."""
     folder = Path(folder_path)

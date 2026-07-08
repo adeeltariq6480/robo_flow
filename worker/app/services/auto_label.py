@@ -603,8 +603,13 @@ async def run_auto_label(
             project_id=project_id,
         )
         model_phase_progress = inference_start
-        low_memory_mode = os.getenv("LOW_MEMORY_MODE", "false").lower() == "true"
-        unload_every = 20 if low_memory_mode else None
+        low_memory_mode = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+        unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "10" if low_memory_mode else "0")
+        try:
+            unload_every_value = int(unload_every_raw)
+        except ValueError:
+            unload_every_value = 10 if low_memory_mode else 0
+        unload_every = unload_every_value if unload_every_value > 0 else None
 
         try:
             for idx, file_row in enumerate(file_list):
@@ -784,7 +789,7 @@ async def run_auto_label(
         labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
         if labels_dir.exists():
             try:
-                batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "50")))
+                batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "200")))
                 label_commit = await asyncio.to_thread(
                     file_storage.upload_labels_from_folder_batched,
                     project_id,

@@ -19,6 +19,21 @@ ENABLE_YOLOV5_RUNTIME = os.getenv("ENABLE_YOLOV5_RUNTIME", "false").lower() == "
 ENABLE_ONNX_RUNTIME = os.getenv("ENABLE_ONNX_RUNTIME", "true").lower() == "true"
 
 
+def _low_memory_mode() -> bool:
+    return os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+
+
+def _clear_runtime_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        logger.debug("Torch memory cleanup skipped", exc_info=True)
+
+
 class UniversalYOLOModel:
     """Load and run inference with any supported YOLO model format."""
 
@@ -59,6 +74,8 @@ class UniversalYOLOModel:
                     self._load_ultralytics()
                 except Exception as exc:
                     logger.warning("Ultralytics primary load failed, trying YOLOv5 fallback: %s", exc)
+                    self.model = None
+                    _clear_runtime_memory()
                     self._load_yolov5()
                     self.loader_type = "yolov5"
                     self.model_type = "yolov5_legacy"
@@ -67,6 +84,8 @@ class UniversalYOLOModel:
                     self._load_yolov5()
                 except Exception as exc:
                     logger.warning("YOLOv5 primary load failed, trying Ultralytics fallback: %s", exc)
+                    self.model = None
+                    _clear_runtime_memory()
                     self._load_ultralytics()
                     self.loader_type = "ultralytics"
                     self.model_type = "ultralytics_fallback"
@@ -141,6 +160,8 @@ class UniversalYOLOModel:
                     logger.info("Loaded YOLOv5 model with ref %s", repo_spec)
                     break
                 except Exception as exc:
+                    self.model = None
+                    _clear_runtime_memory()
                     last_exc = exc
                     err_str = str(exc)
                     lower = err_str.lower()
@@ -269,7 +290,7 @@ class UniversalYOLOModel:
         import os
         import torch
 
-        low_memory = os.getenv("LOW_MEMORY_MODE", "false").lower() == "true"
+        low_memory = _low_memory_mode()
         imgsz = int(os.getenv("YOLO_IMGSZ", "320" if low_memory else "416"))
         conf = float(os.getenv("YOLO_CONF", "0.25"))
 

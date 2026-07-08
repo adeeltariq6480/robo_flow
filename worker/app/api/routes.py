@@ -58,7 +58,7 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 _upload_sessions: dict[str, dict] = {}
 _upload_sessions_lock = threading.Lock()
-_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "50"))
+_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "200"))
 _UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "300.0"))
 
 
@@ -1453,7 +1453,7 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "50")))
+        batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "200")))
         res = await asyncio.to_thread(
             file_storage.upload_labels_from_folder_batched,
             project_id,

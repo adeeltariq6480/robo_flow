@@ -106,7 +106,9 @@ def run_yolo_inference(
             img = ImageOps.exif_transpose(opened)
             if img.mode != "RGB":
                 img = img.convert("RGB")
-            max_side = int(os.getenv("MAX_IMAGE_SIZE", str(settings.max_image_size)))
+            low_memory = os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
+            default_max_side = "320" if low_memory else str(settings.max_image_size)
+            max_side = int(os.getenv("MAX_IMAGE_SIZE", default_max_side))
             if img.width > max_side or img.height > max_side:
                 img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             prepared_image = img.copy()
@@ -114,8 +116,8 @@ def run_yolo_inference(
         _log_memory("Memory after image processing")
 
         # Memory guard before inference
-        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "850"))
-        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "1000"))
+        soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "2400"))
+        hard = int(os.getenv("MEMORY_HARD_LIMIT_MB", "3000"))
         rss = get_process_memory_mb()
         logger.debug("Memory check before inference: %.1f MB (soft=%d hard=%d)", rss, soft, hard)
         if rss >= hard:
