@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from app.config import settings
 
-from app.core.jobs import update_job
+from app.core.jobs import JobCancelled, is_job_cancelled, raise_if_job_cancelled, update_job
 from app.models.schemas import DetectionBox, JobConfig
 from app.services import hf_storage as file_storage
 from app.services.detection_merge import merge_detections
@@ -318,6 +318,7 @@ async def run_auto_label(
 ) -> dict:
     model_ids = _resolve_model_ids(data)
     dataset_id = str(data["dataset_id"])
+    await raise_if_job_cancelled(job_id, project_id)
 
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
@@ -358,6 +359,13 @@ async def run_auto_label(
     else:
         file_list = db_file_list
 
+    if (data.get("input_payload") or {}).get("resumed_from_job_id"):
+        before_resume_filter = len(file_list)
+        file_list = [f for f in file_list if not f.get("autoLabeledAt")]
+        skipped = before_resume_filter - len(file_list)
+        if skipped:
+            logger.info("Auto-label resume skipped %d already labeled image(s)", skipped)
+
     total = len(file_list)
 
     logger.info(
@@ -377,6 +385,15 @@ async def run_auto_label(
     )
 
     if total == 0:
+        if (data.get("input_payload") or {}).get("resumed_from_job_id"):
+            return _compact_job_result(
+                dataset_id=dataset_id,
+                model_ids=model_ids,
+                total=0,
+                labeled=0,
+                failed=0,
+                all_results=[],
+            )
         raise ValueError(_no_images_message())
 
     # If we require local images and some images are still queued/not saved,
@@ -511,9 +528,11 @@ async def run_auto_label(
     work_units = max(len(ready_ids) * num_models, 1)
     done_units = 0
     model_phase_progress = 10
+    cancelled_requested = False
 
     # --- Run each model end-to-end before moving to the next one ---
     for mi, model_id in enumerate(model_ids):
+        await raise_if_job_cancelled(job_id, project_id)
         phase_start = max(model_phase_progress, 10)
         download_end = min(phase_start + 5, 35)
         load_end = min(phase_start + 25, 60)
@@ -620,6 +639,10 @@ async def run_auto_label(
 
         try:
             for idx, file_row in enumerate(file_list):
+                if await asyncio.to_thread(is_job_cancelled, job_id, project_id):
+                    logger.info("Auto-label cancellation requested; saving partial results")
+                    cancelled_requested = True
+                    break
                 file_id = str(file_row["id"])
                 if file_id in prep_failures:
                     continue
@@ -689,6 +712,8 @@ async def run_auto_label(
             processed_items=done_units,
             project_id=project_id,
         )
+        if cancelled_requested:
+            break
 
     if prep_failures:
         logger.info(
@@ -796,7 +821,11 @@ async def run_auto_label(
     await update_job(job_id, processed_items=total, project_id=project_id)
     logger.info("Job %s done: labeled=%d failed=%d", job_id, labeled, failed)
 
+    if cancelled_requested:
+        raise JobCancelled("Job cancelled by user; partial labels were saved")
+
     if settings.auto_commit_after_labels:
+        await raise_if_job_cancelled(job_id, project_id)
         labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
         if labels_dir.exists():
             try:

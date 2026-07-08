@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { startAutoLabel } from "@/lib/actions/inference";
+import {
+  cancelInferenceJob,
+  resumeInferenceJob,
+  startAutoLabel,
+} from "@/lib/actions/inference";
 import type { JobResponse } from "@/lib/worker/client";
 import type { Model, Dataset } from "@/lib/types/database";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -11,7 +15,7 @@ import { InferenceConfigFields } from "@/components/inference/inference-config";
 import { JobProgress } from "@/components/inference/job-progress";
 import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
-import { Tags, ArrowRight, RotateCcw } from "lucide-react";
+import { Tags, ArrowRight, RotateCcw, Square, Play } from "lucide-react";
 import Link from "next/link";
 import {
   clearActiveInferenceJob,
@@ -57,6 +61,8 @@ export function AutoLabelPanel({
   const [completedJob, setCompletedJob] = useState<JobResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
@@ -66,6 +72,9 @@ export function AutoLabelPanel({
     !!reviewHref &&
     completedJob &&
     (completedJob.status === "completed" || labeled > 0);
+  const canResume =
+    completedJob?.job_type === "auto_label" &&
+    (completedJob.status === "cancelled" || completedJob.status === "failed");
 
   useEffect(() => {
     setSelectedModelIds((prev) => {
@@ -128,6 +137,47 @@ export function AutoLabelPanel({
     setCompletedJob(null);
     setError(null);
     clearActiveInferenceJob();
+  }
+
+  async function handleCancel() {
+    if (!jobId) return;
+    setCancelling(true);
+    setError(null);
+    const result = await cancelInferenceJob(jobId, projectId);
+    if ("error" in result && result.error) {
+      setError(result.error);
+      setCancelling(false);
+      return;
+    }
+    const cancelledJob = result as JobResponse;
+    setCompletedJob(cancelledJob);
+    setJobId(null);
+    clearActiveInferenceJob();
+    setCancelling(false);
+  }
+
+  async function handleResume() {
+    if (!completedJob) return;
+    setResuming(true);
+    setError(null);
+    const result = await resumeInferenceJob(completedJob.id, projectId);
+    if ("error" in result && result.error) {
+      setError(result.error);
+      setResuming(false);
+      return;
+    }
+    if ("job_id" in result) {
+      setJobId(result.job_id);
+      setCompletedJob(null);
+      writeActiveInferenceJob({
+        projectId,
+        datasetId,
+        jobId: result.job_id,
+        jobType: "auto_label",
+        createdAt: Date.now(),
+      });
+    }
+    setResuming(false);
   }
 
   if (!models.length) {
@@ -227,6 +277,32 @@ export function AutoLabelPanel({
               : "Start auto-label"}
         </Button>
 
+        <div className="flex flex-wrap gap-2">
+          {isRunning && (
+            <Button
+              type="button"
+              variant="danger"
+              onClick={handleCancel}
+              loading={cancelling}
+            >
+              {!cancelling && <Square className="h-4 w-4" />}
+              Cancel
+            </Button>
+          )}
+
+          {canResume && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleResume}
+              loading={resuming}
+            >
+              {!resuming && <Play className="h-4 w-4" />}
+              Resume
+            </Button>
+          )}
+        </div>
+
         {isRunning && (
           <Alert variant="info">
             Labeling <strong>{selectedDatasetName}</strong> with {selectedModelIds.length}{" "}
@@ -240,7 +316,7 @@ export function AutoLabelPanel({
           projectId={projectId}
           onComplete={(job) => {
             setCompletedJob(job);
-            if (job.status === "completed" || job.status === "failed") {
+            if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
               setJobId(null);
               clearActiveInferenceJob();
             }
@@ -251,6 +327,12 @@ export function AutoLabelPanel({
           <Alert variant="error">
             <p className="font-medium">Auto-label failed</p>
             <p className="mt-1">{completedJob.error_message ?? "Unknown worker error"}</p>
+          </Alert>
+        )}
+
+        {completedJob?.status === "cancelled" && (
+          <Alert variant="info">
+            Auto-label stopped. Use Resume to queue it again with the same dataset and models.
           </Alert>
         )}
 

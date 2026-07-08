@@ -32,6 +32,7 @@ from app.models.schemas import (
     ClassesSave,
     DatasetCreate,
     ExportRequest,
+    JobConfig,
     JobCreateResponse,
     JobResponse,
     JobStatus,
@@ -1919,6 +1920,78 @@ def _resolve_project_for_job(job_id: str) -> str | None:
     return repo.get_job_registry_project(job_id)
 
 
+async def _cancel_job(project_id: str, job_id: str) -> JobResponse:
+    d = await db(repo.get_labelling_job, project_id, str(job_id))
+    if not d:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if d.get("status") in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel a {d.get('status')} job")
+
+    await queue_manager.cancel_pending(str(job_id))
+    await db(
+        repo.update_labelling_job,
+        project_id,
+        str(job_id),
+        status=JobStatus.CANCELLED.value,
+        progress_message="Cancelling...",
+        error_message="Cancelled by user",
+    )
+    updated = await db(repo.get_labelling_job, project_id, str(job_id))
+    return _job_to_response(project_id, str(job_id), updated or d)
+
+
+async def _resume_job(project_id: str, job_id: str) -> JobCreateResponse:
+    d = await db(repo.get_labelling_job, project_id, str(job_id))
+    if not d:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if d.get("jobType") != JobType.AUTO_LABEL.value:
+        raise HTTPException(status_code=400, detail="Only auto-label jobs can be resumed")
+    dataset_id = d.get("datasetId")
+    model_ids = d.get("modelIds") or []
+    if not dataset_id or not model_ids:
+        raise HTTPException(status_code=400, detail="Job is missing dataset/model details")
+
+    total = repo.count_dataset_images(project_id, dataset_id)
+    total_work_items = total * max(len(model_ids), 1)
+    config = JobConfig(**(d.get("config") or {}))
+    new_job_id, queue, position = await submit_job(
+        project_id,
+        JobType.AUTO_LABEL,
+        model_id=model_ids[0],
+        model_ids=model_ids,
+        dataset_id=dataset_id,
+        config=config,
+        total_items=total_work_items,
+        input_payload={
+            **(d.get("inputPayload") or {}),
+            "model_ids": model_ids,
+            "resumed_from_job_id": str(job_id),
+        },
+    )
+    return JobCreateResponse(
+        job_id=new_job_id,
+        queue_name=queue,
+        status=JobStatus.QUEUED,
+        message=f"Auto-label resumed for {total} files (position {position})",
+    )
+
+
+@jobs_router.post("/{job_id}/cancel", response_model=JobResponse)
+async def cancel_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
+    project_id = _resolve_project_for_job(str(job_id))
+    if not project_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await _cancel_job(project_id, str(job_id))
+
+
+@jobs_router.post("/{job_id}/resume", response_model=JobCreateResponse)
+async def resume_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
+    project_id = _resolve_project_for_job(str(job_id))
+    if not project_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await _resume_job(project_id, str(job_id))
+
+
 @jobs_router.get("/{job_id}", response_model=JobResponse)
 async def get_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
     project_id = _resolve_project_for_job(str(job_id))
@@ -1928,6 +2001,20 @@ async def get_job_by_id(job_id: str, _: None = Depends(verify_api_key)):
     if not d:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_to_response(project_id, str(job_id), d)
+
+
+@api_router.post("/jobs/{project_id}/{job_id}/cancel", response_model=JobResponse)
+async def cancel_job_for_project(
+    project_id: str, job_id: str, _: None = Depends(verify_api_key)
+):
+    return await _cancel_job(project_id, str(job_id))
+
+
+@api_router.post("/jobs/{project_id}/{job_id}/resume", response_model=JobCreateResponse)
+async def resume_job_for_project(
+    project_id: str, job_id: str, _: None = Depends(verify_api_key)
+):
+    return await _resume_job(project_id, str(job_id))
 
 
 @api_router.get("/jobs/{project_id}/{job_id}", response_model=JobResponse)

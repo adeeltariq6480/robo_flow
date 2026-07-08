@@ -70,6 +70,19 @@ class QueueManager:
             self._not_empty.notify()
             return len(self._queues[queue])
 
+    async def cancel_pending(self, job_id: str) -> bool:
+        """Remove a queued job before it starts. Running jobs stop cooperatively."""
+        async with self._not_empty:
+            removed = False
+            for queue, items in self._queues.items():
+                before = len(items)
+                self._queues[queue] = deque(item for item in items if item.job_id != job_id)
+                if len(self._queues[queue]) != before:
+                    removed = True
+            if removed:
+                self._not_empty.notify()
+            return removed
+
     async def _dispatch_loop(self) -> None:
         while True:
             async with self._not_empty:

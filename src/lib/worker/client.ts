@@ -161,6 +161,34 @@ export async function getJob(
   return workerFetch<JobResponse>(`/jobs/${jobId}`);
 }
 
+export async function cancelJob(
+  jobId: string,
+  projectId?: string
+): Promise<JobResponse> {
+  if (projectId) {
+    return workerFetch<JobResponse>(`/api/jobs/${projectId}/${jobId}/cancel`, {
+      method: "POST",
+    });
+  }
+  return workerFetch<JobResponse>(`/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export async function resumeJob(
+  jobId: string,
+  projectId?: string
+): Promise<{ job_id: string; queue_name: string; message: string }> {
+  if (projectId) {
+    return workerFetch<{ job_id: string; queue_name: string; message: string }>(
+      `/api/jobs/${projectId}/${jobId}/resume`,
+      { method: "POST" }
+    );
+  }
+  return workerFetch<{ job_id: string; queue_name: string; message: string }>(
+    `/jobs/${jobId}/resume`,
+    { method: "POST" }
+  );
+}
+
 export async function getQueueStats() {
   return workerFetch<
     Record<string, { pending: number; running: number; max_workers: number }>

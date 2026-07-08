@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchJobStatus } from "@/lib/actions/inference";
 import type { JobResponse } from "@/lib/worker/client";
 import { Alert } from "@/components/ui/alert";
-import { Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, OctagonX } from "lucide-react";
 
 interface JobProgressProps {
   jobId: string | null;
@@ -55,7 +55,7 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
       setJob(j);
       setError(null);
 
-      if (j.status === "completed" || j.status === "failed") {
+      if (j.status === "completed" || j.status === "failed" || j.status === "cancelled") {
         completedRef.current = true;
         onCompleteRef.current?.(j);
         return;
@@ -93,6 +93,7 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
 
   const isDone = job.status === "completed";
   const isFailed = job.status === "failed";
+  const isCancelled = job.status === "cancelled";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -100,7 +101,8 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
         <span className="flex items-center gap-2 font-medium text-slate-700">
           {isDone && <CheckCircle className="h-4 w-4 text-green-600" />}
           {isFailed && <XCircle className="h-4 w-4 text-red-600" />}
-          {!isDone && !isFailed && <Loader2 className="h-4 w-4 animate-spin text-brand-600" />}
+          {isCancelled && <OctagonX className="h-4 w-4 text-amber-600" />}
+          {!isDone && !isFailed && !isCancelled && <Loader2 className="h-4 w-4 animate-spin text-brand-600" />}
           {job.progress_message || job.status}
         </span>
         <span className="text-slate-500">
@@ -111,7 +113,7 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
       <div className="h-2 overflow-hidden rounded-full bg-slate-200">
         <div
           className={`h-full transition-all duration-500 ${
-            isFailed ? "bg-red-500" : isDone ? "bg-green-500" : "bg-brand-600"
+            isFailed ? "bg-red-500" : isCancelled ? "bg-amber-500" : isDone ? "bg-green-500" : "bg-brand-600"
           }`}
           style={{ width: `${job.progress}%` }}
         />
@@ -121,6 +123,11 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
       </p>
       {isFailed && job.error_message && (
         <p className="mt-2 text-sm text-red-600">{job.error_message}</p>
+      )}
+      {isCancelled && (
+        <p className="mt-2 text-sm text-amber-700">
+          {job.error_message ?? "Auto-label was cancelled."}
+        </p>
       )}
       {job.status === "completed" &&
         job.result &&

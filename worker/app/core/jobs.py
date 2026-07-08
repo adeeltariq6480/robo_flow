@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _job_project_map: dict[str, str] = {}
 
 
+class JobCancelled(Exception):
+    """Raised when a running job sees a user cancellation request."""
+
+
 def register_job_project(job_id: str, project_id: str) -> None:
     _job_project_map[job_id] = project_id
 
@@ -27,6 +31,22 @@ def get_job_project(job_id: str) -> str | None:
     if pid:
         register_job_project(job_id, pid)
     return pid
+
+
+def is_job_cancelled(job_id: str, project_id: str | None = None) -> bool:
+    pid = project_id or get_job_project(job_id)
+    if not pid:
+        return False
+    job = get_labelling_job(pid, job_id)
+    return bool(job and job.get("status") == JobStatus.CANCELLED.value)
+
+
+async def raise_if_job_cancelled(job_id: str, project_id: str | None = None) -> None:
+    import asyncio
+
+    cancelled = await asyncio.to_thread(is_job_cancelled, job_id, project_id)
+    if cancelled:
+        raise JobCancelled("Job cancelled by user")
 
 
 async def update_job(
@@ -45,6 +65,12 @@ async def update_job(
     pid = project_id or get_job_project(job_id)
     if not pid:
         return
+    if status == JobStatus.RUNNING:
+        import asyncio
+
+        if await asyncio.to_thread(is_job_cancelled, job_id, pid):
+            logger.info("Skip marking cancelled job %s as running", job_id)
+            return
 
     import asyncio
 
@@ -102,6 +128,10 @@ async def process_job(job_id: str) -> None:
     job_type = JobType(job["jobType"])
     config = JobConfig(**(job.get("config") or {}))
 
+    if job.get("status") == JobStatus.CANCELLED.value:
+        logger.info("Job %s was cancelled before start", job_id)
+        return
+
     await update_job(
         job_id,
         status=JobStatus.RUNNING,
@@ -110,6 +140,10 @@ async def process_job(job_id: str) -> None:
         mark_started=True,
         project_id=project_id,
     )
+
+    if is_job_cancelled(job_id, project_id):
+        logger.info("Job %s was cancelled while starting", job_id)
+        return
 
     data = {
         "project_id": project_id,
@@ -143,6 +177,16 @@ async def process_job(job_id: str) -> None:
             progress=100,
             progress_message="Completed",
             result=result,
+            mark_completed=True,
+            project_id=project_id,
+        )
+    except JobCancelled as exc:
+        logger.info("Job %s cancelled cooperatively", job_id)
+        await update_job(
+            job_id,
+            status=JobStatus.CANCELLED,
+            progress_message="Cancelled",
+            error_message=str(exc),
             mark_completed=True,
             project_id=project_id,
         )

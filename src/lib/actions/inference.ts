@@ -5,6 +5,8 @@ import {
   submitAutoLabel,
   submitModelCompare,
   getJob,
+  cancelJob,
+  resumeJob,
   type JobConfig,
 } from "@/lib/worker/client";
 
@@ -69,6 +71,22 @@ export async function startModelCompare(
 export async function fetchJobStatus(jobId: string, projectId?: string) {
   try {
     return await getJob(jobId, projectId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Worker unavailable" };
+  }
+}
+
+export async function cancelInferenceJob(jobId: string, projectId?: string) {
+  try {
+    return await cancelJob(jobId, projectId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Worker unavailable" };
+  }
+}
+
+export async function resumeInferenceJob(jobId: string, projectId?: string) {
+  try {
+    return await resumeJob(jobId, projectId);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Worker unavailable" };
   }

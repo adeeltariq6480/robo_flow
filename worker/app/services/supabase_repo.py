@@ -83,6 +83,7 @@ def _image_row(row: dict) -> dict:
         "height": row.get("height"),
         "status": row.get("status", "uploaded"),
         "queueType": row.get("queue_type", "unassigned"),
+        "autoLabeledAt": row.get("auto_labeled_at"),
         "createdAt": _ts(row.get("created_at")),
         "updatedAt": _ts(row.get("updated_at")),
     }
