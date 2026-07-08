@@ -785,6 +785,8 @@ async def run_auto_label(
         except IncompatibleModelError as exc:
             logger.warning("model skipped (incompatible) %s: %s", model_id, exc)
             await asyncio.to_thread(unload_model, model_path)
+            await asyncio.to_thread(release_all_models)
+            gc.collect()
             await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
             model_failures[model_id] = _model_failure_message(exc)
             logger.info("continuing with next model")
@@ -792,6 +794,7 @@ async def run_auto_label(
         except MemoryLimitExceeded as exc:
             logger.warning("model skipped (OOM during load) %s: %s", model_id, exc)
             await asyncio.to_thread(unload_model, model_path)
+            await asyncio.to_thread(release_all_models)
             gc.collect()
             model_failures[model_id] = _model_failure_message(exc)
             logger.info("continuing with next model")
@@ -799,6 +802,8 @@ async def run_auto_label(
         except Exception as exc:
             logger.exception("YOLO load failed for model %s", model_id)
             await asyncio.to_thread(unload_model, model_path)
+            await asyncio.to_thread(release_all_models)
+            gc.collect()
             msg = str(exc).lower()
             if any(
                 token in msg
@@ -958,6 +963,18 @@ async def run_auto_label(
             f"{fid}: {err}"
             for fid, err in list(prep_failures.items())[:5]
         ]
+        all_oom = all(
+            "out of memory" in err.lower() for err in prep_failures.values()
+        )
+        if all_oom:
+            raise ValueError(
+                "All images failed due to worker out-of-memory during inference. "
+                f"Examples: {'; '.join(samples)}. "
+                "pepsi.pt-style legacy YOLOv5/v7 models can exhaust Railway RAM even when skipped. "
+                "Fix: deselect incompatible models, set MEMORY_HARD_LIMIT_MB=1200, "
+                "INFERENCE_MAX_IMAGE_SIZE=320, INFERENCE_MIN_IMAGE_SIZE=256, "
+                "ENABLE_YOLOV5_RUNTIME=false, ENABLE_YOLOV7_RUNTIME=false, then redeploy."
+            )
         raise ValueError(
             "All images failed during preparation. "
             f"Examples: {'; '.join(samples)}. "

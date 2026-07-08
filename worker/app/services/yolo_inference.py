@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
 from app.services.model_errors import IncompatibleModelError
-from app.services.universal_yolo_loader import UniversalYOLOModel
+from app.services.universal_yolo_loader import UniversalYOLOModel, clear_legacy_runtime_state
 import os
 import torch
 
@@ -71,6 +71,18 @@ def inference_size_ladder() -> list[int]:
     minimum = min(inference_min_side(), primary)
     if minimum >= primary:
         return [primary]
+
+    soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "700" if _low_memory_mode() else "2400"))
+    rss = get_process_memory_mb()
+    if rss >= soft * 0.85:
+        logger.info(
+            "Memory already high (%.1f MB >= %.0f MB soft) — trying %dpx before %dpx",
+            rss,
+            soft * 0.85,
+            minimum,
+            primary,
+        )
+        return [minimum, primary]
     return [primary, minimum]
 
 
@@ -190,12 +202,23 @@ def run_yolo_inference(
                     soft,
                 )
                 gc.collect()
+                clear_legacy_runtime_state()
                 try:
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                 except Exception:
                     pass
                 rss = get_process_memory_mb()
+            headroom = max(20, hard - rss)
+            if headroom < 40 and max_side > inference_min_side():
+                logger.warning(
+                    "Only %.0f MB headroom before hard limit — skipping %dpx, trying smaller size",
+                    headroom,
+                    max_side,
+                )
+                raise MemoryLimitExceeded(
+                    f"Memory headroom too low for {max_side}px: {rss:.1f} MB RSS, hard {hard} MB"
+                )
             if rss >= hard:
                 raise MemoryLimitExceeded(
                     f"Memory above hard limit: {rss:.1f} MB >= {hard} MB"
@@ -284,6 +307,7 @@ def release_all_models() -> None:
     """Drop every cached YOLO runtime — use before auto-label on small hosts."""
     with _yolo_lock:
         if not _yolo_models:
+            clear_legacy_runtime_state()
             return
         logger.info("Releasing %d cached YOLO model(s) from memory", len(_yolo_models))
         for cached in list(_yolo_models.values()):
@@ -292,12 +316,7 @@ def release_all_models() -> None:
             except Exception:
                 logger.debug("Failed to unload cached model", exc_info=True)
         _yolo_models.clear()
-    gc.collect()
-    try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    clear_legacy_runtime_state()
 
 
 def _prepare_inference_image(image_path: Path, max_side: int) -> Image.Image:

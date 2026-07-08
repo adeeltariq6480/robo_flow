@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Enable/disable optional runtimes via environment
 ENABLE_YOLOV5_RUNTIME = os.getenv("ENABLE_YOLOV5_RUNTIME", "false").lower() == "true"
-ENABLE_YOLOV7_RUNTIME = os.getenv("ENABLE_YOLOV7_RUNTIME", "true").lower() == "true"
+ENABLE_YOLOV7_RUNTIME = os.getenv("ENABLE_YOLOV7_RUNTIME", "false").lower() == "true"
 ENABLE_ONNX_RUNTIME = os.getenv("ENABLE_ONNX_RUNTIME", "true").lower() == "true"
 
 
@@ -34,6 +34,24 @@ def _clear_runtime_memory() -> None:
             torch.cuda.empty_cache()
     except Exception:
         logger.debug("Torch memory cleanup skipped", exc_info=True)
+
+
+def clear_legacy_runtime_state() -> None:
+    """Drop torch.hub imports and cached hub modules after a failed legacy load."""
+    import sys
+
+    _clear_runtime_memory()
+    stale = [
+        name
+        for name in list(sys.modules)
+        if any(
+            marker in name.lower()
+            for marker in ("yolov5", "yolov7", "hubconf", "torch.hub")
+        )
+    ]
+    for name in stale:
+        sys.modules.pop(name, None)
+    gc.collect()
 
 
 def _is_incompatible_runtime_error(exc: Exception) -> bool:
@@ -171,15 +189,47 @@ class UniversalYOLOModel:
                         self.loader_type = "ultralytics"
                         self.model_type = "ultralytics_fallback"
             elif self.loader_type == "yolov7":
-                try:
-                    self._load_yolov7()
-                except Exception as exc:
-                    logger.warning("YOLOv7 primary load failed, trying YOLOv5 fallback: %s", exc)
-                    self.model = None
-                    _clear_runtime_memory()
-                    self._load_yolov5()
-                    self.loader_type = "yolov5"
-                    self.model_type = "yolov5_legacy"
+                if not ENABLE_YOLOV7_RUNTIME or _low_memory_mode():
+                    logger.info(
+                        "YOLOv7 legacy hub disabled or low-memory mode — trying Ultralytics first for %s",
+                        self.model_path,
+                    )
+                    try:
+                        self._load_ultralytics()
+                        self.loader_type = "ultralytics"
+                        self.model_type = "ultralytics_fallback"
+                    except Exception as exc:
+                        if not ENABLE_YOLOV7_RUNTIME:
+                            _raise_if_incompatible(self.model_path, exc)
+                            raise
+                        logger.warning(
+                            "Ultralytics pre-attempt failed for YOLOv7 checkpoint, trying hub: %s",
+                            exc,
+                        )
+                        self.model = None
+                        _clear_runtime_memory()
+                        try:
+                            self._load_yolov7()
+                        except Exception as yolov7_exc:
+                            logger.warning(
+                                "YOLOv7 primary load failed, trying YOLOv5 fallback: %s",
+                                yolov7_exc,
+                            )
+                            self.model = None
+                            _clear_runtime_memory()
+                            self._load_yolov5()
+                            self.loader_type = "yolov5"
+                            self.model_type = "yolov5_legacy"
+                else:
+                    try:
+                        self._load_yolov7()
+                    except Exception as exc:
+                        logger.warning("YOLOv7 primary load failed, trying YOLOv5 fallback: %s", exc)
+                        self.model = None
+                        _clear_runtime_memory()
+                        self._load_yolov5()
+                        self.loader_type = "yolov5"
+                        self.model_type = "yolov5_legacy"
             elif self.loader_type == "onnxruntime":
                 self._load_onnx()
             else:
@@ -190,10 +240,12 @@ class UniversalYOLOModel:
             )
         except IncompatibleModelError:
             self.model = None
+            clear_legacy_runtime_state()
             raise
         except Exception as exc:
             logger.exception("Failed to load model: %s", exc)
             self.model = None
+            clear_legacy_runtime_state()
             if isinstance(exc, IncompatibleModelError):
                 raise
             if _is_incompatible_runtime_error(exc):
@@ -327,32 +379,58 @@ class UniversalYOLOModel:
             raise
 
     def _torch_hub_custom_load(self, torch_module: Any, repo_spec: str, *, device: str = "cpu") -> Any:
-        """Handle old hubconf signatures: some use path=, others positional path_or_model."""
-        common_kwargs = {
-            "trust_repo": True,
-            "force_reload": False,
-            "device": device,
-        }
-        try:
-            return torch_module.hub.load(
-                repo_spec,
-                "custom",
-                path=self.model_path,
-                **common_kwargs,
-            )
-        except TypeError as exc:
-            if "unexpected keyword argument 'path'" not in str(exc):
-                raise
-            logger.info("Hub custom loader does not accept path=; retrying with positional weights")
-            return torch_module.hub.load(
-                repo_spec,
-                "custom",
-                self.model_path,
-                **common_kwargs,
-            )
+        """Handle old hubconf signatures across YOLOv5/YOLOv7 refs."""
+        hub_variants = [
+            {"trust_repo": True, "force_reload": False, "device": device},
+            {"trust_repo": True, "force_reload": False},
+            {},
+        ]
+        weight_variants: list[tuple[str, dict[str, Any] | tuple[Any, ...]]] = [
+            ("kw_path", {"path": self.model_path}),
+            ("positional", (self.model_path,)),
+        ]
+
+        last_exc: Exception | None = None
+        for weight_style, weight_arg in weight_variants:
+            for hub_kwargs in hub_variants:
+                try:
+                    if weight_style == "kw_path":
+                        return torch_module.hub.load(
+                            repo_spec,
+                            "custom",
+                            **weight_arg,
+                            **hub_kwargs,
+                        )
+                    return torch_module.hub.load(
+                        repo_spec,
+                        "custom",
+                        *weight_arg,
+                        **hub_kwargs,
+                    )
+                except TypeError as exc:
+                    last_exc = exc
+                    msg = str(exc).lower()
+                    if "unexpected keyword argument" not in msg:
+                        raise
+                    logger.debug(
+                        "Hub custom loader rejected kwargs style=%s hub=%s: %s",
+                        weight_style,
+                        hub_kwargs,
+                        exc,
+                    )
+                    continue
+                except Exception as exc:
+                    last_exc = exc
+                    raise
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(f"Could not load hub custom model from {repo_spec}")
 
     def _patch_legacy_runtime_compat(self, torch_module: Any) -> None:
         """Patch common old YOLOv5 assumptions for modern Python/NumPy/PyTorch."""
+        import subprocess
+
         for alias, target in {
             "int": int,
             "float": float,
@@ -364,6 +442,25 @@ class UniversalYOLOModel:
                     setattr(np, alias, target)
                 except Exception:
                     logger.debug("Could not patch numpy.%s", alias)
+
+        original_check_output = getattr(subprocess, "check_output", None)
+        if original_check_output is not None and not getattr(
+            original_check_output, "_robo_flow_req_patch", False
+        ):
+
+            def patched_check_output(cmd, *args, **kwargs):
+                cmd_text = cmd.decode() if isinstance(cmd, bytes) else str(cmd)
+                if "pip install" in cmd_text.lower():
+                    logger.info(
+                        "Skipping legacy YOLO hub dependency install: %s",
+                        cmd_text[:160],
+                    )
+                    return b""
+                return original_check_output(cmd, *args, **kwargs)
+
+            patched_check_output._robo_flow_req_patch = True
+            subprocess.check_output = patched_check_output
+            logger.info("Patched subprocess.check_output to skip legacy hub pip installs")
 
         original_load = getattr(torch_module, "load", None)
         if original_load is None or getattr(original_load, "_robo_flow_legacy_patch", False):
