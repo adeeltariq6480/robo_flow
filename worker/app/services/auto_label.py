@@ -160,7 +160,7 @@ def _repair_remote_image_rows(project_id: str, dataset_id: str, file_list: list[
     repaired = 0
     for row in file_list:
         image_id = str(row.get("id") or "")
-        filename = row.get("fileName") or row.get("file_name")
+        filename = row.get("file_name") or row.get("file_name")
         existing_hf_path = row.get("hfPath") or row.get("hf_path")
         resolved_hf_path = None
 
