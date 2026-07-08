@@ -290,34 +290,41 @@ def upload_dataset_image(
         target_path,
     )
 
-    if settings.is_vercel or not settings.local_storage_enabled:
-        if not hf_dataset_upload_enabled():
-            raise RuntimeError(
-                "Hugging Face upload is disabled; Vercel deployment requires HF dataset storage."
-            )
-        return upload_bytes(
-            data,
-            repo_type=settings.dataset_repo_type,
-            path_in_repo=target_path,
+    must_upload_remote = settings.is_vercel or not settings.local_storage_enabled
+    if must_upload_remote and not hf_dataset_upload_enabled():
+        raise RuntimeError(
+            "Hugging Face upload is disabled; this deployment requires HF dataset storage."
         )
 
     # Always persist a local copy first so uploads and downstream jobs
     # (auto-label) can operate from local storage even if HF is disabled
     # or rate-limited.
+    local_path = None
     local_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "images"
-    try:
-        local_dir.mkdir(parents=True, exist_ok=True)
-        local_path = local_dir / file_name
-        local_path.write_bytes(data)
-        logger.info("Saved dataset image locally: %s", local_path)
-    except Exception:
-        logger.exception("Failed to save dataset image locally: %s/%s", project_id, file_name)
+    if settings.local_storage_enabled and not settings.is_vercel:
+        try:
+            local_dir.mkdir(parents=True, exist_ok=True)
+            local_path = local_dir / file_name
+            local_path.write_bytes(data)
+            logger.info("Saved dataset image locally: %s", local_path)
+        except Exception:
+            logger.exception("Failed to save dataset image locally: %s/%s", project_id, file_name)
+
+    if hf_dataset_upload_enabled():
+        loc = upload_bytes(
+            data,
+            repo_type=settings.dataset_repo_type,
+            path_in_repo=target_path,
+        )
+        if local_path:
+            loc["localPath"] = str(local_path)
+        return loc
 
     return {
         "hfRepo": settings.dataset_repo_id,
         "hfPath": target_path,
         "repoType": settings.dataset_repo_type,
-        "localPath": str(local_path) if 'local_path' in locals() else None,
+        "localPath": str(local_path) if local_path else None,
     }
 
 

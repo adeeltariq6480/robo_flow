@@ -112,6 +112,25 @@ def _hf_api() -> HfApi:
     return HfApi(token=settings.hf_token)
 
 
+def _should_upload_dataset_images_to_hf() -> bool:
+    return file_storage.hf_dataset_upload_enabled()
+
+
+def _require_hf_dataset_upload_for_deploy() -> None:
+    if _should_upload_dataset_images_to_hf():
+        return
+    deploy_target = settings.deploy_target.strip().lower()
+    hf_looks_configured = bool(settings.hf_token.strip() and settings.dataset_repo_id)
+    if deploy_target in {"vercel", "railway", "vps", "production", "prod"} or hf_looks_configured:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Hugging Face image upload is disabled. Set HF_UPLOAD_ENABLED=true, "
+                "HF_TOKEN, HF_DATASET_REPO, and HF_DATASET_REPO_TYPE=dataset on the backend."
+            ),
+        )
+
+
 def _validate_hf_cleanup_args(repo_id: str | None, repo_type: str | None) -> tuple[str, str]:
     if not repo_id or not repo_id.strip():
         raise HTTPException(status_code=400, detail="repo_id is required")
@@ -567,6 +586,7 @@ async def upload_images(
     _: None = Depends(verify_api_key),
 ):
     _check_upload_config()
+    _require_hf_dataset_upload_for_deploy()
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
@@ -601,7 +621,7 @@ async def upload_images(
 
         remote_uploaded = False
         local_path = None
-        if settings.is_vercel or not settings.local_storage_enabled:
+        if _should_upload_dataset_images_to_hf():
             try:
                 loc = await asyncio.to_thread(
                     file_storage.upload_dataset_image,
@@ -612,10 +632,11 @@ async def upload_images(
                 )
                 remote_uploaded = True
                 logger.info(
-                    "Image uploaded immediately to HF on Vercel project=%s dataset=%s file=%s",
+                    "Image uploaded immediately to HF project=%s dataset=%s file=%s hfPath=%s",
                     project_id,
                     dataset_id,
                     stored_name,
+                    loc.get("hfPath") if isinstance(loc, dict) else None,
                 )
             except Exception as exc:
                 logger.exception(
@@ -716,6 +737,7 @@ async def upload_zip(
     _: None = Depends(verify_api_key),
 ):
     _check_upload_config()
+    _require_hf_dataset_upload_for_deploy()
     created: list[dict] = []
     skipped: list[dict] = []
     adjusted: list[dict] = []
@@ -748,7 +770,7 @@ async def upload_zip(
 
                 remote_uploaded = False
                 local_path = None
-                if settings.is_vercel or not settings.local_storage_enabled:
+                if _should_upload_dataset_images_to_hf():
                     try:
                         loc = await asyncio.to_thread(
                             file_storage.upload_dataset_image,
@@ -759,10 +781,11 @@ async def upload_zip(
                         )
                         remote_uploaded = True
                         logger.info(
-                            "ZIP image uploaded immediately to HF on Vercel project=%s dataset=%s file=%s",
+                            "ZIP image uploaded immediately to HF project=%s dataset=%s file=%s hfPath=%s",
                             project_id,
                             dataset_id,
                             stored_name,
+                            loc.get("hfPath") if isinstance(loc, dict) else None,
                         )
                     except Exception as exc:
                         logger.exception(
