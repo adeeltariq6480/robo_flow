@@ -68,6 +68,7 @@ def _dataset_row(row: dict) -> dict:
 def _image_row(row: dict) -> dict:
     return {
         "id": str(row["id"]),
+        "projectId": str(row["project_id"]),
         "datasetId": str(row["dataset_id"]),
         "fileName": row["file_name"],
         "hfRepo": row.get("hf_repo", "datasets"),

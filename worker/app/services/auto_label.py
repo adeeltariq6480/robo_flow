@@ -130,6 +130,86 @@ def _remote_image_mode() -> bool:
     )
 
 
+def _list_remote_image_files(project_id: str, dataset_id: str) -> tuple[set[str], dict[str, str]]:
+    prefix = f"datasets/{project_id}/{dataset_id}/images/"
+    try:
+        files = file_storage._api().list_repo_files(
+            repo_id=settings.dataset_repo_id,
+            repo_type=settings.dataset_repo_type,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Auto-label could not list HF dataset files repo=%s repo_type=%s prefix=%s: %s",
+            settings.dataset_repo_id,
+            settings.dataset_repo_type,
+            prefix,
+            exc,
+        )
+        return set(), {}
+
+    remote_files = {path for path in files if path.startswith(prefix)}
+    by_name = {Path(path).name: path for path in remote_files}
+    return remote_files, by_name
+
+
+def _repair_remote_image_rows(project_id: str, dataset_id: str, file_list: list[dict]) -> int:
+    remote_files, remote_by_name = _list_remote_image_files(project_id, dataset_id)
+    if not remote_files:
+        return 0
+
+    repaired = 0
+    for row in file_list:
+        image_id = str(row.get("id") or "")
+        filename = row.get("fileName") or row.get("file_name")
+        existing_hf_path = row.get("hfPath") or row.get("hf_path")
+        resolved_hf_path = None
+
+        if existing_hf_path and existing_hf_path in remote_files:
+            resolved_hf_path = existing_hf_path
+        elif filename:
+            expected_path = file_storage.dataset_image_path(project_id, dataset_id, filename)
+            resolved_hf_path = expected_path if expected_path in remote_files else remote_by_name.get(filename)
+
+        if not image_id or not resolved_hf_path:
+            continue
+
+        needs_update = (
+            row.get("hfPath") != resolved_hf_path
+            or row.get("hfSyncStatus") != "synced"
+            or row.get("storageStatus") != "remote_ready"
+        )
+        row["hfPath"] = resolved_hf_path
+        row["hfSyncStatus"] = "synced"
+        row["storageStatus"] = "remote_ready"
+
+        if not needs_update:
+            continue
+
+        try:
+            update_image_storage_fields(
+                project_id,
+                image_id,
+                {
+                    "hfPath": resolved_hf_path,
+                    "hfSyncStatus": "synced",
+                    "storageStatus": "remote_ready",
+                },
+            )
+            repaired += 1
+        except Exception:
+            logger.exception("Auto-label failed to repair HF path/status for image %s", image_id)
+
+    logger.info(
+        "Auto-label HF repo scan project=%s dataset=%s hf_files_found=%d matched_or_repaired=%d examples=%s",
+        project_id,
+        dataset_id,
+        len(remote_files),
+        repaired,
+        list(remote_files)[:5],
+    )
+    return repaired
+
+
 async def run_auto_label(
     job_id: str,
     project_id: str,
@@ -150,7 +230,7 @@ async def run_auto_label(
 
     remote_image_mode = _remote_image_mode()
     if remote_image_mode:
-        repaired = 0
+        repaired = _repair_remote_image_rows(project_id, dataset_id, db_file_list)
         for f in db_file_list:
             image_id = str(f.get("id"))
             hf_path = resolve_hf_path_for_image(f, image_id)
