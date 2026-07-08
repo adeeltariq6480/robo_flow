@@ -110,6 +110,7 @@ export function AnnotationReviewQueue({
   const [classFilter, setClassFilter] = useState(ALL_CLASS_ID);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const visibleFiles = useMemo(
@@ -181,6 +182,9 @@ export function AnnotationReviewQueue({
     const label = status === "approved" ? "approve" : "reject";
     if (!confirm(`${label} ${selected.size} selected image(s)?`)) return;
     setLoading(true);
+    setLoadingLabel(
+      `${status === "approved" ? "Approving" : "Rejecting"} ${selected.size} images…`
+    );
     setError(null);
     const result = await bulkSetReviewStatus(
       projectId,
@@ -193,6 +197,7 @@ export function AnnotationReviewQueue({
       setSelected(new Set());
       router.refresh();
     }
+    setLoadingLabel(null);
     setLoading(false);
   }
 
@@ -234,6 +239,11 @@ export function AnnotationReviewQueue({
 
   return (
     <div className="relative pb-20">
+      {loadingLabel && (
+        <p className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+          {loadingLabel}
+        </p>
+      )}
       {error && (
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}

@@ -41,6 +41,7 @@ from app.models.schemas import (
     ModelRegister,
     ProjectCreate,
     ProjectUpdate,
+    BulkReviewAction,
     ReviewAction,
     TestRunRequest,
 )
@@ -2095,6 +2096,28 @@ async def approve_image(body: ReviewAction, _: None = Depends(verify_api_key)):
 async def reject_image(body: ReviewAction, _: None = Depends(verify_api_key)):
     repo.set_review_status(body.project_id, body.image_id, "rejected")
     return {"ok": True}
+
+
+@api_router.post("/approve-images")
+async def approve_images(body: BulkReviewAction, _: None = Depends(verify_api_key)):
+    count = await asyncio.to_thread(
+        repo.bulk_set_review_status,
+        body.project_id,
+        body.image_ids,
+        "approved",
+    )
+    return {"ok": True, "count": count}
+
+
+@api_router.post("/reject-images")
+async def reject_images(body: BulkReviewAction, _: None = Depends(verify_api_key)):
+    count = await asyncio.to_thread(
+        repo.bulk_set_review_status,
+        body.project_id,
+        body.image_ids,
+        "rejected",
+    )
+    return {"ok": True, "count": count}
 
 
 # ===========================================================================

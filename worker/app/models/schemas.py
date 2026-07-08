@@ -229,6 +229,13 @@ class ReviewAction(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class BulkReviewAction(BaseModel):
+    project_id: str = Field(alias="projectId")
+    image_ids: list[str] = Field(alias="imageIds")
+
+    model_config = {"populate_by_name": True}
+
+
 class ExportRequest(BaseModel):
     project_id: str = Field(alias="projectId")
     export_format: str = Field(alias="exportFormat")

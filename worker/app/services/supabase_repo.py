@@ -923,6 +923,40 @@ def set_review_status(project_id: str, image_id: str, status: str) -> None:
     ).eq("id", image_id).execute()
 
 
+def bulk_set_review_status(
+    project_id: str, image_ids: list[str], status: str
+) -> int:
+    """Update review status for many images in batched DB queries."""
+    if not image_ids:
+        return 0
+    now = now_iso()
+    image_status = (
+        "reviewed" if status in ("approved", "rejected") else "labeled"
+    )
+    updated = 0
+    chunk_size = 100
+    for offset in range(0, len(image_ids), chunk_size):
+        chunk = image_ids[offset : offset + chunk_size]
+        ann_res = (
+            _sb()
+            .table("annotations")
+            .select("id")
+            .eq("project_id", project_id)
+            .in_("image_id", chunk)
+            .execute()
+        )
+        ann_ids = [a["id"] for a in ann_res.data or []]
+        if ann_ids:
+            _sb().table("annotations").update(
+                {"review_status": status, "reviewed_at": now}
+            ).in_("id", ann_ids).execute()
+        _sb().table("images").update({"status": image_status}).eq(
+            "project_id", project_id
+        ).in_("id", chunk).execute()
+        updated += len(chunk)
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # Review queues
 # ---------------------------------------------------------------------------

@@ -142,6 +142,18 @@ class Settings(BaseSettings):
     upload_blur_max_side: int = Field(
         default=800,
         validation_alias=AliasChoices("UPLOAD_BLUR_MAX_SIDE"),
+        description="Max side for blur scoring only (does not affect stored resolution)",
+    )
+    upload_max_image_size: int = Field(
+        default=1920,
+        validation_alias=AliasChoices("UPLOAD_MAX_IMAGE_SIZE"),
+        description="Max stored image side on upload — separate from inference MAX_IMAGE_SIZE",
+    )
+    upload_jpeg_quality: int = Field(
+        default=92,
+        validation_alias=AliasChoices("UPLOAD_JPEG_QUALITY"),
+        ge=60,
+        le=100,
     )
     upload_preprocess_workers: int = Field(
         default=6,
@@ -156,6 +168,7 @@ class Settings(BaseSettings):
     max_image_size: int = Field(
         default=416,
         validation_alias=AliasChoices("MAX_IMAGE_SIZE"),
+        description="Inference-only resize — does not affect uploaded image storage",
     )
     hf_hub_disable_xet: bool = Field(
         default=True,

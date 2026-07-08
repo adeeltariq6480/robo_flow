@@ -144,13 +144,29 @@ export async function setReviewStatus(
 
 export async function bulkSetReviewStatus(
   projectId: string,
-  datasetId: string,
+  _datasetId: string,
   imageIds: string[],
   status: ReviewStatus
 ) {
-  for (const imageId of imageIds) {
-    const result = await setReviewStatus(projectId, datasetId, imageId, status);
-    if (result.error) return result;
+  if (imageIds.length === 0) {
+    return { success: true as const, count: 0 };
   }
-  return { success: true as const, count: imageIds.length };
+  try {
+    const path =
+      status === "approved"
+        ? "/api/approve-images"
+        : status === "rejected"
+          ? "/api/reject-images"
+          : null;
+    if (!path) {
+      return { error: `Unsupported bulk status: ${status}` };
+    }
+    const result = await api.post<{ ok: boolean; count: number }>(path, {
+      projectId,
+      imageIds,
+    });
+    return { success: true as const, count: result.count ?? imageIds.length };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Bulk update failed" };
+  }
 }

@@ -54,7 +54,8 @@ def _encode_image(img: Image.Image, original_format: str | None) -> tuple[bytes,
     buf = io.BytesIO()
     if img.mode != "RGB":
         img = img.convert("RGB")
-    img.save(buf, format="JPEG", quality=88, optimize=True)
+    quality = max(60, min(100, int(settings.upload_jpeg_quality)))
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
     return buf.getvalue(), MIME_FOR_FORMAT["JPEG"]
 
 
@@ -79,12 +80,13 @@ def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
                 img = img.transpose(Image.ROTATE_90)
                 rotated = True
 
-            max_side = max(1, int(getattr(settings, "max_image_size", 1280) or 1280))
-            if img.width > max_side or img.height > max_side:
-                img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-
             if settings.upload_reject_blurry:
-                score = _laplacian_variance(img.convert("L"))
+                blur_img = img
+                blur_max = max(1, int(settings.upload_blur_max_side))
+                if img.width > blur_max or img.height > blur_max:
+                    blur_img = img.copy()
+                    blur_img.thumbnail((blur_max, blur_max), Image.Resampling.LANCZOS)
+                score = _laplacian_variance(blur_img.convert("L"))
                 if score < settings.upload_blur_threshold:
                     logger.info(
                         "Skipping blurry upload %s (laplacian=%.2f < %.2f)",
@@ -100,6 +102,10 @@ def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
                         mime_type="",
                         skip_reason="blurry",
                     )
+
+            max_side = max(1, int(settings.upload_max_image_size))
+            if img.width > max_side or img.height > max_side:
+                img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
 
             width = img.width
             height = img.height
