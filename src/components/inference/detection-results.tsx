@@ -28,12 +28,14 @@ export function DetectionResults({ job }: { job: JobResponse }) {
     const total = (result.total_files as number) ?? 0;
     const dbTotal = (result.db_total as number) ?? total;
     const skippedNotEligible = (result.skipped_not_eligible as number) ?? 0;
+    const skippedNotRemoteReady = (result.skipped_not_remote_ready as number) ?? 0;
+    const skippedAlreadyLabeled = (result.skipped_already_labeled as number) ?? 0;
     const modelsUsed = (result.models_used as number) ?? 1;
     const modelFailures = Array.isArray(result.model_failures)
       ? (result.model_failures as Array<{ model_id: string; error: string }>)
       : [];
     const variant =
-      labeled === 0 ? "error" : failed > 0 || skippedNotEligible > 0 ? "warning" : "success";
+      labeled === 0 ? "error" : failed > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0 ? "warning" : "success";
     const border =
       variant === "error"
         ? "border-red-200 bg-red-50 text-red-800"
@@ -50,13 +52,36 @@ export function DetectionResults({ job }: { job: JobResponse }) {
           {modelsUsed !== 1 ? "s" : ""}
           {dbTotal > total && ` · ${dbTotal} total in dataset`}
           {failed > 0 && ` · ${failed} failed`}
-          {skippedNotEligible > 0 &&
-            ` · ${skippedNotEligible} skipped (no HF/local file found)`}
         </p>
-        {labeled > 0 && labeled < dbTotal && (
+        {(skippedAlreadyLabeled > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0) && (
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
+            {skippedAlreadyLabeled > 0 && (
+              <li>
+                {skippedAlreadyLabeled} skipped — pehle se labeled / reviewed (dobara label nahi
+                hoti by default)
+              </li>
+            )}
+            {skippedNotRemoteReady > 0 && (
+              <li>
+                {skippedNotRemoteReady} missing on HF — upload sync complete karo ya HF sync retry
+              </li>
+            )}
+            {skippedNotEligible > 0 && (
+              <li>
+                {skippedNotEligible} missing — DB mein record hai lekin file HF/disk par nahi mili
+              </li>
+            )}
+          </ul>
+        )}
+        {labeled > 0 && labeled < dbTotal && skippedAlreadyLabeled === 0 && (
           <p className="mt-2 text-amber-800">
-            Baqi images ke liye &quot;Label remaining&quot; dabao — pehle se labeled skip ho
-            jayengi.
+            Baqi images ke liye pehle HF sync check karo, phir &quot;Label remaining&quot; dabao.
+          </p>
+        )}
+        {skippedAlreadyLabeled > 0 && labeled < dbTotal && (
+          <p className="mt-2 text-amber-800">
+            Sab dubara label karni hon to worker API se{" "}
+            <code className="text-xs">relabel_all: true</code> bhejo.
           </p>
         )}
         {modelFailures.length > 0 && (

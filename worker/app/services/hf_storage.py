@@ -70,9 +70,9 @@ def _ensure_repo(repo_id: str, repo_type: str) -> None:
             raise RuntimeError(
                 f"Hugging Face repo not found: {repo_id} (type={repo_type}). "
                 "Create it once on huggingface.co, then set Railway env to that exact repo. "
-                "For Adeel6480/robo_flow as a dataset repo use "
-                "HF_DATASET_REPO=HF_MODEL_REPO=Adeel6480/robo_flow and "
-                "HF_DATASET_REPO_TYPE=HF_MODEL_REPO_TYPE=dataset. "
+                "Images: HF_DATASET_REPO + HF_DATASET_REPO_TYPE=dataset. "
+                "Models: HF_MODEL_REPO + HF_MODEL_REPO_TYPE=model. "
+                "Same name (e.g. Adeel6480/robo_flow) is OK — HF uses separate model vs dataset URLs. "
                 "Set HF_AUTO_CREATE_REPO=true only if you want the worker to auto-create repos."
             ) from exc
         raise RuntimeError(
@@ -661,7 +661,7 @@ def upload_model_file(
     skip_if_exists: bool = True,
 ) -> dict:
     target_path = model_path(project_id, file_name)
-    logger.info("Selected repo for model upload: %s (model) target=%s", settings.model_repo_id, target_path)
+    logger.info("Selected repo for model upload: %s (repo_type=%s) target=%s", settings.model_repo_id, settings.model_repo_type, target_path)
     if not hf_model_upload_enabled():
         logger.info("Hugging Face upload is disabled; skipping model upload %s", file_name)
         return {"hfRepo": settings.model_repo_id, "hfPath": target_path, "repoType": settings.model_repo_type}

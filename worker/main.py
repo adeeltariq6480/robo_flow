@@ -34,24 +34,38 @@ async def lifespan(app: FastAPI):
         logger.info("HF model upload repo_type=%s (weights)", settings.model_repo_type)
         if settings.dataset_repo_type != "dataset":
             logger.warning(
-                "HF_DATASET_REPO_TYPE=%s — image uploads expect repo_type=dataset. "
-                "If Adeel6480/robo_flow is a Hugging Face *dataset* repo, set "
-                "HF_DATASET_REPO_TYPE=dataset and HF_MODEL_REPO_TYPE=dataset on Railway.",
+                "HF_DATASET_REPO_TYPE=%s — image uploads should use repo_type=dataset. "
+                "Set HF_DATASET_REPO_TYPE=dataset on Railway.",
                 settings.dataset_repo_type,
             )
-        logger.info("HF_AUTO_CREATE_REPO=%s", settings.hf_auto_create_repo)
         if (
-            settings.dataset_repo_id
-            and settings.model_repo_id
-            and settings.dataset_repo_id != settings.model_repo_id
+            settings.hf_model_repo
+            and settings.hf_dataset_repo
+            and settings.hf_model_repo != settings.hf_dataset_repo
+            and settings.model_repo_type != "model"
         ):
             logger.warning(
-                "Two different HF repos configured (dataset=%s, model=%s). "
-                "This can create extra repos on Hugging Face. "
-                "Use the same repo for both, e.g. Adeel6480/robo_flow.",
-                settings.dataset_repo_id,
-                settings.model_repo_id,
+                "HF_MODEL_REPO_TYPE=%s — model weights should use repo_type=model when "
+                "HF_MODEL_REPO is separate from HF_DATASET_REPO.",
+                settings.model_repo_type,
             )
+        logger.info("HF_AUTO_CREATE_REPO=%s", settings.hf_auto_create_repo)
+        if settings.dataset_repo_id and settings.model_repo_id:
+            if settings.dataset_repo_id == settings.model_repo_id:
+                logger.info(
+                    "HF dual-namespace repo %s: images use repo_type=%s, models use repo_type=%s",
+                    settings.dataset_repo_id,
+                    settings.dataset_repo_type,
+                    settings.model_repo_type,
+                )
+            else:
+                logger.info(
+                    "Split HF repos: images→%s (%s), models→%s (%s)",
+                    settings.dataset_repo_id,
+                    settings.dataset_repo_type,
+                    settings.model_repo_id,
+                    settings.model_repo_type,
+                )
         # YOLO runtime settings
         import os
         logger.info("ENABLE_YOLOV5_RUNTIME=%s", os.getenv("ENABLE_YOLOV5_RUNTIME", "false"))

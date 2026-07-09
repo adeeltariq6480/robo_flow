@@ -217,6 +217,8 @@ def _compact_job_result(
     model_failures: dict[str, str] | None = None,
     db_total: int | None = None,
     skipped_not_eligible: int = 0,
+    skipped_not_remote_ready: int = 0,
+    skipped_already_labeled: int = 0,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
     result = {
@@ -235,6 +237,10 @@ def _compact_job_result(
         result["db_total"] = db_total
     if skipped_not_eligible:
         result["skipped_not_eligible"] = skipped_not_eligible
+    if skipped_not_remote_ready:
+        result["skipped_not_remote_ready"] = skipped_not_remote_ready
+    if skipped_already_labeled:
+        result["skipped_already_labeled"] = skipped_already_labeled
     if model_failures:
         result["model_failures"] = [
             {"model_id": mid, "error": err}
@@ -599,6 +605,7 @@ async def run_auto_label(
     else:
         ready_list = list(eligible_list)
 
+    skipped_not_remote_ready = len(eligible_list) - len(ready_list) if remote_image_mode else 0
     ready_before_filter = len(ready_list)
     if relabel_all:
         file_list = ready_list
@@ -610,9 +617,11 @@ async def run_auto_label(
     total = len(file_list)
 
     logger.info(
-        "Auto-label filtering: db_total=%d ready_before_filter=%d skipped_already_labeled=%d final_total=%d relabel_all=%s",
+        "Auto-label filtering: db_total=%d eligible=%d skipped_not_eligible=%d skipped_not_remote_ready=%d skipped_already_labeled=%d final_total=%d relabel_all=%s",
         db_total,
-        ready_before_filter,
+        len(eligible_list),
+        skipped_not_eligible,
+        skipped_not_remote_ready,
         skipped_already_labeled,
         total,
         relabel_all,
@@ -646,6 +655,8 @@ async def run_auto_label(
                 all_results=[],
                 db_total=db_total,
                 skipped_not_eligible=skipped_not_eligible,
+                skipped_not_remote_ready=skipped_not_remote_ready,
+                skipped_already_labeled=skipped_already_labeled,
             )
         if (data.get("input_payload") or {}).get("resumed_from_job_id"):
             return _compact_job_result(
@@ -1250,4 +1261,6 @@ async def run_auto_label(
         model_failures=model_failures or None,
         db_total=db_total,
         skipped_not_eligible=skipped_not_eligible,
+        skipped_not_remote_ready=skipped_not_remote_ready,
+        skipped_already_labeled=skipped_already_labeled,
     )
