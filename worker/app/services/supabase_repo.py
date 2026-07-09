@@ -371,9 +371,33 @@ def get_project_class_map(project_id: str) -> dict[str, str]:
         name = _coerce_str(c.get("className"), fallback="")
         if not name:
             continue
-        mapping[name] = c["id"]
-        mapping[name.strip().lower()] = c["id"]
+        class_id = c["id"]
+        mapping[name] = class_id
+        mapping[name.strip().lower()] = class_id
+        compact = "".join(name.strip().lower().split())
+        if compact:
+            mapping[compact] = class_id
     return mapping
+
+
+def resolve_project_class_id(class_id_map: dict[str, str], name: str) -> str | None:
+    """Map a detection class name to a project class UUID."""
+    if not name or not class_id_map:
+        return None
+    if name in class_id_map:
+        return class_id_map[name]
+    lower = name.strip().lower()
+    if lower in class_id_map:
+        return class_id_map[lower]
+    compact = "".join(lower.split())
+    if compact in class_id_map:
+        return class_id_map[compact]
+    for key, class_id in class_id_map.items():
+        if not isinstance(key, str):
+            continue
+        if "".join(key.strip().lower().split()) == compact:
+            return class_id
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1137,13 +1161,21 @@ def save_image_annotations(
 
     _sb().table("annotation_objects").delete().eq("image_id", image_id).execute()
     objects = dedupe_objects(objects)
+    class_map = get_project_class_map(project_id)
     if objects:
         rows = [
             {
                 "annotation_id": ann_id,
                 "project_id": project_id,
                 "image_id": image_id,
-                "class_id": obj.get("classId") or obj.get("project_class_id"),
+                "class_id": (
+                    obj.get("classId")
+                    or obj.get("project_class_id")
+                    or resolve_project_class_id(
+                        class_map,
+                        obj.get("className") or obj.get("class_name", ""),
+                    )
+                ),
                 "class_index": obj.get("classIndex", 0),
                 "class_name": obj.get("className") or obj.get("class_name", "unknown"),
                 "x_min": obj["xMin"],
@@ -1164,11 +1196,13 @@ def detections_to_objects(detections: list[dict]) -> list[dict]:
     for det in detections:
         x, y, w, h = det["x"], det["y"], det["width"], det["height"]
         half_w, half_h = w / 2, h / 2
+        class_name = det.get("class_name", "unknown")
+        class_id = det.get("project_class_id")
         out.append(
             {
-                "classId": det.get("project_class_id"),
+                "classId": class_id,
                 "classIndex": det.get("class_index", 0),
-                "className": det.get("class_name", "unknown"),
+                "className": class_name,
                 "xMin": max(0.0, x - half_w),
                 "yMin": max(0.0, y - half_h),
                 "xMax": min(1.0, x + half_w),

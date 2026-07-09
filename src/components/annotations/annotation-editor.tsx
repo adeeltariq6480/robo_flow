@@ -11,6 +11,10 @@ import {
   pixelToNormalized,
   type DisplayRect,
 } from "@/lib/annotations/coords";
+import {
+  findClassForBox,
+  resolveAnnotationBoxes,
+} from "@/lib/annotations/resolve-classes";
 import { Button } from "@/components/ui/button";
 import {
   Check,
@@ -88,9 +92,9 @@ export function AnnotationEditor({
   const dragRef = useRef<DragState | null>(null);
 
   useEffect(() => {
-    setBoxes(initialBoxes);
+    setBoxes(resolveAnnotationBoxes(initialBoxes, classes));
     setSelectedId(null);
-  }, [initialBoxes, imageUrl]);
+  }, [initialBoxes, imageUrl, classes]);
 
   const defaultClass = classes[0];
 
@@ -303,6 +307,9 @@ export function AnnotationEditor({
   });
 
   const selectedBox = boxes.find((b) => b.id === selectedId);
+  const selectedClass = selectedBox
+    ? findClassForBox(selectedBox, classes)
+    : undefined;
 
   return (
     <div className="flex h-[calc(100dvh-11rem)] min-h-[32rem] flex-col gap-4 lg:flex-row">
@@ -374,8 +381,9 @@ export function AnnotationEditor({
               style={{ pointerEvents: mode === "draw" ? "auto" : "none" }}
             >
               {boxes.map((box) => {
-                const cls = classes.find((c) => c.id === box.project_class_id);
+                const cls = findClassForBox(box, classes);
                 const color = cls?.color ?? "#3b82f6";
+                const label = cls?.name ?? box.class_name;
                 const px = normalizedToPixel(box, displayRect);
                 const isSelected = box.id === selectedId;
                 return (
@@ -399,7 +407,7 @@ export function AnnotationEditor({
                       fontWeight={600}
                       style={{ pointerEvents: "none" }}
                     >
-                      {box.class_name}
+                      {label}
                     </text>
                     {isSelected && (
                       <rect
@@ -447,7 +455,7 @@ export function AnnotationEditor({
           ) : (
             <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
               {boxes.map((box) => {
-                const cls = classes.find((c) => c.id === box.project_class_id);
+                const cls = findClassForBox(box, classes);
                 return (
                   <li key={box.id}>
                     <button
@@ -466,7 +474,9 @@ export function AnnotationEditor({
                         className="h-3 w-3 shrink-0 rounded"
                         style={{ backgroundColor: cls?.color ?? "#94a3b8" }}
                       />
-                      <span className="flex-1 truncate">{box.class_name}</span>
+                      <span className="flex-1 truncate">
+                        {cls?.name ?? box.class_name}
+                      </span>
                       <span className="text-xs text-slate-400">
                         {(box.confidence * 100).toFixed(0)}%
                       </span>
@@ -483,11 +493,20 @@ export function AnnotationEditor({
             <label className="block text-sm font-medium text-slate-700">
               Class
             </label>
+            {!selectedClass && (
+              <p className="mt-1 text-xs text-amber-700">
+                Saved name &quot;{selectedBox.class_name}&quot; — pick the matching
+                class below.
+              </p>
+            )}
             <select
-              value={selectedBox.project_class_id ?? ""}
+              value={selectedClass?.id ?? ""}
               onChange={(e) => updateSelectedClass(e.target.value)}
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             >
+              <option value="" disabled>
+                Select class…
+              </option>
               {classes.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
