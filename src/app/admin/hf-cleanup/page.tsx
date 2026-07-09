@@ -31,9 +31,6 @@ export default function HfCleanupPage() {
 
     try {
       const result = await previewHfCleanup(repoId, repoType);
-      if (result.repo_type && result.repo_type !== repoType) {
-        setRepoType(result.repo_type);
-      }
       setFiles(result.files || []);
       setPreviewMessage(result.message ?? null);
     } catch (err) {
@@ -92,9 +89,6 @@ export default function HfCleanupPage() {
               <option value="dataset">dataset</option>
               <option value="model">model</option>
             </select>
-            <p className="mt-2 text-xs text-slate-500">
-              <code>Adeel6480/robo_flow</code> is a <strong>dataset</strong> repo — keep type on dataset.
-            </p>
           </div>
 
           <button

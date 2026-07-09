@@ -164,62 +164,6 @@ def _validate_hf_cleanup_args(repo_id: str | None, repo_type: str | None) -> tup
     return repo_id.strip(), repo_type
 
 
-def _hf_cleanup_error_detail(exc: Exception, repo_id: str, repo_type: str) -> str:
-    text = str(exc).lower()
-    if "401" in text or "unauthorized" in text or "invalid username or password" in text:
-        return (
-            "Hugging Face rejected HF_TOKEN (401). Set a valid HF_TOKEN with Write access on Railway, "
-            "then redeploy the worker."
-        )
-    if "repository not found" in text or "404" in text or "not found" in text:
-        other = "dataset" if repo_type == "model" else "model"
-        return (
-            f"Repo {repo_id} not found as repo_type={repo_type}. "
-            f"If this is Adeel6480/robo_flow, use repo type 'dataset' (not model). "
-            f"You can also try repo_type={other}."
-        )
-    return f"Failed to access {repo_id} (type={repo_type}): {exc}"
-
-
-def _resolve_hf_cleanup_repo_type(api: HfApi, repo_id: str, repo_type: str) -> str:
-    """Pick the HF repo_type that actually exists — fixes model vs dataset mismatch."""
-    if repo_id == settings.dataset_repo_id and settings.dataset_repo_type:
-        configured = settings.dataset_repo_type.strip().lower()
-        if configured in {"dataset", "model"} and configured != repo_type:
-            logger.info(
-                "HF cleanup using configured dataset repo_type=%s for %s (UI sent %s)",
-                configured,
-                repo_id,
-                repo_type,
-            )
-            repo_type = configured
-
-    candidates: list[str] = []
-    for value in (repo_type, "dataset", "model"):
-        if value not in candidates:
-            candidates.append(value)
-
-    last_exc: Exception | None = None
-    for candidate in candidates:
-        try:
-            api.repo_info(repo_id=repo_id, repo_type=candidate)
-            if candidate != repo_type:
-                logger.info(
-                    "HF cleanup auto-resolved repo %s to type=%s (requested %s)",
-                    repo_id,
-                    candidate,
-                    repo_type,
-                )
-            return candidate
-        except Exception as exc:
-            last_exc = exc
-
-    raise HTTPException(
-        status_code=404,
-        detail=_hf_cleanup_error_detail(last_exc or RuntimeError("Repository not found"), repo_id, repo_type),
-    )
-
-
 def _safe_filename(name: str | None, fallback: str = "image.jpg") -> str:
     if not name or not name.strip():
         return fallback
@@ -1298,15 +1242,14 @@ async def preview_hf_cleanup(
     logger.info("cleanup preview started repo=%s type=%s", repo_id, repo_type)
     repo_id, repo_type = _validate_hf_cleanup_args(repo_id, repo_type)
     api = _hf_api()
-    repo_type = _resolve_hf_cleanup_repo_type(api, repo_id, repo_type)
 
     try:
         files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
     except Exception as exc:
-        logger.error("cleanup preview failed repo=%s type=%s: %s", repo_id, repo_type, exc)
+        logger.exception("cleanup preview failed repo=%s type=%s", repo_id, repo_type)
         raise HTTPException(
             status_code=500,
-            detail=_hf_cleanup_error_detail(exc, repo_id, repo_type),
+            detail=f"Failed to list repository files: {exc}",
         ) from exc
 
     logger.info(
@@ -1346,15 +1289,14 @@ async def delete_hf_cleanup(
 
     logger.info("confirmation verified repo=%s type=%s", repo_id, repo_type)
     api = _hf_api()
-    repo_type = _resolve_hf_cleanup_repo_type(api, repo_id, repo_type)
 
     try:
         files = api.list_repo_files(repo_id=repo_id, repo_type=repo_type)
     except Exception as exc:
-        logger.error("cleanup failed listing files repo=%s type=%s: %s", repo_id, repo_type, exc)
+        logger.exception("cleanup failed listing files repo=%s type=%s", repo_id, repo_type)
         raise HTTPException(
             status_code=500,
-            detail=_hf_cleanup_error_detail(exc, repo_id, repo_type),
+            detail=f"Failed to list repository files: {exc}",
         ) from exc
 
     if not files:
@@ -1382,10 +1324,10 @@ async def delete_hf_cleanup(
             commit_message="Cleanup repo contents",
         )
     except Exception as exc:
-        logger.error("cleanup failed repo=%s type=%s: %s", repo_id, repo_type, exc)
+        logger.exception("cleanup failed repo=%s type=%s", repo_id, repo_type)
         raise HTTPException(
             status_code=500,
-            detail=_hf_cleanup_error_detail(exc, repo_id, repo_type),
+            detail=f"Failed to delete repository files: {exc}",
         ) from exc
 
     logger.info("cleanup completed repo=%s type=%s deleted=%d", repo_id, repo_type, len(files))
