@@ -2023,6 +2023,7 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         input_payload={
             "model_ids": model_ids,
             "skip_labeled": body.skip_labeled,
+            "relabel_all": body.relabel_all or body.config.relabel_all,
         },
     )
     return JobCreateResponse(

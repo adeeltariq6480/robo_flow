@@ -197,6 +197,11 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("HF_UPLOAD_ENABLED"),
     )
+    hf_auto_create_repo: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("HF_AUTO_CREATE_REPO"),
+        description="When false, worker never calls HF create_repo (prevents duplicate repos)",
+    )
     auto_commit_after_upload: bool = Field(
         default=False,
         validation_alias=AliasChoices("AUTO_COMMIT_AFTER_UPLOAD"),

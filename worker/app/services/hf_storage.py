@@ -47,18 +47,36 @@ def _ensure_repo(repo_id: str, repo_type: str) -> None:
             "HF_MODEL_REPO (or HF_USERNAME) in the backend env."
         )
 
+    if settings.hf_auto_create_repo:
+        try:
+            _api().create_repo(
+                repo_id=repo_id,
+                repo_type=repo_type,
+                private=True,
+                exist_ok=True,
+            )
+        except HfHubHTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 409:
+                logger.info("HF repo already exists at %s (%s) — continuing", repo_id, repo_type)
+                return
+            raise
+        return
+
     try:
-        _api().create_repo(
-            repo_id=repo_id,
-            repo_type=repo_type,
-            private=True,
-            exist_ok=True,
-        )
-    except HfHubHTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 409:
-            logger.info("HF repo already exists at %s — continuing", repo_id)
-            return
-        raise
+        _api().repo_info(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        detail = str(exc).lower()
+        if "404" in detail or "not found" in detail or "repository not found" in detail:
+            raise RuntimeError(
+                f"Hugging Face repo not found: {repo_id} (type={repo_type}). "
+                "Create it once on huggingface.co, then set Railway env to that exact repo. "
+                "For a single repo use HF_DATASET_REPO=HF_MODEL_REPO=Adeel6480/robo_flow and "
+                "HF_DATASET_REPO_TYPE=HF_MODEL_REPO_TYPE=model. "
+                "Set HF_AUTO_CREATE_REPO=true only if you want the worker to auto-create repos."
+            ) from exc
+        raise RuntimeError(
+            f"Could not access Hugging Face repo {repo_id} ({repo_type}): {exc}"
+        ) from exc
 
 
 def _temp_dir() -> Path:

@@ -12,6 +12,7 @@ from app.models.schemas import DetectionBox, JobConfig
 from app.services import hf_storage as file_storage
 from app.services.detection_merge import merge_detections
 from app.services.supabase_repo import (
+    attach_annotation_fields_to_images,
     classify_queue,
     detections_to_objects,
     get_model,
@@ -280,6 +281,72 @@ def _vercel_remote_ready(file_row: dict) -> bool:
     )
 
 
+_SKIP_IMAGE_STATUS = frozenset({
+    "labeled",
+    "reviewed",
+    "approved",
+    "rejected",
+    "auto_labeled",
+})
+_SKIP_REVIEW_STATUS = frozenset({"approved", "rejected", "reviewed"})
+_SKIP_ANNOTATION_STATUS = frozenset({"labeled", "active", "completed"})
+
+
+def _norm_status(value: object) -> str:
+    if value is None or value == "":
+        return ""
+    return str(value).strip().lower().replace("-", "_")
+
+
+def _truthy_flag(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return bool(value)
+
+
+def _needs_auto_label(row: dict) -> bool:
+    """Return True when an image should be included in a default auto-label run."""
+    row = _normalise_image_row(row)
+
+    image_status = _norm_status(_get_first(row, "status"))
+    if image_status in _SKIP_IMAGE_STATUS:
+        return False
+
+    review_status = _norm_status(_get_first(row, "reviewStatus", "review_status"))
+    if review_status in _SKIP_REVIEW_STATUS:
+        return False
+
+    annotation_status = _norm_status(
+        _get_first(row, "annotationStatus", "annotation_status")
+    )
+    if annotation_status in _SKIP_ANNOTATION_STATUS:
+        return False
+
+    if _get_first(row, "autoLabeledAt", "auto_labeled_at"):
+        return False
+
+    return True
+
+
+def _relabel_all_enabled(data: dict, config: JobConfig) -> bool:
+    payload = data.get("input_payload") or {}
+    if _truthy_flag(payload.get("relabel_all")):
+        return True
+
+    raw_config = data.get("config")
+    if isinstance(raw_config, dict) and _truthy_flag(raw_config.get("relabel_all")):
+        return True
+
+    if _truthy_flag(getattr(config, "relabel_all", False)):
+        return True
+
+    return False
+
+
 def _local_image_exists(file_row: dict) -> bool:
     row = _normalise_image_row(file_row)
     local_path = _image_local_path(row)
@@ -483,6 +550,7 @@ async def run_auto_label(
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
 
     db_file_list = [_normalise_image_row(row) for row in list_dataset_images(project_id, dataset_id)]
+    attach_annotation_fields_to_images(project_id, db_file_list)
     db_total = len(db_file_list)
 
     logger.info(
@@ -517,27 +585,38 @@ async def run_auto_label(
                 _normalise_image_row(row)
                 for row in list_dataset_images(project_id, dataset_id)
             ]
+            attach_annotation_fields_to_images(project_id, db_file_list)
         gc.collect()
 
-    file_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
+    eligible_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
         project_id, dataset_id, db_file_list
     )
     remote_image_mode = _remote_image_mode()
+    relabel_all = _relabel_all_enabled(data, config)
 
-    if (data.get("input_payload") or {}).get("resumed_from_job_id") or (
-        data.get("input_payload") or {}
-    ).get("skip_labeled"):
-        before_resume_filter = len(file_list)
-        file_list = [
-            f
-            for f in file_list
-            if not (f.get("autoLabeledAt") or f.get("auto_labeled_at"))
-        ]
-        skipped = before_resume_filter - len(file_list)
-        if skipped:
-            logger.info("Auto-label skipped %d already labeled image(s)", skipped)
+    if remote_image_mode:
+        ready_list = [f for f in eligible_list if _vercel_remote_ready(f)]
+    else:
+        ready_list = list(eligible_list)
+
+    ready_before_filter = len(ready_list)
+    if relabel_all:
+        file_list = ready_list
+        skipped_already_labeled = 0
+    else:
+        file_list = [f for f in ready_list if _needs_auto_label(f)]
+        skipped_already_labeled = ready_before_filter - len(file_list)
 
     total = len(file_list)
+
+    logger.info(
+        "Auto-label filtering: db_total=%d ready_before_filter=%d skipped_already_labeled=%d final_total=%d relabel_all=%s",
+        db_total,
+        ready_before_filter,
+        skipped_already_labeled,
+        total,
+        relabel_all,
+    )
 
     logger.info(
         "Auto-label deployment config: DEPLOY_TARGET=%s LOCAL_STORAGE_ENABLED=%s AUTO_LABEL_USE_LOCAL_IMAGES=%s",
@@ -557,6 +636,17 @@ async def run_auto_label(
     )
 
     if total == 0:
+        if skipped_already_labeled > 0 and not relabel_all:
+            return _compact_job_result(
+                dataset_id=dataset_id,
+                model_ids=model_ids,
+                total=0,
+                labeled=0,
+                failed=0,
+                all_results=[],
+                db_total=db_total,
+                skipped_not_eligible=skipped_not_eligible,
+            )
         if (data.get("input_payload") or {}).get("resumed_from_job_id"):
             return _compact_job_result(
                 dataset_id=dataset_id,

@@ -570,6 +570,43 @@ def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
     return [_image_row(r) for r in res.data or []]
 
 
+def attach_annotation_fields_to_images(project_id: str, images: list[dict]) -> None:
+    """Merge annotation review/label state onto image rows for auto-label filtering."""
+    if not images:
+        return
+
+    image_ids = [str(img["id"]) for img in images if img.get("id")]
+    if not image_ids:
+        return
+
+    ann_res = (
+        _sb()
+        .table("annotations")
+        .select("image_id, status, review_status, auto_labeled_at")
+        .eq("project_id", project_id)
+        .in_("image_id", image_ids)
+        .execute()
+    )
+    by_image = {str(row["image_id"]): row for row in ann_res.data or []}
+
+    for img in images:
+        ann = by_image.get(str(img.get("id")))
+        if not ann:
+            continue
+        review_status = ann.get("review_status")
+        annotation_status = ann.get("status")
+        auto_labeled_at = ann.get("auto_labeled_at")
+        if review_status:
+            img["reviewStatus"] = review_status
+            img["review_status"] = review_status
+        if annotation_status:
+            img["annotationStatus"] = annotation_status
+            img["annotation_status"] = annotation_status
+        if auto_labeled_at:
+            img["autoLabeledAt"] = auto_labeled_at
+            img["auto_labeled_at"] = auto_labeled_at
+
+
 def get_image(project_id: str, image_id: str) -> dict | None:
     res = (
         _sb()

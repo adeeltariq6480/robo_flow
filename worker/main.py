@@ -30,8 +30,21 @@ async def lifespan(app: FastAPI):
         logger.info("HF_TOKEN present=%s", bool(settings.hf_token and settings.hf_token.strip()))
         logger.info("HF_DATASET_REPO=%s", settings.dataset_repo_id or None)
         logger.info("HF_MODEL_REPO=%s", settings.model_repo_id or None)
-        logger.info("Selected repo_type for image upload: %s", "dataset")
-        logger.info("Selected repo_type for model upload: %s", "model")
+        logger.info("HF dataset upload repo_type=%s", settings.dataset_repo_type)
+        logger.info("HF model upload repo_type=%s", settings.model_repo_type)
+        logger.info("HF_AUTO_CREATE_REPO=%s", settings.hf_auto_create_repo)
+        if (
+            settings.dataset_repo_id
+            and settings.model_repo_id
+            and settings.dataset_repo_id != settings.model_repo_id
+        ):
+            logger.warning(
+                "Two different HF repos configured (dataset=%s, model=%s). "
+                "This can create extra repos on Hugging Face. "
+                "Use the same repo for both, e.g. Adeel6480/robo_flow.",
+                settings.dataset_repo_id,
+                settings.model_repo_id,
+            )
         # YOLO runtime settings
         import os
         logger.info("ENABLE_YOLOV5_RUNTIME=%s", os.getenv("ENABLE_YOLOV5_RUNTIME", "false"))

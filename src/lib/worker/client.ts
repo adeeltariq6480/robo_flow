@@ -9,6 +9,7 @@ export interface JobConfig {
   iou?: number;
   class_name_map?: Record<string, string>;
   save_to_dataset?: boolean;
+  relabel_all?: boolean;
 }
 
 export interface JobResponse {
@@ -130,6 +131,7 @@ export async function submitAutoLabel(body: {
   model_ids: string[];
   dataset_id: string;
   skip_labeled?: boolean;
+  relabel_all?: boolean;
   config?: JobConfig;
 }) {
   return workerFetch<{ job_id: string; queue_name: string; message: string }>(

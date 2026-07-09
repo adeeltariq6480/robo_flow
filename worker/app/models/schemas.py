@@ -46,6 +46,10 @@ class JobConfig(BaseModel):
         default=True,
         description="For auto_label: persist annotations to dataset_files",
     )
+    relabel_all: bool = Field(
+        default=False,
+        description="For auto_label: re-process images that are already labeled/reviewed",
+    )
 
 
 class TestRunRequest(BaseModel):
@@ -62,6 +66,7 @@ class AutoLabelRequest(BaseModel):
     model_id: str | None = None
     model_ids: list[str] = Field(default_factory=list, max_length=10)
     skip_labeled: bool = False
+    relabel_all: bool = False
     config: JobConfig = Field(default_factory=JobConfig)
 
     @model_validator(mode="after")
