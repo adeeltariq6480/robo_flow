@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 ENABLE_YOLOV5_RUNTIME = os.getenv("ENABLE_YOLOV5_RUNTIME", "false").lower() == "true"
 ENABLE_YOLOV7_RUNTIME = os.getenv("ENABLE_YOLOV7_RUNTIME", "false").lower() == "true"
 ENABLE_ONNX_RUNTIME = os.getenv("ENABLE_ONNX_RUNTIME", "true").lower() == "true"
+UNIVERSAL_MODEL_LOAD = os.getenv("UNIVERSAL_MODEL_LOAD", "true").lower() != "false"
 
 
 def _low_memory_mode() -> bool:
@@ -106,6 +107,10 @@ class UniversalYOLOModel:
 
     def load(self) -> None:
         """Load the model using the appropriate runtime."""
+        if UNIVERSAL_MODEL_LOAD:
+            self._load_universal_chain()
+            return
+
         if not self.model_type_info.get("can_process"):
             raise RuntimeError(
                 f"Model cannot be processed: {self.model_type_info.get('message', 'Unknown error')}"
@@ -251,6 +256,71 @@ class UniversalYOLOModel:
             if _is_incompatible_runtime_error(exc):
                 _raise_if_incompatible(self.model_path, exc)
             raise RuntimeError(f"Model load failed: {exc}") from exc
+
+    def _load_universal_chain(self) -> None:
+        """Try every compatible runtime until one loads — works for custom + multi-model jobs."""
+        if self.model is not None:
+            return
+
+        path = Path(self.model_path)
+        if not path.exists():
+            raise RuntimeError(f"Model file not found: {self.model_path}")
+
+        suffix = path.suffix.lower()
+        if suffix not in {".pt", ".pth", ".onnx"}:
+            raise RuntimeError(
+                f"Unsupported model format {suffix}. Supported: .pt, .pth, .onnx"
+            )
+
+        attempts: list[tuple[str, str, Any]] = []
+        if suffix == ".onnx":
+            if ENABLE_ONNX_RUNTIME:
+                attempts.append(("onnx", "onnxruntime", self._load_onnx))
+        else:
+            attempts.append(("ultralytics", "ultralytics", self._load_ultralytics))
+            if ENABLE_YOLOV7_RUNTIME or UNIVERSAL_MODEL_LOAD:
+                attempts.append(("yolov7_legacy", "yolov7", self._load_yolov7))
+            if ENABLE_YOLOV5_RUNTIME or UNIVERSAL_MODEL_LOAD:
+                attempts.append(("yolov5_legacy", "yolov5", self._load_yolov5))
+
+        if not attempts:
+            raise RuntimeError("No model runtimes enabled for this file type")
+
+        errors: list[str] = []
+        for model_type, loader_type, loader_fn in attempts:
+            self.model = None
+            _clear_runtime_memory()
+            try:
+                logger.info(
+                    "Universal load trying %s for %s",
+                    loader_type,
+                    self.model_path,
+                )
+                loader_fn()
+                self.model_type = model_type
+                self.loader_type = loader_type
+                logger.info(
+                    "Universal load succeeded: type=%s loader=%s path=%s",
+                    self.model_type,
+                    self.loader_type,
+                    self.model_path,
+                )
+                return
+            except IncompatibleModelError:
+                raise
+            except Exception as exc:
+                msg = str(exc).strip() or type(exc).__name__
+                if "disabled" in msg.lower():
+                    logger.debug("Skipping disabled runtime %s: %s", loader_type, msg)
+                    continue
+                logger.warning("Universal load %s failed: %s", loader_type, msg)
+                errors.append(f"{loader_type}: {msg}")
+
+        raise RuntimeError(
+            "Could not load model with any runtime. Tried: "
+            + "; ".join(errors[:5])
+            + ". Upload .pt (YOLOv8/v11) or .onnx for best results on Railway."
+        )
 
     def _load_ultralytics(self) -> None:
         """Load YOLOv8/v11 model using ultralytics."""

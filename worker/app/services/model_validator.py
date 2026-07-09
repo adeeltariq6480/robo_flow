@@ -5,7 +5,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MIN_MODEL_SIZE_MB = 1
+MIN_MODEL_SIZE_MB = 0.05
 
 
 def detect_model_type(model_path: str) -> dict:
@@ -64,17 +64,17 @@ def detect_model_type(model_path: str) -> dict:
             "model_type": "onnx",
             "loader": "onnxruntime",
             "can_process": True,
-            "message": "ONNX model detected. Use onnxruntime loader.",
+            "message": "ONNX model — universal loader will use onnxruntime.",
         }
-    
-    if suffix != ".pt":
+
+    if suffix not in {".pt", ".pth"}:
         logger.warning("Unsupported model extension: %s", suffix)
         return {
             "valid": False,
             "model_type": "invalid",
             "loader": "none",
             "can_process": False,
-            "message": f"Unsupported model format: {suffix}. Supported: .pt, .onnx",
+            "message": f"Unsupported model format: {suffix}. Supported: .pt, .pth, .onnx",
         }
     
     # Lightweight inspection to avoid loading full runtimes (prevents double-loading)
@@ -122,14 +122,14 @@ def detect_model_type(model_path: str) -> dict:
             "message": "Likely YOLOv5 legacy model (heuristic).",
         }
 
-    # Unknown .pt — try ultralytics first (lighter than torch.hub on Railway).
-    logger.info("Model heuristics inconclusive, defaulting to ultralytics for: %s", model_path)
+    # Unknown checkpoint — universal loader tries ultralytics → yolov7 → yolov5.
+    logger.info("Model heuristics inconclusive, universal chain for: %s", model_path)
     return {
         "valid": True,
-        "model_type": "ultralytics_latest",
+        "model_type": "universal",
         "loader": "ultralytics",
         "can_process": True,
-        "message": "Unknown .pt checkpoint — will try ultralytics runtime first.",
+        "message": "Custom checkpoint — universal loader will try all compatible runtimes.",
     }
 
 

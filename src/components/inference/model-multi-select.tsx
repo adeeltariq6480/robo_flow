@@ -101,9 +101,9 @@ export function ModelMultiSelect({
         return m && isLikelyLegacyModelName(m.name);
       }) && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Legacy/custom models (jaise pepsi.pt) Railway par load nahi hote. Sirf{" "}
-          <strong>yolo11n</strong>, <strong>yolov8</strong> jaisi YOLOv8/v11 weights select
-          karein, ya model ko YOLOv8/v11 mein re-export karke dubara upload karein.
+          Kuch purane models (YOLOv5/v7) Railway par slow ya heavy ho sakte hain. Worker
+          universal loader se try karega — best results ke liye YOLOv8/v11 .pt ya ONNX prefer
+          karein.
         </p>
       )}
 

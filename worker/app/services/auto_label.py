@@ -1116,8 +1116,9 @@ async def run_auto_label(
         raise ValueError(
             "No models could be loaded — auto-label needs at least one compatible model. "
             f"Failed: {hint}. "
-            "Use YOLOv8/v11 (.pt) or ONNX weights. Old YOLOv5/custom checkpoints (e.g. pepsi.pt) "
-            "often fail on Railway — deselect them or re-export and re-upload."
+            "Use YOLOv8/v11 (.pt), .pth, or ONNX. Universal loader tries every compatible "
+            "runtime per model. Models missing on Hugging Face must be uploaded once from "
+            "the Models page. Very old YOLOv5/v7 may be slow on Railway."
         )
 
     # --- Merge detections and save to Firestore ---

@@ -17,7 +17,7 @@ import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
 import { Tags, ArrowRight, RotateCcw, Square, Play } from "lucide-react";
 import Link from "next/link";
-import { defaultLabelModelIds, isLikelyLegacyModelName } from "@/lib/model-compatibility";
+import { defaultLabelModelIds } from "@/lib/model-compatibility";
 import {
   clearActiveInferenceJob,
   readActiveInferenceJob,
@@ -113,18 +113,6 @@ export function AutoLabelPanel({
   async function handleRun(skipLabeled = false) {
     if (selectedModelIds.length === 0 || !datasetId) {
       setError("Select at least one model and a dataset");
-      return;
-    }
-
-    const allLegacy = selectedModelIds.every((id) => {
-      const m = models.find((x) => x.id === id);
-      return m && isLikelyLegacyModelName(m.name);
-    });
-    if (allLegacy) {
-      setError(
-        "Selected models Railway par compatible nahi (purane YOLOv5/custom). " +
-          "yolo11n ya yolov8 upload karein, ya pepsi.pt ko YOLOv8/v11 mein convert karke dubara upload karein."
-      );
       return;
     }
 

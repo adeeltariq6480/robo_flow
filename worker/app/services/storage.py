@@ -6,10 +6,9 @@ import os
 import threading
 from pathlib import Path
 
-from huggingface_hub.utils import HfHubHTTPError
-
 from app.config import settings
 from app.services import hf_storage as file_storage
+from app.services.model_resolver import resolve_model_weights
 from app.services.supabase_repo import (
     get_image,
     get_model,
@@ -269,6 +268,7 @@ def download_model(model_id: str, project_id: str) -> Path:
 
     repo = _row_model_hf_repo(row)
     path = _row_hf_path(row)
+    model_name = str(row.get("modelName") or row.get("model_name") or "")
 
     if not repo or not path:
         raise ValueError(f"Model {model_id} has no storage location")
@@ -287,37 +287,15 @@ def download_model(model_id: str, project_id: str) -> Path:
         )
 
         existing_path = _resolve_existing_model_path(project_id, local_name)
-        if existing_path is not None:
-            return existing_path
-
-        logger.info("Hugging Face model download started repo=%s path=%s", repo, path)
-
-        try:
-            downloaded = file_storage.download_to_local(
-                repo,
-                path,
-                repo_type=settings.model_repo_type,
-                local_name=project_local_name,
-            )
-
-        except HfHubHTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-
-            if status == 404:
-                logger.warning("Hugging Face model missing 404 repo=%s path=%s", repo, path)
-                raise FileNotFoundError(
-                    "Model file not found locally or on Hugging Face. Please re-upload this model."
-                ) from exc
-
-            logger.exception("Model download failed with full error for %s", model_id)
-            raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
-
-        except Exception as exc:
-            logger.exception("File download failed with full error for %s", model_id)
-            raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
-
-        logger.info("Model download completed: %s", downloaded)
-        return downloaded
+        return resolve_model_weights(
+            project_id=project_id,
+            model_id=model_id,
+            model_name=model_name,
+            hf_repo=repo,
+            hf_path=path,
+            local_name=local_name,
+            existing_local=existing_path,
+        )
 
 
 def resolve_model_local_path(model_id: str, project_id: str) -> Path:
