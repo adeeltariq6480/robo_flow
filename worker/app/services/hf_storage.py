@@ -174,6 +174,57 @@ def _repo_file_exists(repo_id: str, repo_type: str, path_in_repo: str) -> bool:
     return path_in_repo in set(files)
 
 
+def _list_repo_file_set(repo_id: str, repo_type: str) -> set[str]:
+    return set(_api().list_repo_files(repo_id=repo_id, repo_type=repo_type))
+
+
+def _is_unchanged_hf_upload(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return "no files have been modified" in detail or "empty commit" in detail
+
+
+def _dataset_images_repo_folder(project_id: str, dataset_id: str) -> str:
+    return f"datasets/{project_id}/{dataset_id}/images"
+
+
+def _filter_new_dataset_image_items(
+    project_id: str,
+    dataset_id: str,
+    items: list[tuple[str, bytes]],
+) -> tuple[list[tuple[str, bytes]], int]:
+    """Skip images whose HF path already exists — avoids empty commits."""
+    if not items:
+        return [], 0
+    repo_id = settings.dataset_repo_id
+    repo_folder = _dataset_images_repo_folder(project_id, dataset_id)
+    try:
+        existing = _list_repo_file_set(repo_id, settings.dataset_repo_type)
+    except Exception as exc:
+        logger.warning(
+            "Could not list HF repo %s for upload dedupe: %s — uploading all items",
+            repo_id,
+            _format_hf_error(exc),
+        )
+        return items, 0
+
+    needed: list[tuple[str, bytes]] = []
+    skipped = 0
+    for file_name, data in items:
+        path = f"{repo_folder}/{file_name}"
+        if path in existing:
+            skipped += 1
+            continue
+        needed.append((file_name, data))
+    if skipped:
+        logger.info(
+            "Skipping %d/%d images already on HF repo %s",
+            skipped,
+            len(items),
+            repo_id,
+        )
+    return needed, skipped
+
+
 def _upload_with_retry(operation_name: str, fn):
     max_attempts = 5
     delay = 2.0
@@ -214,6 +265,12 @@ def _upload_with_retry(operation_name: str, fn):
                 return None
             raise RuntimeError(_format_hf_error(exc)) from exc
         except Exception as exc:
+            if _is_unchanged_hf_upload(exc):
+                logger.info(
+                    "HF upload produced no changes for %s; treating as already uploaded",
+                    operation_name,
+                )
+                return None
             last_exc = exc
             if attempt < max_attempts - 1:
                 wait_for = min(60, delay)
@@ -362,7 +419,21 @@ def upload_dataset_images_batch(
     repo_id = settings.dataset_repo_id
     _ensure_repo(repo_id, settings.dataset_repo_type)
 
-    repo_folder = f"datasets/{project_id}/{dataset_id}/images"
+    items, skipped_existing = _filter_new_dataset_image_items(project_id, dataset_id, items)
+    if not items:
+        logger.info(
+            "All images already on HF for dataset %s — no commit needed (%d skipped)",
+            dataset_id,
+            skipped_existing,
+        )
+        return {
+            "hfRepo": repo_id,
+            "count": 0,
+            "skipped": skipped_existing,
+            "already_synced": True,
+        }
+
+    repo_folder = _dataset_images_repo_folder(project_id, dataset_id)
     used_names: set[str] = set()
     local_names: list[str] = []
 
@@ -385,13 +456,15 @@ def upload_dataset_images_batch(
 
             _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
 
-    _verify_repo_files(
-        repo_id,
-        settings.dataset_repo_type,
-        [f"{repo_folder}/{local_name}" for local_name in local_names],
-    )
+    verify_paths = [f"{repo_folder}/{name}" for name in local_names]
+    _verify_repo_files(repo_id, settings.dataset_repo_type, verify_paths)
 
-    return {"hfRepo": repo_id, "count": len(items), "localNames": local_names}
+    return {
+        "hfRepo": repo_id,
+        "count": len(items),
+        "skipped": skipped_existing,
+        "localNames": local_names,
+    }
 
 
 def upload_dataset_images_from_folder(
@@ -406,24 +479,64 @@ def upload_dataset_images_from_folder(
         return {"hfRepo": settings.dataset_repo_id, "count": count}
     repo_id = settings.dataset_repo_id
     _ensure_repo(repo_id, settings.dataset_repo_type)
-    repo_folder = f"datasets/{project_id}/{dataset_id}/images"
-    with _hf_commit_lock:
-        def _do_upload():
-            _api().upload_folder(
-                folder_path=folder_path,
-                repo_id=repo_id,
-                repo_type=settings.dataset_repo_type,
-                path_in_repo=repo_folder,
-                commit_message=f"Upload {count} images to dataset {dataset_id}",
-            )
+    repo_folder = _dataset_images_repo_folder(project_id, dataset_id)
+    folder = Path(folder_path)
+    local_files = [p for p in folder.iterdir() if p.is_file()] if folder.exists() else []
+    if not local_files:
+        return {"hfRepo": repo_id, "count": 0, "already_synced": True}
 
-        _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+    try:
+        existing = _list_repo_file_set(repo_id, settings.dataset_repo_type)
+    except Exception as exc:
+        logger.warning("HF list failed during finalize dedupe: %s", _format_hf_error(exc))
+        existing = set()
+
+    to_upload = [
+        p
+        for p in local_files
+        if f"{repo_folder}/{p.name}" not in existing
+    ]
+    skipped = len(local_files) - len(to_upload)
+    if not to_upload:
+        logger.info(
+            "Finalize upload: all %d images already on HF repo %s — no commit needed",
+            len(local_files),
+            repo_id,
+        )
+        return {
+            "hfRepo": repo_id,
+            "count": 0,
+            "skipped": skipped,
+            "already_synced": True,
+        }
+
+    with tempfile.TemporaryDirectory(dir=_temp_dir()) as tmp:
+        tmp_path = Path(tmp)
+        for src in to_upload:
+            (tmp_path / src.name).write_bytes(src.read_bytes())
+
+        with _hf_commit_lock:
+            def _do_upload():
+                _api().upload_folder(
+                    folder_path=str(tmp_path),
+                    repo_id=repo_id,
+                    repo_type=settings.dataset_repo_type,
+                    path_in_repo=repo_folder,
+                    commit_message=f"Upload {len(to_upload)} images to dataset {dataset_id}",
+                )
+
+            _upload_with_retry(f"upload_folder:{repo_folder}", _do_upload)
+
     _verify_repo_files(
         repo_id,
         settings.dataset_repo_type,
-        [f"{repo_folder}/{local_file.name}" for local_file in Path(folder_path).iterdir() if local_file.is_file()],
+        [f"{repo_folder}/{p.name}" for p in to_upload],
     )
-    return {"hfRepo": repo_id, "count": count}
+    return {
+        "hfRepo": repo_id,
+        "count": len(to_upload),
+        "skipped": skipped,
+    }
 
 
 def upload_labels_from_folder(

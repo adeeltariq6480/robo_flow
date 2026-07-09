@@ -1555,7 +1555,13 @@ async def finalize_upload(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        res = await asyncio.to_thread(file_storage.upload_dataset_images_from_folder, project_id, dataset_id, str(folder), sum(1 for _ in folder.iterdir() if _.is_file()))
+        res = await asyncio.to_thread(
+            file_storage.upload_dataset_images_from_folder,
+            project_id,
+            dataset_id,
+            str(folder),
+            sum(1 for _ in folder.iterdir() if _.is_file()),
+        )
     except Exception as exc:
         logger.exception("Finalize upload failed for %s/%s: %s", project_id, dataset_id, exc)
         # mark pending for retry
@@ -1579,7 +1585,15 @@ async def finalize_upload(project_id: str, dataset_id: str, _: None = Depends(ve
         except Exception:
             logger.exception("Failed to mark image synced %s", img.get("id"))
 
-    return {"ok": True, "commit": res}
+    return {
+        "ok": True,
+        "commit": res,
+        "message": (
+            "All images were already on Hugging Face — no new commit was needed."
+            if res.get("already_synced")
+            else f"Uploaded {res.get('count', 0)} image(s) to Hugging Face."
+        ),
+    }
 
 
 @api_router.post("/datasets/{project_id}/{dataset_id}/finalize-labels")
