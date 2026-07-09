@@ -53,11 +53,14 @@ def _class_row(row: dict) -> dict:
 
 
 def _dataset_row(row: dict) -> dict:
+    total = row.get("total_images")
+    if total is None:
+        total = row.get("file_count", 0)
     return {
         "id": str(row["id"]),
         "name": row["name"],
         "description": row.get("description"),
-        "totalImages": row.get("total_images", 0),
+        "totalImages": total,
         "totalSizeBytes": row.get("total_size_bytes", 0),
         "hfRepo": "datasets",
         "hfFolderPath": row.get("storage_folder_path"),
@@ -379,7 +382,9 @@ def update_dataset(project_id: str, dataset_id: str, fields: dict) -> None:
         payload["total_size_bytes"] = fields["totalSizeBytes"]
     if "hfFolderPath" in fields:
         payload["storage_folder_path"] = fields["hfFolderPath"]
-    if payload:
+    if not payload:
+        return
+    try:
         (
             _sb()
             .table("datasets")
@@ -388,6 +393,32 @@ def update_dataset(project_id: str, dataset_id: str, fields: dict) -> None:
             .eq("project_id", project_id)
             .execute()
         )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "column" not in message or "does not exist" not in message:
+            raise
+        fallback: dict = {}
+        if "total_images" in payload:
+            fallback["file_count"] = payload["total_images"]
+        if "total_size_bytes" in payload:
+            fallback["total_size_bytes"] = payload["total_size_bytes"]
+        if fallback:
+            (
+                _sb()
+                .table("datasets")
+                .update(fallback)
+                .eq("id", dataset_id)
+                .eq("project_id", project_id)
+                .execute()
+            )
+        elif "storage_folder_path" in payload:
+            logger.warning(
+                "datasets.storage_folder_path missing; skipped folder path update for %s/%s",
+                project_id,
+                dataset_id,
+            )
+        else:
+            raise
 
 
 def count_dataset_images(project_id: str, dataset_id: str) -> int:
@@ -404,14 +435,22 @@ def count_dataset_images(project_id: str, dataset_id: str) -> int:
 
 def recount_dataset_images(project_id: str, dataset_id: str) -> int:
     total = count_dataset_images(project_id, dataset_id)
-    update_dataset(
-        project_id,
-        dataset_id,
-        {
-            "totalImages": total,
-            "hfFolderPath": f"datasets/{project_id}/{dataset_id}",
-        },
-    )
+    try:
+        update_dataset(
+            project_id,
+            dataset_id,
+            {
+                "totalImages": total,
+                "hfFolderPath": f"datasets/{project_id}/{dataset_id}",
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not update dataset image count project=%s dataset=%s: %s",
+            project_id,
+            dataset_id,
+            exc,
+        )
     return total
 
 
@@ -448,11 +487,31 @@ def create_image(project_id: str, dataset_id: str, data: dict) -> dict:
         res = _sb().table("images").insert(payload).execute()
     except Exception as exc:
         message = str(exc).lower()
+        if "duplicate" in message or "23505" in message or "unique" in message:
+            existing = (
+                _sb()
+                .table("images")
+                .select("*")
+                .eq("project_id", project_id)
+                .eq("dataset_id", dataset_id)
+                .eq("hf_path", payload["hf_path"])
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows:
+                logger.info(
+                    "Image already exists for hf_path=%s — returning existing row",
+                    payload["hf_path"],
+                )
+                return _image_row(rows[0])
         if "column" in message and "does not exist" in message:
             fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}}
             res = _sb().table("images").insert(fallback).execute()
         else:
             raise
+    if not res.data:
+        raise RuntimeError("Supabase insert returned no image row")
     return _image_row(res.data[0])
 
 

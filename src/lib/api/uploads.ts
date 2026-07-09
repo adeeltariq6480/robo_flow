@@ -7,6 +7,10 @@
 
 import { API_BASE_URL } from "@/lib/api/client";
 
+/** Optional — only if Railway WORKER_API_KEY is set (same value on Vercel). */
+const BROWSER_WORKER_API_KEY =
+  process.env.NEXT_PUBLIC_WORKER_API_KEY ?? "";
+
 /** Small models: single request to worker. Larger: chunked upload → HF. */
 const MODEL_WORKER_MAX_BYTES = 25 * 1024 * 1024;
 const MODEL_CHUNK_SIZE = 8 * 1024 * 1024;
@@ -80,6 +84,9 @@ function uploadForm<T>(
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE_URL}${path}`);
+    if (BROWSER_WORKER_API_KEY) {
+      xhr.setRequestHeader("X-Worker-Key", BROWSER_WORKER_API_KEY);
+    }
     xhr.timeout = timeoutMs;
 
     const onAbort = () => {
@@ -106,10 +113,20 @@ function uploadForm<T>(
 
       let message = `Upload failed (${xhr.status})`;
       try {
-        const body = JSON.parse(xhr.responseText);
+        const body = JSON.parse(xhr.responseText) as { detail?: string };
         if (typeof body?.detail === "string") message = body.detail;
+        if (xhr.status === 401) {
+          message =
+            "Worker rejected API key (401). Remove WORKER_API_KEY on Railway, or set the same value as NEXT_PUBLIC_WORKER_API_KEY on Vercel.";
+        }
+        if (xhr.status === 507) {
+          message = `${message} Check Railway volume is mounted at /data.`;
+        }
       } catch {
-        /* keep default */
+        if (xhr.status === 401) {
+          message =
+            "Worker rejected API key (401). Remove WORKER_API_KEY on Railway, or set the same value as NEXT_PUBLIC_WORKER_API_KEY on Vercel.";
+        }
       }
       if (xhr.status === 404 && path.includes("upload-model")) {
         message =

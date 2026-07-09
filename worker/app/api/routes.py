@@ -168,9 +168,44 @@ def _safe_local_name(name: str, used: set[str]) -> str:
 
 
 def _dataset_image_local_dir(project_id: str, dataset_id: str) -> Path:
-    base = settings.dataset_files_dir / project_id / dataset_id / "images"
+    base = _writable_dataset_root() / project_id / dataset_id / "images"
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _writable_dataset_root() -> Path:
+    """Pick a writable dataset root — Railway /data volume or /tmp fallback."""
+    candidates = [
+        settings.dataset_files_dir,
+        Path("/tmp") / "robo-flow" / "datasets",
+    ]
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            if candidate != settings.dataset_files_dir:
+                logger.warning(
+                    "Using fallback dataset storage %s (configured %s not writable)",
+                    candidate,
+                    settings.dataset_files_dir,
+                )
+            return candidate
+        except OSError as exc:
+            logger.warning("Dataset dir not writable %s: %s", candidate, exc)
+    raise HTTPException(
+        status_code=507,
+        detail=(
+            "Worker has no writable dataset storage. Attach a Railway volume at "
+            f"{settings.dataset_files_dir} or set DATASET_LOCAL_DIR to a writable path."
+        ),
+    )
 
 
 def _persist_dataset_image_locally(project_id: str, dataset_id: str, file_name: str, data: bytes) -> Path:
@@ -625,6 +660,53 @@ async def upload_images(
     upload_session_id: str | None = Form(default=None),
     finalize_session: bool = Form(default=False),
     _: None = Depends(verify_api_key),
+):
+    try:
+        return await _upload_images_impl(
+            project_id=project_id,
+            dataset_id=dataset_id,
+            files=files,
+            upload_session_id=upload_session_id,
+            finalize_session=finalize_session,
+        )
+    except HTTPException:
+        raise
+    except OSError as exc:
+        logger.exception(
+            "Disk error during upload project=%s dataset=%s: %s",
+            project_id,
+            dataset_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Worker storage error: {exc}. "
+                "Attach a Railway volume and set DATASET_LOCAL_DIR=/data/datasets, "
+                "or ensure /tmp is writable."
+            ),
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "Upload failed project=%s dataset=%s files=%d: %s",
+            project_id,
+            dataset_id,
+            len(files),
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Image upload failed: {exc}",
+        ) from exc
+
+
+async def _upload_images_impl(
+    *,
+    project_id: str,
+    dataset_id: str,
+    files: list[UploadFile],
+    upload_session_id: str | None,
+    finalize_session: bool,
 ):
     _check_upload_config()
     _require_hf_dataset_upload_for_deploy()
