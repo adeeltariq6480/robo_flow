@@ -144,8 +144,8 @@ export function ModelMultiSelect({
       )}
 
       <p className="text-xs text-slate-500">
-        Har image par sab selected models chalenge; overlapping boxes merge ho jayenge
-        (highest confidence rakhi jati hai). Max {maxSelected} models.
+        Har image par sab models merge ho kar <strong>ek label</strong> banegi — alag model
+        passes nahi ({`max ${maxSelected} models`}).
       </p>
     </div>
   );

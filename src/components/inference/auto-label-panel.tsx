@@ -56,8 +56,9 @@ export function AutoLabelPanel({
     defaultLabelModelIds(models)
   );
   const [datasetId, setDatasetId] = useState(initialDatasetId);
-  const [confidence, setConfidence] = useState(0.25);
+  const [confidence, setConfidence] = useState(0.15);
   const [iou, setIou] = useState(0.45);
+  const [relabelAll, setRelabelAll] = useState(false);
   const [saveToDataset, setSaveToDataset] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
   const [completedJob, setCompletedJob] = useState<JobResponse | null>(null);
@@ -179,6 +180,7 @@ export function AutoLabelPanel({
         confidence,
         iou,
         save_to_dataset: saveToDataset,
+        relabel_all: relabelAll,
       },
       { skipLabeled }
     );
@@ -263,8 +265,8 @@ export function AutoLabelPanel({
         title={lockDataset ? "Label all images with model(s)" : "Auto-label dataset"}
         description={
           lockDataset
-            ? "Select one or more YOLO models. Each image is labeled with every selected model; overlapping boxes are merged."
-            : "Run one or more YOLO models on every image in a dataset."
+            ? "Select models — har image par sab merge ho kar ek label save hogi."
+            : "Run YOLO on every image; multiple models merge into one label per image."
         }
       />
 
@@ -306,8 +308,8 @@ export function AutoLabelPanel({
         {selectedDataset && (
           <p className="text-sm text-slate-500">
             {selectedModelIds.length} model
-            {selectedModelIds.length !== 1 ? "s" : ""} × {selectedDataset.file_count} image
-            {selectedDataset.file_count !== 1 ? "s" : ""} in &quot;
+            {selectedModelIds.length !== 1 ? "s" : ""} → {selectedDataset.file_count} image
+            {selectedDataset.file_count !== 1 ? "s" : ""} labeled (merged, not doubled) in &quot;
             {selectedDataset.name}&quot;
             {selectedModelIds.length > 2 && (
               <span className="block text-amber-700">
@@ -350,6 +352,22 @@ export function AutoLabelPanel({
           />
           Save annotations to dataset files
         </label>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={relabelAll}
+            onChange={(e) => setRelabelAll(e.target.checked)}
+            disabled={isRunning}
+            className="rounded border-slate-300"
+          />
+          Relabel all images (including already labeled / empty detections)
+        </label>
+
+        <p className="text-xs text-amber-800">
+          Tilted ya angled shelf photos ke liye confidence 0.10–0.20 rakho. Worker EXIF +
+          portrait fix inference par bhi lagata hai.
+        </p>
 
         <Button
           onClick={() => handleRun(false)}

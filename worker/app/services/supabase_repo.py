@@ -738,8 +738,30 @@ def attach_annotation_fields_to_images(project_id: str, images: list[dict]) -> N
     )
     by_image = {str(row["image_id"]): row for row in ann_res.data or []}
 
+    object_counts: dict[str, int] = {}
+    if image_ids:
+        try:
+            obj_res = (
+                _sb()
+                .table("annotation_objects")
+                .select("image_id")
+                .eq("project_id", project_id)
+                .in_("image_id", image_ids)
+                .execute()
+            )
+            for row in obj_res.data or []:
+                iid = str(row.get("image_id") or "")
+                if iid:
+                    object_counts[iid] = object_counts.get(iid, 0) + 1
+        except Exception:
+            logger.debug("Could not load annotation object counts", exc_info=True)
+
     for img in images:
         ann = by_image.get(str(img.get("id")))
+        iid = str(img.get("id") or "")
+        count = object_counts.get(iid, 0)
+        img["annotationObjectCount"] = count
+        img["annotation_object_count"] = count
         if not ann:
             continue
         review_status = ann.get("review_status")

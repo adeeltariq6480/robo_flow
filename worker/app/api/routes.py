@@ -2185,11 +2185,10 @@ async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key
 async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api_key)):
     total = repo.count_dataset_images(body.project_id, body.dataset_id)
     model_ids = body.resolved_model_ids()
-    total_work_items = total * max(len(model_ids), 1)
     job_id, queue, position = await submit_job(
         body.project_id, JobType.AUTO_LABEL,
         model_id=model_ids[0], model_ids=model_ids,
-        dataset_id=body.dataset_id, config=body.config, total_items=total_work_items,
+        dataset_id=body.dataset_id, config=body.config, total_items=total,
         input_payload={
             "model_ids": model_ids,
             "skip_labeled": body.skip_labeled,
@@ -2198,7 +2197,10 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
     )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,
-        message=f"Auto-label queued for {total} files (position {position})",
+        message=(
+            f"Auto-label queued: {total} image(s) with {len(model_ids)} model(s) "
+            f"(merged into one label per image, position {position})"
+        ),
     )
 
 
@@ -2279,7 +2281,6 @@ async def _resume_job(project_id: str, job_id: str) -> JobCreateResponse:
         raise HTTPException(status_code=400, detail="Job is missing dataset/model details")
 
     total = repo.count_dataset_images(project_id, dataset_id)
-    total_work_items = total * max(len(model_ids), 1)
     config = JobConfig(**(d.get("config") or {}))
     new_job_id, queue, position = await submit_job(
         project_id,
@@ -2288,7 +2289,7 @@ async def _resume_job(project_id: str, job_id: str) -> JobCreateResponse:
         model_ids=model_ids,
         dataset_id=dataset_id,
         config=config,
-        total_items=total_work_items,
+        total_items=total,
         input_payload={
             **(d.get("inputPayload") or {}),
             "model_ids": model_ids,

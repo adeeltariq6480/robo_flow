@@ -374,7 +374,7 @@ def release_all_models() -> None:
 
 
 def _prepare_inference_image(image_path: Path, max_side: int) -> Image.Image:
-    """Decode images without loading full 4K bitmap into RAM."""
+    """Decode images — EXIF upright + optional portrait fix for tilted shelf photos."""
     with Image.open(image_path) as opened:
         try:
             opened.draft("RGB", (max_side, max_side))
@@ -383,6 +383,9 @@ def _prepare_inference_image(image_path: Path, max_side: int) -> Image.Image:
         img = ImageOps.exif_transpose(opened)
         if img.mode != "RGB":
             img = img.convert("RGB")
+        # Same portrait fix as upload — helps angled/landscape shelf photos at inference.
+        if settings.upload_auto_portrait and img.width > img.height:
+            img = img.transpose(Image.ROTATE_90)
         if img.width > max_side or img.height > max_side:
             img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
         return img.copy()

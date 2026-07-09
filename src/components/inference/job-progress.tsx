@@ -15,6 +15,34 @@ interface JobProgressProps {
 const POLL_MS = 8000;
 const MAX_POLL_ERRORS = 15;
 
+/** Parse worker auto-label progress messages. */
+function parseAutoLabelProgress(message: string | undefined) {
+  if (!message) return null;
+  const merged = message.match(
+    /Labeling image\s+(\d+)\s*\/\s*(\d+)(?:\s*\((\d+)\s*models merged\))?/i
+  );
+  if (merged) {
+    return {
+      image: Number(merged[1]),
+      images: Number(merged[2]),
+      models: merged[3] ? Number(merged[3]) : 1,
+      model: 1,
+    };
+  }
+  const legacy = message.match(
+    /Model\s+(\d+)\s*\/\s*(\d+)[^0-9]*image\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (legacy) {
+    return {
+      model: Number(legacy[1]),
+      models: Number(legacy[2]),
+      image: Number(legacy[3]),
+      images: Number(legacy[4]),
+    };
+  }
+  return null;
+}
+
 export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +123,20 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
   const isFailed = job.status === "failed";
   const isCancelled = job.status === "cancelled";
 
+  const parsed = parseAutoLabelProgress(job.progress_message ?? undefined);
+  const barPercent = Math.min(100, job.progress ?? 0);
+  const imageCounter = parsed
+    ? `${parsed.image}/${parsed.images}`
+    : job.total_items > 0
+      ? `${job.processed_items}/${job.total_items}`
+      : null;
+
+  const statusLabel = parsed
+    ? parsed.models > 1 && parsed.model < parsed.models
+      ? `Image ${parsed.image}/${parsed.images} (${parsed.models} models merged)`
+      : `Image ${parsed.image}/${parsed.images}`
+    : job.progress_message || job.status;
+
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <div className="mb-2 flex items-center justify-between text-sm">
@@ -103,11 +145,16 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
           {isFailed && <XCircle className="h-4 w-4 text-red-600" />}
           {isCancelled && <OctagonX className="h-4 w-4 text-amber-600" />}
           {!isDone && !isFailed && !isCancelled && <Loader2 className="h-4 w-4 animate-spin text-brand-600" />}
-          {job.progress_message || job.status}
+          {statusLabel}
         </span>
         <span className="text-slate-500">
-          {job.processed_items > 0 && `${job.processed_items}/${job.total_items} · `}
-          {job.progress}%
+          {imageCounter && (
+            <>
+              {imageCounter} images
+              {" · "}
+            </>
+          )}
+          {barPercent}%
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-200">
@@ -115,9 +162,14 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
           className={`h-full transition-all duration-500 ${
             isFailed ? "bg-red-500" : isCancelled ? "bg-amber-500" : isDone ? "bg-green-500" : "bg-brand-600"
           }`}
-          style={{ width: `${job.progress}%` }}
+          style={{ width: `${barPercent}%` }}
         />
       </div>
+      {parsed && parsed.models > 1 && !isDone && (
+        <p className="mt-1 text-xs text-slate-400">
+          Har image par {parsed.models} models merge ho kar ek hi label save hoti hai
+        </p>
+      )}
       <p className="mt-2 text-xs text-slate-400">
         Queue: {job.queue_name} · Job: {job.id.slice(0, 8)}…
       </p>

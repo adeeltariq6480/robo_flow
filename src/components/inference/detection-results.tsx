@@ -90,8 +90,8 @@ export function DetectionResults({ job }: { job: JobResponse }) {
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
             {skippedAlreadyLabeled > 0 && (
               <li>
-                {skippedAlreadyLabeled} skipped — pehle se labeled / reviewed (dobara label nahi
-                hoti by default)
+                {skippedAlreadyLabeled} skipped — pehle se achi labels / reviewed (no
+                detections wali images dubara try hoti hain)
               </li>
             )}
             {skippedNotRemoteReady > 0 && (
