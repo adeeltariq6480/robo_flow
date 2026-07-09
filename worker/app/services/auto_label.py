@@ -3,7 +3,7 @@ import gc
 import logging
 import os
 import shutil
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from app.config import settings
 
@@ -221,6 +221,7 @@ def _compact_job_result(
     skipped_not_eligible: int = 0,
     skipped_not_remote_ready: int = 0,
     skipped_already_labeled: int = 0,
+    relabel_all: bool = False,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
     selected = selected_model_ids or model_ids
@@ -251,6 +252,8 @@ def _compact_job_result(
         result["skipped_not_remote_ready"] = skipped_not_remote_ready
     if skipped_already_labeled:
         result["skipped_already_labeled"] = skipped_already_labeled
+    if relabel_all:
+        result["relabel_all"] = True
     if model_failures:
         result["model_failures"] = [
             {
@@ -699,6 +702,7 @@ async def run_auto_label(
                 skipped_not_eligible=skipped_not_eligible,
                 skipped_not_remote_ready=skipped_not_remote_ready,
                 skipped_already_labeled=skipped_already_labeled,
+                relabel_all=relabel_all,
             )
         if (data.get("input_payload") or {}).get("resumed_from_job_id"):
             return _compact_job_result(
@@ -780,6 +784,7 @@ async def run_auto_label(
         progress=5,
         progress_message=f"Starting — {total} image(s), {num_models} model(s)…",
         processed_items=0,
+        total_items=total,
         project_id=project_id,
     )
 
@@ -916,94 +921,145 @@ async def run_auto_label(
             "the Models page. Very old YOLOv5/v7 may be slow on Railway."
         )
 
-    # --- Per image: all models → merge → one label (not separate model passes) ---
+    # --- Each model runs once over all images; detections merged per image at the end ---
+    per_image_dets: dict[str, list[DetectionBox]] = defaultdict(list)
+    per_image_models: dict[str, dict[str, int]] = defaultdict(dict)
     labeled = 0
     failed = len(prep_failures)
     all_results: list[dict] = [
         {"file_id": fid, "error": err} for fid, err in prep_failures.items()
     ]
+    inference_timeout = int(os.getenv("AUTO_LABEL_INFERENCE_TIMEOUT_SECONDS", "120"))
 
     logger.info(
-        "Job %s: merged multi-model labeling — %d images, %d models",
+        "Job %s: merged labeling — %d images, %d models (load each model once)",
         job_id,
         total,
         len(loaded_model_ids),
     )
 
-    for idx, file_row in enumerate(file_list):
-        if await asyncio.to_thread(is_job_cancelled, job_id, project_id):
-            logger.info("Auto-label cancellation requested; saving partial results")
-            cancelled_requested = True
-            break
+    unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "15" if low_memory_mode else "0")
+    gc_every_raw = os.getenv("AUTO_LABEL_GC_EVERY_IMAGES", "5" if low_memory_mode else "0")
+    try:
+        unload_every_value = int(unload_every_raw)
+    except ValueError:
+        unload_every_value = 15 if low_memory_mode else 0
+    try:
+        gc_every_value = int(gc_every_raw)
+    except ValueError:
+        gc_every_value = 5 if low_memory_mode else 0
+    unload_every = unload_every_value if unload_every_value > 0 else None
+    gc_every = gc_every_value if gc_every_value > 0 else None
+    images_done = 0
 
-        file_id = str(file_row["id"])
-        if file_id in prep_failures:
+    for mi, model_id in enumerate(loaded_model_ids):
+        if cancelled_requested:
+            break
+        await raise_if_job_cancelled(job_id, project_id)
+        model_path = model_paths[model_id]
+
+        await update_job(
+            job_id,
+            progress=_work_progress(mi, max(len(loaded_model_ids), 1), floor=10, ceiling=25),
+            progress_message=f"Loading model {mi + 1}/{len(loaded_model_ids)}…",
+            processed_items=min(images_done, total),
+            project_id=project_id,
+        )
+
+        await asyncio.to_thread(release_all_models)
+        gc.collect()
+        if get_process_memory_mb() >= hard:
+            model_failures[model_id] = (
+                f"Memory too high before model load (limit {hard} MB)"
+            )
+            logger.warning("model skipped (memory) %s", model_id)
             continue
 
-        merge_note = (
-            f" ({len(loaded_model_ids)} models merged)"
-            if len(loaded_model_ids) > 1
-            else ""
-        )
-        if idx % progress_step == 0 or idx == total - 1:
-            progress_items = idx + 1
-            pct = _work_progress(progress_items, total, floor=10, ceiling=92)
-            await update_job(
-                job_id,
-                progress=pct,
-                progress_message=f"Labeling image {idx + 1}/{total}{merge_note}…",
-                processed_items=progress_items,
-                project_id=project_id,
-            )
-
-        image_infer_failed = False
         try:
-            image_path = await prepare_image(file_id)
-            if image_path is None:
-                continue
+            await asyncio.wait_for(
+                asyncio.to_thread(load_yolo_model, model_path),
+                timeout=MODEL_WARMUP_TIMEOUT_SECONDS,
+            )
+        except IncompatibleModelError as exc:
+            await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
+            model_failures[model_id] = _model_failure_message(exc)
+            continue
+        except Exception as exc:
+            model_failures[model_id] = _model_failure_message(exc)
+            logger.warning("model load failed %s: %s", model_id, exc)
+            continue
 
-            combined_dets: list[DetectionBox] = []
-            per_model: dict[str, int] = {}
+        logger.info("Job %s: model %s loaded — labeling %d images", job_id, model_id, total)
 
-            for model_id in loaded_model_ids:
-                model_path = model_paths[model_id]
-                await asyncio.to_thread(release_all_models)
-                gc.collect()
-                if get_process_memory_mb() >= hard:
-                    logger.warning(
-                        "Memory high — skipping model %s on image %s", model_id, file_id
-                    )
-                    continue
-                try:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(load_yolo_model, model_path),
-                        timeout=MODEL_WARMUP_TIMEOUT_SECONDS,
-                    )
-                    inference = await asyncio.to_thread(
-                        run_yolo_inference,
-                        model_path,
-                        image_path,
-                        config,
-                        model_name=model_id,
-                        class_id_map=class_id_map,
-                    )
-                    combined_dets.extend(inference.detections)
-                    per_model[model_id] = len(inference.detections)
-                except IncompatibleModelError as exc:
-                    logger.warning("model skipped (incompatible) %s: %s", model_id, exc)
-                    await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
-                    model_failures[model_id] = _model_failure_message(exc)
-                except MemoryLimitExceeded as mem_exc:
-                    logger.warning(
-                        "OOM during inference job=%s model=%s image=%s: %s",
-                        job_id,
-                        model_id,
-                        file_id,
-                        mem_exc,
-                    )
-                    prep_failures[file_id] = f"Out of memory during inference: {mem_exc}"
-                    image_infer_failed = True
+        try:
+            for idx, file_row in enumerate(file_list):
+                if await asyncio.to_thread(is_job_cancelled, job_id, project_id):
+                    cancelled_requested = True
                     break
+
+                file_id = str(file_row["id"])
+                if file_id in prep_failures:
+                    continue
+
+                overall_pct = _work_progress(
+                    mi * total + idx + 1,
+                    max(len(loaded_model_ids) * total, 1),
+                    floor=25,
+                    ceiling=90,
+                )
+                if idx % progress_step == 0 or idx == total - 1:
+                    await update_job(
+                        job_id,
+                        progress=overall_pct,
+                        progress_message=(
+                            f"Image {idx + 1}/{total} · model {mi + 1}/{len(loaded_model_ids)} "
+                            f"(merge at end)…"
+                        ),
+                        processed_items=idx + 1,
+                        project_id=project_id,
+                    )
+
+                try:
+                    image_path = await prepare_image(file_id)
+                    if image_path is None:
+                        continue
+                    try:
+                        inference = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                run_yolo_inference,
+                                model_path,
+                                image_path,
+                                config,
+                                model_name=model_id,
+                                class_id_map=class_id_map,
+                            ),
+                            timeout=inference_timeout,
+                        )
+                        per_image_dets[file_id].extend(inference.detections)
+                        per_image_models[file_id][model_id] = len(inference.detections)
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Inference timeout job=%s model=%s image=%s",
+                            job_id,
+                            model_id,
+                            file_id,
+                        )
+                        if file_id not in prep_failures:
+                            prep_failures[file_id] = (
+                                f"Inference timed out after {inference_timeout}s"
+                            )
+                    except MemoryLimitExceeded as mem_exc:
+                        prep_failures[file_id] = f"Out of memory: {mem_exc}"
+                    finally:
+                        _cleanup_image_path(image_path)
+
+                    images_done = max(images_done, idx + 1)
+                    if gc_every and (idx + 1) % gc_every == 0:
+                        gc.collect()
+                    if unload_every and (idx + 1) % unload_every == 0:
+                        await asyncio.to_thread(unload_model, model_path)
+                        gc.collect()
+                        await asyncio.to_thread(load_yolo_model, model_path)
                 except Exception as exc:
                     logger.warning(
                         "Inference failed job=%s model=%s image=%s: %s",
@@ -1012,32 +1068,44 @@ async def run_auto_label(
                         file_id,
                         exc,
                     )
-                    if model_id not in model_failures:
-                        model_failures[model_id] = _model_failure_message(exc)
-                finally:
-                    await asyncio.to_thread(unload_model, model_path)
-                    gc.collect()
+                    if file_id not in prep_failures:
+                        prep_failures[file_id] = f"Inference error: {exc}"
+        finally:
+            await asyncio.to_thread(unload_model, model_path)
+            gc.collect()
 
-            _cleanup_image_path(image_path)
+        if cancelled_requested:
+            break
 
-            if image_infer_failed or file_id in prep_failures:
-                failed += 1
-                all_results.append(
-                    {
-                        "file_id": file_id,
-                        "error": prep_failures.get(file_id, "inference failed"),
-                    }
-                )
-                continue
+    loaded_model_ids = [mid for mid in model_ids if mid in model_paths and mid not in model_failures]
+    if not loaded_model_ids and not labeled:
+        hint = _format_model_failures(project_id, model_failures)
+        raise ValueError(
+            "No models could be loaded — auto-label needs at least one compatible model. "
+            f"Failed: {hint}."
+        )
 
-            if not combined_dets and len(model_failures) >= len(loaded_model_ids):
-                failed += 1
-                all_results.append(
-                    {"file_id": file_id, "error": "All models failed on this image"}
-                )
-                continue
+    logger.info("Job %s: merging and saving labels for %d images", job_id, total)
 
-            merged = merge_detections(combined_dets, iou_threshold=config.iou)
+    for idx, file_row in enumerate(file_list):
+        file_id = str(file_row["id"])
+        if file_id in prep_failures:
+            continue
+
+        if idx % progress_step == 0 or idx == total - 1:
+            await update_job(
+                job_id,
+                progress=_work_progress(idx + 1, total, floor=90, ceiling=99),
+                progress_message=f"Merging & saving image {idx + 1}/{total}…",
+                processed_items=idx + 1,
+                project_id=project_id,
+            )
+
+        try:
+            combined = per_image_dets.get(file_id, [])
+            per_model = per_image_models.get(file_id, {})
+
+            merged = merge_detections(combined, iou_threshold=config.iou)
             merged = merge_detections(
                 merged,
                 iou_threshold=config.iou,
@@ -1166,4 +1234,5 @@ async def run_auto_label(
         skipped_not_eligible=skipped_not_eligible,
         skipped_not_remote_ready=skipped_not_remote_ready,
         skipped_already_labeled=skipped_already_labeled,
+        relabel_all=relabel_all,
     )

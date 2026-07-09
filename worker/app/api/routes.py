@@ -2183,6 +2183,7 @@ async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key
 @jobs_router.post("/auto-label", response_model=JobCreateResponse)
 @api_router.post("/auto-label", response_model=JobCreateResponse)
 async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api_key)):
+    relabel_all = body.relabel_all or body.config.relabel_all
     total = repo.count_dataset_images(body.project_id, body.dataset_id)
     model_ids = body.resolved_model_ids()
     job_id, queue, position = await submit_job(
@@ -2192,13 +2193,18 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         input_payload={
             "model_ids": model_ids,
             "skip_labeled": body.skip_labeled,
-            "relabel_all": body.relabel_all or body.config.relabel_all,
+            "relabel_all": relabel_all,
         },
+    )
+    scope = (
+        f"all {total} image(s) (including already labeled)"
+        if relabel_all
+        else f"up to {total} image(s) (unlabeled / empty detections only)"
     )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,
         message=(
-            f"Auto-label queued: {total} image(s) with {len(model_ids)} model(s) "
+            f"Auto-label queued: {scope} with {len(model_ids)} model(s) "
             f"(merged into one label per image, position {position})"
         ),
     )

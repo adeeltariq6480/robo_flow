@@ -18,6 +18,41 @@ const MAX_POLL_ERRORS = 15;
 /** Parse worker auto-label progress messages. */
 function parseAutoLabelProgress(message: string | undefined) {
   if (!message) return null;
+
+  const perModel = message.match(
+    /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*model\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (perModel) {
+    return {
+      image: Number(perModel[1]),
+      images: Number(perModel[2]),
+      model: Number(perModel[3]),
+      models: Number(perModel[4]),
+    };
+  }
+
+  const saving = message.match(/Merging\s*&\s*saving\s+image\s+(\d+)\s*\/\s*(\d+)/i);
+  if (saving) {
+    return {
+      image: Number(saving[1]),
+      images: Number(saving[2]),
+      model: 1,
+      models: 1,
+      phase: "saving" as const,
+    };
+  }
+
+  const starting = message.match(/Starting —\s*(\d+)\s*image\(s\)/i);
+  if (starting) {
+    return {
+      image: 0,
+      images: Number(starting[1]),
+      model: 1,
+      models: 1,
+      phase: "starting" as const,
+    };
+  }
+
   const merged = message.match(
     /Labeling image\s+(\d+)\s*\/\s*(\d+)(?:\s*\((\d+)\s*models merged\))?/i
   );
@@ -29,6 +64,7 @@ function parseAutoLabelProgress(message: string | undefined) {
       model: 1,
     };
   }
+
   const legacy = message.match(
     /Model\s+(\d+)\s*\/\s*(\d+)[^0-9]*image\s+(\d+)\s*\/\s*(\d+)/i
   );
@@ -125,16 +161,23 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
 
   const parsed = parseAutoLabelProgress(job.progress_message ?? undefined);
   const barPercent = Math.min(100, job.progress ?? 0);
-  const imageCounter = parsed
-    ? `${parsed.image}/${parsed.images}`
-    : job.total_items > 0
-      ? `${job.processed_items}/${job.total_items}`
-      : null;
+  const imageTotal = parsed?.images ?? job.total_items ?? 0;
+  const imageCurrent =
+    parsed && parsed.image > 0
+      ? parsed.image
+      : job.processed_items > 0
+        ? job.processed_items
+        : 0;
+  const imageCounter = imageTotal > 0 ? `${imageCurrent}/${imageTotal}` : null;
 
   const statusLabel = parsed
-    ? parsed.models > 1 && parsed.model < parsed.models
-      ? `Image ${parsed.image}/${parsed.images} (${parsed.models} models merged)`
-      : `Image ${parsed.image}/${parsed.images}`
+    ? "phase" in parsed && parsed.phase === "saving"
+      ? `Saving labels ${parsed.image}/${parsed.images}`
+      : "phase" in parsed && parsed.phase === "starting"
+        ? `Preparing ${parsed.images} image(s)…`
+        : parsed.models > 1
+          ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
+          : `Image ${parsed.image}/${parsed.images}`
     : job.progress_message || job.status;
 
   return (
