@@ -9,6 +9,20 @@ import {
   resumeJob,
   type JobConfig,
 } from "@/lib/worker/client";
+import {
+  getModelsAvailability,
+  type ModelsAvailabilityResponse,
+} from "@/lib/services/modelService";
+
+export async function fetchModelsAvailability(
+  projectId: string
+): Promise<ModelsAvailabilityResponse | { error: string }> {
+  try {
+    return await getModelsAvailability(projectId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Worker unavailable" };
+  }
+}
 
 export async function startTestRun(
   projectId: string,

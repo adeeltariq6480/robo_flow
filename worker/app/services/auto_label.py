@@ -208,8 +208,10 @@ def _progress_interval(total: int) -> int:
 
 def _compact_job_result(
     *,
+    project_id: str,
     dataset_id: str,
     model_ids: list[str],
+    selected_model_ids: list[str] | None = None,
     total: int,
     labeled: int,
     failed: int,
@@ -221,12 +223,20 @@ def _compact_job_result(
     skipped_already_labeled: int = 0,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
+    selected = selected_model_ids or model_ids
+    loaded_count = len(model_ids)
+    selected_count = len(selected)
+    failed_count = len(model_failures or {})
     result = {
         "job_type": "auto_label",
         "dataset_id": dataset_id,
         "model_id": model_ids[0] if model_ids else None,
         "model_ids": model_ids,
-        "models_used": len(model_ids),
+        "selected_model_ids": selected,
+        "models_selected": selected_count,
+        "models_loaded": loaded_count,
+        "models_failed": failed_count,
+        "models_used": loaded_count,
         "total_files": total,
         "labeled": labeled,
         "failed": failed,
@@ -243,7 +253,11 @@ def _compact_job_result(
         result["skipped_already_labeled"] = skipped_already_labeled
     if model_failures:
         result["model_failures"] = [
-            {"model_id": mid, "error": err}
+            {
+                "model_id": mid,
+                "model_name": _model_display_name(project_id, mid),
+                "error": err,
+            }
             for mid, err in list(model_failures.items())[:10]
         ]
     return result
@@ -549,8 +563,22 @@ async def run_auto_label(
     config: JobConfig,
 ) -> dict:
     model_ids = _resolve_model_ids(data)
+    selected_model_ids = list(model_ids)
     dataset_id = str(data["dataset_id"])
     await raise_if_job_cancelled(job_id, project_id)
+
+    try:
+        from app.services.model_resolver import sync_project_models_from_hf
+
+        repairs = await asyncio.to_thread(sync_project_models_from_hf, project_id)
+        if repairs:
+            logger.info(
+                "Auto-label repaired %d model HF path(s) before start project=%s",
+                len(repairs),
+                project_id,
+            )
+    except Exception as exc:
+        logger.warning("Model HF path sync skipped project=%s: %s", project_id, exc)
 
     class_id_map = get_project_class_map(project_id)
     config.class_name_map = build_class_name_map(project_id, config.class_name_map)
@@ -647,8 +675,10 @@ async def run_auto_label(
     if total == 0:
         if skipped_already_labeled > 0 and not relabel_all:
             return _compact_job_result(
+                project_id=project_id,
                 dataset_id=dataset_id,
                 model_ids=model_ids,
+                selected_model_ids=selected_model_ids,
                 total=0,
                 labeled=0,
                 failed=0,
@@ -660,8 +690,10 @@ async def run_auto_label(
             )
         if (data.get("input_payload") or {}).get("resumed_from_job_id"):
             return _compact_job_result(
+                project_id=project_id,
                 dataset_id=dataset_id,
                 model_ids=model_ids,
+                selected_model_ids=selected_model_ids,
                 total=0,
                 labeled=0,
                 failed=0,
@@ -1260,8 +1292,10 @@ async def run_auto_label(
 
     clear_inference_profile()
     return _compact_job_result(
+        project_id=project_id,
         dataset_id=dataset_id,
         model_ids=loaded_model_ids,
+        selected_model_ids=selected_model_ids,
         total=total,
         labeled=labeled,
         failed=failed,

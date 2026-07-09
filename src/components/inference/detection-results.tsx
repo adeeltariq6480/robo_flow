@@ -30,12 +30,25 @@ export function DetectionResults({ job }: { job: JobResponse }) {
     const skippedNotEligible = (result.skipped_not_eligible as number) ?? 0;
     const skippedNotRemoteReady = (result.skipped_not_remote_ready as number) ?? 0;
     const skippedAlreadyLabeled = (result.skipped_already_labeled as number) ?? 0;
-    const modelsUsed = (result.models_used as number) ?? 1;
+    const modelsUsed = (result.models_loaded as number) ?? (result.models_used as number) ?? 1;
+    const modelsSelected = (result.models_selected as number) ?? modelsUsed;
+    const modelsFailed = (result.models_failed as number) ?? 0;
     const modelFailures = Array.isArray(result.model_failures)
-      ? (result.model_failures as Array<{ model_id: string; error: string }>)
+      ? (result.model_failures as Array<{
+          model_id: string;
+          model_name?: string;
+          error: string;
+        }>)
       : [];
     const variant =
-      labeled === 0 ? "error" : failed > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0 ? "warning" : "success";
+      labeled === 0
+        ? "error"
+        : failed > 0 ||
+            skippedNotEligible > 0 ||
+            skippedNotRemoteReady > 0 ||
+            modelsFailed > 0
+          ? "warning"
+          : "success";
     const border =
       variant === "error"
         ? "border-red-200 bg-red-50 text-red-800"
@@ -48,11 +61,31 @@ export function DetectionResults({ job }: { job: JobResponse }) {
           {labeled === 0 ? "Auto-label failed" : "Auto-label complete"}
         </p>
         <p className="mt-1">
-          {labeled}/{total} files labeled using {modelsUsed} model
-          {modelsUsed !== 1 ? "s" : ""}
+          {labeled}/{total} files labeled
+          {modelsSelected > 1 || modelsFailed > 0 ? (
+            <>
+              {" "}
+              · {modelsUsed}/{modelsSelected} model
+              {modelsSelected !== 1 ? "s" : ""} loaded
+              {modelsFailed > 0 && ` · ${modelsFailed} failed`}
+            </>
+          ) : (
+            <>
+              {" "}
+              using {modelsUsed} model
+              {modelsUsed !== 1 ? "s" : ""}
+            </>
+          )}
           {dbTotal > total && ` · ${dbTotal} total in dataset`}
-          {failed > 0 && ` · ${failed} failed`}
+          {failed > 0 && ` · ${failed} image errors`}
         </p>
+        {modelsFailed > 0 && modelsUsed > 0 && (
+          <p className="mt-2 text-xs text-amber-900">
+            {modelsUsed} model loaded OK, lekin {modelsFailed} selected model
+            {modelsFailed !== 1 ? "s" : ""} ki file missing thi — sirf loaded models
+            se label hua. Missing models dubara upload karein.
+          </p>
+        )}
         {(skippedAlreadyLabeled > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0) && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
             {skippedAlreadyLabeled > 0 && (
@@ -86,9 +119,10 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         )}
         {modelFailures.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
-            {modelFailures.slice(0, 3).map((m) => (
+            {modelFailures.slice(0, 5).map((m) => (
               <li key={m.model_id}>
-                Model {m.model_id.slice(0, 8)}…: {m.error}
+                <span className="font-medium">{m.model_name ?? m.model_id.slice(0, 8)}</span>
+                : {m.error}
               </li>
             ))}
           </ul>

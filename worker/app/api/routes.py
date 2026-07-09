@@ -1176,19 +1176,21 @@ async def upload_model(
 
     if settings.local_storage_enabled and not settings.is_vercel:
         await asyncio.to_thread(persist_model_bytes_locally, project_id, file_name, data)
-    if settings.hf_upload_enabled:
-        try:
-            loc = await asyncio.to_thread(
-                file_storage.upload_model_file, project_id, file_name, data
-            )
-        except Exception as exc:
-            logger.exception("Hugging Face model upload failed project=%s file=%s", project_id, file_name)
-            raise _hf_upload_exception(exc, file_name=file_name, target="model") from exc
-    else:
+    if not file_storage.hf_model_upload_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Hugging Face upload is disabled. Model uploads require HF_UPLOAD_ENABLED=true and HF_MODEL_REPO.",
+            detail=(
+                "Hugging Face model upload is not configured. Set HF_UPLOAD_ENABLED=true, "
+                "HF_TOKEN, and HF_MODEL_REPO on Railway, then redeploy."
+            ),
         )
+    try:
+        loc = await asyncio.to_thread(
+            file_storage.upload_model_file, project_id, file_name, data
+        )
+    except Exception as exc:
+        logger.exception("Hugging Face model upload failed project=%s file=%s", project_id, file_name)
+        raise _hf_upload_exception(exc, file_name=file_name, target="model") from exc
     model = repo.create_model(project_id, {
         "modelName": model_name,
         "modelVersion": model_version,
@@ -1224,6 +1226,51 @@ async def register_model(body: ModelRegister, _: None = Depends(verify_api_key))
 @api_router.get("/models/{project_id}")
 async def list_models(project_id: str, _: None = Depends(verify_api_key)):
     return await db(repo.list_models, project_id)
+
+
+@api_router.get("/models/{project_id}/availability")
+async def models_availability(project_id: str, _: None = Depends(verify_api_key)):
+    """Report which project models have weight files ready for auto-label."""
+    from app.services.model_resolver import check_model_available, sync_project_models_from_hf
+
+    await asyncio.to_thread(sync_project_models_from_hf, project_id)
+    rows = await asyncio.to_thread(repo.list_models, project_id)
+    out = []
+    for row in rows:
+        model_id = str(row["id"])
+        check = await asyncio.to_thread(
+            check_model_available, project_id, model_id, model_row=row
+        )
+        out.append(
+            {
+                "modelId": model_id,
+                "modelName": row.get("modelName"),
+                "hfPath": row.get("hfPath"),
+                "available": bool(check.get("available")),
+                "source": check.get("source"),
+                "error": check.get("error"),
+            }
+        )
+    return {
+        "models": out,
+        "availableCount": sum(1 for m in out if m["available"]),
+        "missingCount": sum(1 for m in out if not m["available"]),
+    }
+
+
+@api_router.post("/models/{project_id}/sync-hf")
+async def sync_models_to_hf(project_id: str, _: None = Depends(verify_api_key)):
+    """Push local model files on the worker disk to Hugging Face."""
+    from app.services.model_resolver import sync_project_models_to_hf
+
+    try:
+        result = await asyncio.to_thread(sync_project_models_to_hf, project_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Model HF sync failed project=%s", project_id)
+        raise _hf_upload_exception(exc, file_name="models", target="model") from exc
+    return result
 
 
 @api_router.delete("/models/{project_id}/{model_id}")

@@ -137,6 +137,23 @@ def hf_model_upload_enabled() -> bool:
     return bool(settings.hf_upload_enabled and settings.hf_token and settings.model_repo_id)
 
 
+def require_hf_model_upload() -> None:
+    """Fail fast when model weights cannot be pushed to Hugging Face."""
+    if hf_model_upload_enabled():
+        return
+    missing: list[str] = []
+    if not settings.hf_upload_enabled:
+        missing.append("HF_UPLOAD_ENABLED=true")
+    if not settings.hf_token:
+        missing.append("HF_TOKEN")
+    if not settings.model_repo_id:
+        missing.append("HF_MODEL_REPO (or HF_USERNAME)")
+    raise RuntimeError(
+        "Hugging Face model upload is not configured. Set: "
+        + ", ".join(missing)
+    )
+
+
 def hf_upload_enabled() -> bool:
     return hf_dataset_upload_enabled() or hf_model_upload_enabled()
 
@@ -646,9 +663,7 @@ def upload_model_file(
 ) -> dict:
     target_path = model_path(project_id, file_name)
     logger.info("Selected repo for model upload: %s (repo_type=%s) target=%s", settings.model_repo_id, settings.model_repo_type, target_path)
-    if not hf_model_upload_enabled():
-        logger.info("Hugging Face upload is disabled; skipping model upload %s", file_name)
-        return {"hfRepo": settings.model_repo_id, "hfPath": target_path, "repoType": settings.model_repo_type}
+    require_hf_model_upload()
 
     repo_id = settings.model_repo_id
     repo_type = settings.model_repo_type
@@ -683,9 +698,7 @@ def upload_model_files_batch(
     if not items:
         raise ValueError("No models to upload")
 
-    if not hf_model_upload_enabled():
-        logger.info("Hugging Face upload is disabled; skipping model batch upload")
-        return {"hfRepo": settings.model_repo_id, "count": 0, "repoType": settings.model_repo_type}
+    require_hf_model_upload()
 
     repo_id = settings.model_repo_id
     repo_type = settings.model_repo_type

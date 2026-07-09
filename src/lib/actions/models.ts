@@ -44,3 +44,21 @@ export async function deleteAllModels(projectId: string): Promise<ActionResult> 
     return { error: e instanceof Error ? e.message : "Failed to delete models" };
   }
 }
+
+export async function syncModelsToHuggingFace(
+  projectId: string
+): Promise<ActionResult & { uploaded?: number; message?: string }> {
+  try {
+    const result = await modelService.syncModelsToHf(projectId);
+    await revalidateProject(projectId);
+    return {
+      success: true,
+      uploaded: result.uploaded,
+      message: result.message,
+    };
+  } catch (e) {
+    return {
+      error: e instanceof Error ? e.message : "Failed to sync models to Hugging Face",
+    };
+  }
+}

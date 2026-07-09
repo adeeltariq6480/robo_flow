@@ -9,9 +9,9 @@ export function isLikelyLegacyModelName(name: string): boolean {
   return /yolov5|yolov7|yolov3|pepsi|legacy/.test(n);
 }
 
-/** Default: all uploaded models (multi-model auto-label). */
+/** Start with no selection — user picks models explicitly (avoids hidden extras). */
 export function defaultLabelModelIds(
-  models: Array<{ id: string; name: string }>
+  _models: Array<{ id: string; name: string }>
 ): string[] {
-  return models.map((m) => m.id);
+  return [];
 }

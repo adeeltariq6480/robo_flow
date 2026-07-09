@@ -78,6 +78,253 @@ def find_local_model_file(
     return best
 
 
+def list_hf_model_files(project_id: str) -> list[str]:
+    """List all model weight files for a project on Hugging Face."""
+    repo_id = settings.model_repo_id
+    if not repo_id:
+        return []
+    prefix = f"models/{project_id}/"
+    found: list[str] = []
+    seen: set[str] = set()
+    for repo_type in _repo_types_to_try(settings.model_repo_type):
+        try:
+            files = file_storage._api().list_repo_files(repo_id=repo_id, repo_type=repo_type)
+        except Exception as exc:
+            logger.warning("HF list failed repo=%s type=%s: %s", repo_id, repo_type, exc)
+            continue
+        for path in files:
+            if not path.startswith(prefix):
+                continue
+            if Path(path).suffix.lower() not in _MODEL_SUFFIXES:
+                continue
+            if path not in seen:
+                seen.add(path)
+                found.append(path)
+    return found
+
+
+def match_hf_file_for_model(
+    model_name: str,
+    hf_path: str,
+    hf_files: list[str],
+) -> str | None:
+    """Pick the best HF path for a model name from available repo files."""
+    if not hf_files:
+        return None
+
+    if hf_path and hf_path in hf_files:
+        return hf_path
+
+    stems = {s.lower() for s in _name_candidates(model_name, hf_path, Path(hf_path).name)}
+    name_lower = model_name.strip().lower()
+
+    for path in hf_files:
+        if Path(path).stem.lower() in stems:
+            return path
+
+    for path in hf_files:
+        fname = Path(path).name.lower()
+        if name_lower and name_lower in fname:
+            return path
+
+    for path in hf_files:
+        stem = Path(path).stem.lower()
+        if name_lower and stem in name_lower:
+            return path
+
+    return None
+
+
+def sync_project_models_from_hf(project_id: str) -> list[dict]:
+    """Repair DB hf_path values by matching model names to files on Hugging Face."""
+    from app.services.supabase_repo import list_models, update_model_fields
+
+    hf_files = list_hf_model_files(project_id)
+    if not hf_files:
+        return []
+
+    repairs: list[dict] = []
+    for row in list_models(project_id):
+        model_id = str(row["id"])
+        model_name = str(row.get("modelName") or row.get("model_name") or "")
+        hf_path = str(row.get("hfPath") or row.get("hf_path") or "")
+        hf_repo = str(row.get("hfRepo") or row.get("hf_repo") or settings.model_repo_id)
+
+        if hf_path and file_storage._repo_file_exists(
+            hf_repo, settings.model_repo_type, hf_path
+        ):
+            continue
+
+        matched = match_hf_file_for_model(model_name, hf_path, hf_files)
+        if not matched:
+            continue
+
+        update_model_fields(
+            project_id,
+            model_id,
+            {"hfRepo": hf_repo, "hfPath": matched},
+        )
+        repairs.append(
+            {
+                "modelId": model_id,
+                "modelName": model_name,
+                "oldPath": hf_path,
+                "hfPath": matched,
+            }
+        )
+        logger.info(
+            "Repaired model HF path project=%s model=%s %s -> %s",
+            project_id,
+            model_name,
+            hf_path,
+            matched,
+        )
+    return repairs
+
+
+def sync_project_models_to_hf(project_id: str) -> dict:
+    """Push model files from worker local disk to Hugging Face (one batch commit)."""
+    from app.services.supabase_repo import list_models, update_model_fields
+
+    file_storage.require_hf_model_upload()
+
+    rows = list_models(project_id)
+    local_dir = settings.model_files_dir / project_id
+    payload: list[tuple[str, bytes]] = []
+    seen_names: set[str] = set()
+    linked: list[dict] = []
+    skipped_on_hf: list[str] = []
+
+    hf_files = list_hf_model_files(project_id)
+
+    for row in rows:
+        model_id = str(row["id"])
+        model_name = str(row.get("modelName") or row.get("model_name") or "")
+        hf_path = str(row.get("hfPath") or row.get("hf_path") or "")
+        hf_repo = str(row.get("hfRepo") or row.get("hf_repo") or settings.model_repo_id)
+        local_name = file_storage.model_cache_local_name_from_path(hf_path)
+
+        if hf_path and file_storage._repo_file_exists(
+            hf_repo, settings.model_repo_type, hf_path
+        ):
+            skipped_on_hf.append(model_name or model_id)
+            continue
+
+        matched_hf = match_hf_file_for_model(model_name, hf_path, hf_files)
+        if matched_hf:
+            update_model_fields(
+                project_id,
+                model_id,
+                {"hfRepo": hf_repo, "hfPath": matched_hf},
+            )
+            skipped_on_hf.append(model_name or model_id)
+            continue
+
+        local_file = find_local_model_file(project_id, model_name, hf_path, local_name)
+        if local_file is None or not local_file.is_file():
+            continue
+        if local_file.name in seen_names:
+            continue
+        seen_names.add(local_file.name)
+        payload.append((local_file.name, local_file.read_bytes()))
+        linked.append(
+            {
+                "modelId": model_id,
+                "modelName": model_name,
+                "fileName": local_file.name,
+            }
+        )
+
+    if local_dir.exists():
+        for path in local_dir.iterdir():
+            if not path.is_file() or path.stat().st_size <= 0:
+                continue
+            if path.name in seen_names:
+                continue
+            payload.append((path.name, path.read_bytes()))
+            seen_names.add(path.name)
+            linked.append({"modelId": None, "modelName": path.stem, "fileName": path.name})
+
+    if not payload:
+        return {
+            "uploaded": 0,
+            "skippedAlreadyOnHf": len(skipped_on_hf),
+            "message": (
+                "No local model files found on worker disk to push. "
+                "Re-upload models from the Models page."
+            ),
+        }
+
+    loc = file_storage.upload_model_files_batch(project_id, payload)
+
+    updated = 0
+    for item in linked:
+        model_id = item.get("modelId")
+        if not model_id:
+            continue
+        hf_path = file_storage.model_path(project_id, item["fileName"])
+        update_model_fields(
+            project_id,
+            str(model_id),
+            {"hfRepo": loc["hfRepo"], "hfPath": hf_path},
+        )
+        updated += 1
+
+    return {
+        "uploaded": len(payload),
+        "dbUpdated": updated,
+        "skippedAlreadyOnHf": len(skipped_on_hf),
+        "hfRepo": loc.get("hfRepo"),
+        "repoType": loc.get("repoType"),
+        "files": [name for name, _ in payload],
+        "message": f"Pushed {len(payload)} model file(s) to Hugging Face.",
+    }
+
+
+def check_model_available(
+    project_id: str,
+    model_id: str,
+    *,
+    model_row: dict | None = None,
+) -> dict:
+    """Lightweight check whether model weights exist (local or HF)."""
+    from app.services.supabase_repo import get_model
+
+    row = model_row or get_model(project_id, model_id)
+    if not row:
+        return {"available": False, "error": "Model not found in database"}
+
+    model_name = str(row.get("modelName") or row.get("model_name") or "")
+    hf_path = str(row.get("hfPath") or row.get("hf_path") or "")
+    hf_repo = str(row.get("hfRepo") or row.get("hf_repo") or settings.model_repo_id)
+    local_name = file_storage.model_cache_local_name_from_path(hf_path)
+
+    local = find_local_model_file(project_id, model_name, hf_path, local_name)
+    if local is not None:
+        return {"available": True, "source": "local", "path": str(local)}
+
+    hf_files = list_hf_model_files(project_id)
+    matched = match_hf_file_for_model(model_name, hf_path, hf_files)
+    if matched:
+        return {"available": True, "source": "huggingface", "hfPath": matched}
+
+    if hf_path and hf_repo:
+        for repo_type in _repo_types_to_try(settings.model_repo_type):
+            if file_storage._repo_file_exists(hf_repo, repo_type, hf_path):
+                return {"available": True, "source": "huggingface", "hfPath": hf_path}
+
+    if is_ultralytics_pretrained_name(model_name) or is_ultralytics_pretrained_name(local_name):
+        return {"available": True, "source": "ultralytics_pretrained", "modelName": model_name}
+
+    return {
+        "available": False,
+        "error": (
+            f"Model '{model_name}' file missing. Upload .pt/.onnx from Models page "
+            f"(expected HF path: {hf_path or 'unknown'})."
+        ),
+    }
+
+
 def find_hf_model_path(
     project_id: str,
     model_name: str,
@@ -316,6 +563,30 @@ def resolve_model_weights(
         detail = str(exc).lower()
         if "404" not in detail and "not found" not in detail:
             raise RuntimeError(f"Model download failed for {model_id}: {exc}") from exc
+
+    hf_files = list_hf_model_files(project_id)
+    matched = match_hf_file_for_model(model_name, hf_path, hf_files)
+    if matched:
+        matched_local = file_storage.model_cache_local_name_from_path(matched)
+        try:
+            downloaded = _hf_download_path(
+                hf_repo,
+                matched,
+                project_id=project_id,
+                local_name=matched_local,
+            )
+            if downloaded is not None:
+                from app.services.supabase_repo import update_model_fields
+
+                if matched != hf_path:
+                    update_model_fields(
+                        project_id,
+                        model_id,
+                        {"hfRepo": hf_repo, "hfPath": matched},
+                    )
+                return downloaded
+        except Exception as exc:
+            logger.warning("HF universal match download failed: %s", exc)
 
     hf_match = find_hf_model_path(project_id, model_name, hf_repo, hf_path, local_name)
     if hf_match is not None:

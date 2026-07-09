@@ -12,6 +12,9 @@ interface ModelMultiSelectProps {
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   maxSelected?: number;
+  /** Model IDs whose weight file is missing on disk/HF — cannot be used for labeling */
+  unavailableIds?: Set<string>;
+  unavailableReasons?: Record<string, string>;
 }
 
 export function ModelMultiSelect({
@@ -20,11 +23,18 @@ export function ModelMultiSelect({
   onChange,
   disabled = false,
   maxSelected = 10,
+  unavailableIds,
+  unavailableReasons = {},
 }: ModelMultiSelectProps) {
+  const unavailable = unavailableIds ?? new Set<string>();
+  const availableModels = models.filter((m) => !unavailable.has(m.id));
   const allSelected =
-    models.length > 0 && selectedIds.length === models.length;
+    availableModels.length > 0 &&
+    selectedIds.length === availableModels.length &&
+    availableModels.every((m) => selectedIds.includes(m.id));
 
   function toggle(id: string) {
+    if (unavailable.has(id)) return;
     if (selectedIds.includes(id)) {
       onChange(selectedIds.filter((x) => x !== id));
       return;
@@ -35,7 +45,7 @@ export function ModelMultiSelect({
 
   function toggleAll() {
     if (allSelected) onChange([]);
-    else onChange(models.slice(0, maxSelected).map((m) => m.id));
+    else onChange(availableModels.slice(0, maxSelected).map((m) => m.id));
   }
 
   return (
@@ -47,54 +57,73 @@ export function ModelMultiSelect({
         <button
           type="button"
           onClick={toggleAll}
-          disabled={disabled || models.length === 0}
+          disabled={disabled || availableModels.length === 0}
           className="shrink-0 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
         >
-          {allSelected ? "Clear all" : "Select all"}
+          {allSelected ? "Clear all" : "Select all available"}
         </button>
       </div>
 
       <div className="flex flex-wrap gap-2">
         {models.map((m) => {
           const selected = selectedIds.includes(m.id);
+          const missing = unavailable.has(m.id);
           const atLimit = !selected && selectedIds.length >= maxSelected;
           const legacy = isLikelyLegacyModelName(m.name);
           const compatible = isLikelyCompatibleModelName(m.name);
+          const missingReason =
+            unavailableReasons[m.id] ??
+            "Weight file missing — re-upload .pt/.onnx from Models page";
           return (
             <button
               key={m.id}
               type="button"
               onClick={() => toggle(m.id)}
-              disabled={disabled || atLimit}
+              disabled={disabled || atLimit || missing}
               title={
-                legacy
-                  ? "Purana/custom YOLO — Railway par fail ho sakta hai. YOLOv8/v11 use karein."
-                  : compatible
-                    ? "YOLOv8/v11 — recommended for auto-label"
-                    : undefined
+                missing
+                  ? missingReason
+                  : legacy
+                    ? "Purana/custom YOLO — Railway par fail ho sakta hai. YOLOv8/v11 use karein."
+                    : compatible
+                      ? "YOLOv8/v11 — recommended for auto-label"
+                      : undefined
               }
               className={`rounded-lg border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                selected
-                  ? legacy
-                    ? "border-amber-500 bg-amber-50 text-amber-900 ring-1 ring-amber-500/30"
-                    : "border-brand-600 bg-brand-50 text-brand-800 ring-1 ring-brand-600/30"
-                  : legacy
-                    ? "border-amber-200 bg-amber-50/50 text-amber-800 hover:border-amber-300"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                missing
+                  ? "border-red-200 bg-red-50/60 text-red-700 line-through decoration-red-300"
+                  : selected
+                    ? legacy
+                      ? "border-amber-500 bg-amber-50 text-amber-900 ring-1 ring-amber-500/30"
+                      : "border-brand-600 bg-brand-50 text-brand-800 ring-1 ring-brand-600/30"
+                    : legacy
+                      ? "border-amber-200 bg-amber-50/50 text-amber-800 hover:border-amber-300"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
               }`}
             >
               <span className="font-medium">{m.name}</span>
               <span className="ml-1 text-slate-400">v{m.version}</span>
-              {legacy && (
+              {missing && (
+                <span className="ml-1 text-xs text-red-600 no-underline">(missing)</span>
+              )}
+              {legacy && !missing && (
                 <span className="ml-1 text-xs text-amber-700">(legacy)</span>
               )}
-              {compatible && !legacy && (
+              {compatible && !legacy && !missing && (
                 <span className="ml-1 text-xs text-green-700">✓</span>
               )}
             </button>
           );
         })}
       </div>
+
+      {unavailable.size > 0 && (
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+          {unavailable.size} model{unavailable.size !== 1 ? "s" : ""} ki weight file missing hai
+          (HF/disk par nahi mili). Models page se dubara upload karein — tab tak select nahi ho
+          sakte.
+        </p>
+      )}
 
       {selectedIds.some((id) => {
         const m = models.find((x) => x.id === id);

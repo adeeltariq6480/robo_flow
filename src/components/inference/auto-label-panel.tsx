@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   cancelInferenceJob,
+  fetchModelsAvailability,
   resumeInferenceJob,
   startAutoLabel,
 } from "@/lib/actions/inference";
@@ -64,6 +65,9 @@ export function AutoLabelPanel({
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [unavailableIds, setUnavailableIds] = useState<Set<string>>(new Set());
+  const [unavailableReasons, setUnavailableReasons] = useState<Record<string, string>>({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
@@ -89,12 +93,42 @@ export function AutoLabelPanel({
     (completedJob.status === "cancelled" || completedJob.status === "failed");
 
   useEffect(() => {
+    let cancelled = false;
+    setAvailabilityLoading(true);
+    fetchModelsAvailability(projectId).then((result) => {
+      if (cancelled) return;
+      if ("error" in result) {
+        setUnavailableIds(new Set());
+        setUnavailableReasons({});
+        setAvailabilityLoading(false);
+        return;
+      }
+      const missing = new Set<string>();
+      const reasons: Record<string, string> = {};
+      for (const row of result.models) {
+        if (!row.available) {
+          missing.add(row.modelId);
+          if (row.error) reasons[row.modelId] = row.error;
+        }
+      }
+      setUnavailableIds(missing);
+      setUnavailableReasons(reasons);
+      setAvailabilityLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, models]);
+
+  useEffect(() => {
     setSelectedModelIds((prev) => {
-      const valid = prev.filter((id) => models.some((m) => m.id === id));
+      const valid = prev.filter(
+        (id) => models.some((m) => m.id === id) && !unavailableIds.has(id)
+      );
       if (valid.length > 0) return valid;
       return defaultLabelModelIds(models);
     });
-  }, [models]);
+  }, [models, unavailableIds]);
 
   useEffect(() => {
     const active = readActiveInferenceJob();
@@ -113,6 +147,23 @@ export function AutoLabelPanel({
   async function handleRun(skipLabeled = false) {
     if (selectedModelIds.length === 0 || !datasetId) {
       setError("Select at least one model and a dataset");
+      return;
+    }
+
+    const blocked = selectedModelIds.filter((id) => unavailableIds.has(id));
+    if (blocked.length > 0) {
+      const names = blocked
+        .map((id) => models.find((m) => m.id === id)?.name ?? id.slice(0, 8))
+        .join(", ");
+      setError(
+        `Selected model(s) missing weight file: ${names}. Re-upload from Models page.`
+      );
+      return;
+    }
+
+    const availableCount = models.filter((m) => !unavailableIds.has(m.id)).length;
+    if (availableCount === 0) {
+      setError("No models have weight files ready. Upload .pt/.onnx from Models page first.");
       return;
     }
 
@@ -229,7 +280,9 @@ export function AutoLabelPanel({
             models={models}
             selectedIds={selectedModelIds}
             onChange={setSelectedModelIds}
-            disabled={loading || isRunning}
+            disabled={loading || isRunning || availabilityLoading}
+            unavailableIds={unavailableIds}
+            unavailableReasons={unavailableReasons}
           />
           {!lockDataset && (
             <div>

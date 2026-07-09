@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   deleteModel,
   deleteModels,
   deleteAllModels,
+  syncModelsToHuggingFace,
 } from "@/lib/actions/models";
+import { fetchModelsAvailability } from "@/lib/actions/inference";
 import type { Model } from "@/lib/types/database";
 import { formatBytes } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -17,7 +19,7 @@ import { BulkDeleteToolbar } from "@/components/ui/bulk-delete-toolbar";
 import { SimpleToast } from "@/components/ui/simple-toast";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import { setDeleteStatus } from "@/lib/delete-status";
-import { Box, Plus, Upload, Trash2 } from "lucide-react";
+import { Box, Plus, Upload, Trash2, CloudUpload } from "lucide-react";
 
 const FORMAT_LABELS: Record<string, string> = {
   onnx: "ONNX",
@@ -43,7 +45,16 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
     message: "",
     type: "success",
   });
+  const [missingOnHf, setMissingOnHf] = useState(0);
+  const [syncing, setSyncing] = useState(false);
   const { confirm, dialog } = useConfirmDialog();
+
+  useEffect(() => {
+    fetchModelsAvailability(projectId).then((result) => {
+      if ("error" in result) return;
+      setMissingOnHf(result.missingCount ?? 0);
+    });
+  }, [projectId, models.length]);
 
   const allSelected = models.length > 0 && selected.size === models.length;
 
@@ -116,11 +127,55 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
     setDeleteStatus(false);
   }
 
+  async function handleSyncToHf() {
+    setSyncing(true);
+    setError(null);
+    const result = await syncModelsToHuggingFace(projectId);
+    if (result.error) {
+      setError(result.error);
+      setSyncing(false);
+      return;
+    }
+    setToast({
+      open: true,
+      message: result.message ?? `Synced ${result.uploaded ?? 0} model(s) to Hugging Face`,
+      type: "success",
+    });
+    setMissingOnHf(0);
+    router.refresh();
+    setSyncing(false);
+    setTimeout(() => setToast((t) => ({ ...t, open: false })), 3000);
+  }
+
   return (
     <div className="space-y-6">
       <SimpleToast open={toast.open} message={toast.message} type={toast.type} />
       {dialog}
       {error && <Alert variant="error">{error}</Alert>}
+
+      {missingOnHf > 0 && (
+        <Alert variant="warning">
+          <p className="font-medium">
+            {missingOnHf} model{missingOnHf !== 1 ? "s" : ""} Hugging Face par nahi mile
+          </p>
+          <p className="mt-1 text-sm">
+            Models sirf database mein hain — HF repo empty ho sakta hai. Pehle{" "}
+            <strong>Push to Hugging Face</strong> try karein (agar Railway disk par files hain),
+            warna dubara upload karein. Models <strong>model repo</strong> mein save hoti hain
+            (images wala dataset repo alag hota hai — same name ho sakta hai lekin URL different).
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-3"
+            onClick={handleSyncToHf}
+            loading={syncing}
+          >
+            {!syncing && <CloudUpload className="h-4 w-4" />}
+            Push to Hugging Face
+          </Button>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader

@@ -24,3 +24,42 @@ export async function deleteModel(projectId: string, modelId: string) {
 export async function deleteModels(projectId: string, modelIds: string[]) {
   await Promise.all(modelIds.map((id) => deleteModel(projectId, id)));
 }
+
+export interface ModelAvailabilityRow {
+  modelId: string;
+  modelName?: string;
+  hfPath?: string;
+  available: boolean;
+  source?: string;
+  error?: string;
+}
+
+export interface ModelsAvailabilityResponse {
+  models: ModelAvailabilityRow[];
+  availableCount: number;
+  missingCount: number;
+}
+
+export async function getModelsAvailability(
+  projectId: string
+): Promise<ModelsAvailabilityResponse> {
+  return api.get<ModelsAvailabilityResponse>(
+    `/api/models/${projectId}/availability`
+  );
+}
+
+export interface SyncModelsToHfResult {
+  uploaded: number;
+  dbUpdated?: number;
+  skippedAlreadyOnHf?: number;
+  hfRepo?: string;
+  repoType?: string;
+  files?: string[];
+  message?: string;
+}
+
+export async function syncModelsToHf(
+  projectId: string
+): Promise<SyncModelsToHfResult> {
+  return api.post<SyncModelsToHfResult>(`/api/models/${projectId}/sync-hf`, {});
+}
