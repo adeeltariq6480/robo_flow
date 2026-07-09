@@ -154,7 +154,7 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
       {error && <Alert variant="error">{error}</Alert>}
 
       {missingOnHf > 0 && (
-        <Alert variant="warning">
+        <Alert variant="info">
           <p className="font-medium">
             {missingOnHf} model{missingOnHf !== 1 ? "s" : ""} Hugging Face par nahi mile
           </p>
