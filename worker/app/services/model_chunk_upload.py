@@ -74,7 +74,7 @@ def save_chunk(session_id: str, chunk_index: int, data: bytes) -> None:
         session["received"].add(chunk_index)
 
 
-def finalize_session(session_id: str) -> dict:
+def finalize_session(session_id: str, *, batch_session_id: str | None = None) -> dict:
     with _lock:
         session = _sessions.pop(session_id, None)
     if not session:
@@ -96,10 +96,29 @@ def finalize_session(session_id: str) -> dict:
                 out.write(part.read_bytes())
 
         data = assembled.read_bytes()
+        meta = session["meta"]
+        if batch_session_id:
+            from app.services import model_batch_upload
+
+            model_batch_upload.stage_model(
+                batch_session_id,
+                session["file_name"],
+                data,
+                model_name=meta["modelName"],
+                model_version=meta["modelVersion"],
+                model_type=meta["modelType"],
+                description=meta.get("description"),
+            )
+            return {
+                "staged": True,
+                "batchSessionId": batch_session_id,
+                "fileName": session["file_name"],
+                "fileSize": len(data),
+            }
+
         loc = hf_storage.upload_model_file(
             session["project_id"], session["file_name"], data
         )
-        meta = session["meta"]
         return repo.create_model(
             session["project_id"],
             {

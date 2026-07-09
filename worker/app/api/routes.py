@@ -48,6 +48,7 @@ from app.models.schemas import (
 )
 from app.services import export_builder, hf_storage as file_storage, image_preprocess
 from app.services import supabase_repo as repo
+from app.services import model_batch_upload
 from app.services import model_chunk_upload
 from app.services.storage import persist_model_bytes_locally, resolve_model_local_path
 from app.services.yolo_inference import describe_model_status
@@ -61,8 +62,10 @@ api_router = APIRouter(prefix="/api", tags=["api"])
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 _upload_sessions: dict[str, dict] = {}
 _upload_sessions_lock = threading.Lock()
-_UPLOAD_BATCH_SIZE = int(os.getenv("UPLOAD_BATCH_SIZE", "200"))
-_UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "300.0"))
+_UPLOAD_SESSION_MAX_IMAGES = int(os.getenv("UPLOAD_SESSION_MAX_IMAGES", "500"))
+# Legacy alias — one HF commit per session (up to max images), not per HTTP batch.
+_UPLOAD_BATCH_SIZE = _UPLOAD_SESSION_MAX_IMAGES
+_UPLOAD_FLUSH_DELAY_SECONDS = float(os.getenv("UPLOAD_FLUSH_DELAY_SECONDS", "2.0"))
 _HF_FILE_CHECK_CACHE_TTL_SECONDS = float(os.getenv("HF_FILE_CHECK_CACHE_TTL_SECONDS", "45"))
 _hf_file_check_cache: dict[str, tuple[float, dict]] = {}
 _sync_preview_cache: dict[str, tuple[float, dict]] = {}
@@ -383,119 +386,152 @@ async def _upload_one_image(
     return image, None, adjust_info
 
 
+def _stage_upload_image_to_session(
+    session: dict,
+    project_id: str,
+    dataset_id: str,
+    stored_name: str,
+    data: bytes,
+) -> Path:
+    """Write image bytes to the session staging dir; optionally mirror to persistent local storage."""
+    staging_dir = Path(session["dir"]) / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_dir / stored_name
+    staged_path.write_bytes(data)
+    if _can_stage_hf_upload_batch():
+        persist_dir = _dataset_image_local_dir(project_id, dataset_id)
+        (persist_dir / stored_name).write_bytes(data)
+    return staged_path
+
+
 async def _flush_upload_session(session_id: str, *, initial_delay: float) -> None:
+    """Commit all staged session images to Hugging Face in a single commit when finalize is requested."""
     delay = max(0.0, initial_delay)
-    while True:
-        if delay > 0:
-            await asyncio.sleep(delay)
+    if delay > 0:
+        await asyncio.sleep(delay)
 
-        with _upload_sessions_lock:
-            session = _upload_sessions.get(session_id)
-            if not session:
-                return
-            if session.get("uploading"):
-                return
+    with _upload_sessions_lock:
+        session = _upload_sessions.get(session_id)
+        if not session:
+            return
+        if session.get("uploading"):
+            return
+        if not session.get("finalize_requested"):
+            session["flush_task"] = None
+            return
 
-            items = session["items"][:_UPLOAD_BATCH_SIZE]
-            if not items:
-                session["flush_task"] = None
-                return
-
-            del session["items"][: len(items)]
-            session["uploading"] = True
-            batch_root = Path(session["dir"]) / f"batch-{uuid4().hex}"
-            batch_root.mkdir(parents=True, exist_ok=True)
-            for item in items:
-                src = Path(item["local_path"])
-                (batch_root / item["stored_name"]).write_bytes(src.read_bytes())
-
-        logger.info(
-            "Batch upload started session=%s project=%s dataset=%s count=%d",
-            session_id,
-            session["project_id"],
-            session["dataset_id"],
-            len(items),
-        )
-
-        try:
-            if _should_upload_dataset_images_to_hf():
-                payload = []
-                for item in items:
-                    data = (batch_root / item["stored_name"]).read_bytes()
-                    payload.append((item["stored_name"], data))
-                await asyncio.to_thread(
-                    file_storage.upload_dataset_images_batch,
-                    session["project_id"],
-                    session["dataset_id"],
-                    payload,
-                )
-                logger.info("Upload session committed to HF session=%s count=%d", session_id, len(items))
-                image_ids = [item["image_id"] for item in items]
-                await asyncio.to_thread(
-                    repo.bulk_update_image_storage_fields,
-                    session["project_id"],
-                    image_ids,
-                    {
-                        "status": "uploaded",
-                        "storage_status": "remote_ready",
-                        "hf_sync_status": "synced",
-                    },
-                )
-            else:
-                logger.info("Upload session flushed locally session=%s count=%d", session_id, len(items))
-                image_ids = [item["image_id"] for item in items]
-                await asyncio.to_thread(
-                    repo.bulk_update_image_storage_fields,
-                    session["project_id"],
-                    image_ids,
-                    {
-                        "status": "uploaded",
-                        "storage_status": "local_ready",
-                        "hf_sync_status": "pending",
-                    },
-                )
-        except Exception as exc:
-            logger.error(
-                "Upload failed after retries session=%s count=%d: %s",
+        items = list(session["items"])
+        if not items:
+            session["flush_task"] = None
+            session["finalized"] = True
+            return
+        if len(items) > _UPLOAD_SESSION_MAX_IMAGES:
+            logger.warning(
+                "Upload session %s has %d images (max %d) — committing first %d only",
                 session_id,
                 len(items),
-                exc,
+                _UPLOAD_SESSION_MAX_IMAGES,
+                _UPLOAD_SESSION_MAX_IMAGES,
+            )
+            items = items[:_UPLOAD_SESSION_MAX_IMAGES]
+
+        session["items"] = session["items"][len(items):]
+        session["uploading"] = True
+        batch_root = Path(session["dir"]) / f"batch-{uuid4().hex}"
+        batch_root.mkdir(parents=True, exist_ok=True)
+        for item in items:
+            src = Path(item["local_path"])
+            (batch_root / item["stored_name"]).write_bytes(src.read_bytes())
+
+    logger.info(
+        "Session HF commit started session=%s project=%s dataset=%s count=%d",
+        session_id,
+        session["project_id"],
+        session["dataset_id"],
+        len(items),
+    )
+
+    try:
+        if _should_upload_dataset_images_to_hf():
+            payload = []
+            for item in items:
+                data = (batch_root / item["stored_name"]).read_bytes()
+                payload.append((item["stored_name"], data))
+            await asyncio.to_thread(
+                file_storage.upload_dataset_images_batch,
+                session["project_id"],
+                session["dataset_id"],
+                payload,
+            )
+            logger.info(
+                "Upload session committed to HF in one commit session=%s count=%d",
+                session_id,
+                len(items),
             )
             image_ids = [item["image_id"] for item in items]
-            try:
-                await asyncio.to_thread(
-                    repo.bulk_update_image_storage_fields,
-                    session["project_id"],
-                    image_ids,
-                    {
-                        "status": "pending_hf_sync",
-                        "storage_status": "local_ready",
-                        "hf_sync_status": "pending_hf_sync",
-                    },
-                )
-            except Exception as mark_exc:
-                logger.error(
-                    "Failed to mark %d image(s) pending_hf_sync session=%s: %s",
-                    len(image_ids),
-                    session_id,
-                    mark_exc,
-                )
-        finally:
-            shutil.rmtree(batch_root, ignore_errors=True)
-            with _upload_sessions_lock:
-                session = _upload_sessions.get(session_id)
-                if not session:
-                    return
+            await asyncio.to_thread(
+                repo.bulk_update_image_storage_fields,
+                session["project_id"],
+                image_ids,
+                {
+                    "status": "uploaded",
+                    "storage_status": "remote_ready",
+                    "hf_sync_status": "synced",
+                },
+            )
+        else:
+            logger.info("Upload session flushed locally session=%s count=%d", session_id, len(items))
+            image_ids = [item["image_id"] for item in items]
+            await asyncio.to_thread(
+                repo.bulk_update_image_storage_fields,
+                session["project_id"],
+                image_ids,
+                {
+                    "status": "uploaded",
+                    "storage_status": "local_ready",
+                    "hf_sync_status": "pending",
+                },
+            )
+    except Exception as exc:
+        logger.error(
+            "Upload failed after retries session=%s count=%d: %s",
+            session_id,
+            len(items),
+            exc,
+        )
+        image_ids = [item["image_id"] for item in items]
+        try:
+            await asyncio.to_thread(
+                repo.bulk_update_image_storage_fields,
+                session["project_id"],
+                image_ids,
+                {
+                    "status": "pending_hf_sync",
+                    "storage_status": "local_ready",
+                    "hf_sync_status": "pending_hf_sync",
+                },
+            )
+        except Exception as mark_exc:
+            logger.error(
+                "Failed to mark %d image(s) pending_hf_sync session=%s: %s",
+                len(image_ids),
+                session_id,
+                mark_exc,
+            )
+    finally:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        with _upload_sessions_lock:
+            session = _upload_sessions.get(session_id)
+            if session:
                 session["uploading"] = False
                 remaining = len(session["items"])
-                finalize_requested = bool(session.get("finalize_requested"))
                 if remaining == 0:
                     session["flush_task"] = None
-                    if finalize_requested:
-                        session["finalized"] = True
-                    return
-
-        delay = 0.0 if remaining >= _UPLOAD_BATCH_SIZE or finalize_requested else _UPLOAD_FLUSH_DELAY_SECONDS
+                    session["finalized"] = True
+                elif session.get("finalize_requested"):
+                    session["flush_task"] = asyncio.create_task(
+                        _flush_upload_session(session_id, initial_delay=0.0)
+                    )
 
 
 def _ensure_upload_session(project_id: str, dataset_id: str, session_id: str) -> dict:
@@ -782,49 +818,27 @@ async def _upload_images_impl(
             "adjusted": adjusted,
         }
 
-    remote_uploaded = False
-    immediate_hf_batch = _should_upload_dataset_images_to_hf() and not _can_stage_hf_upload_batch()
-    if immediate_hf_batch:
-        batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
-        try:
-            loc = await asyncio.to_thread(
-                file_storage.upload_dataset_images_batch,
-                project_id,
-                dataset_id,
-                batch_items,
-            )
-            remote_uploaded = True
-            logger.info(
-                "Images uploaded to HF in one commit project=%s dataset=%s count=%d repo=%s",
-                project_id,
-                dataset_id,
-                len(batch_items),
-                loc.get("hfRepo") if isinstance(loc, dict) else None,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Hugging Face batch image upload failed project=%s dataset=%s count=%d: %s",
-                project_id,
-                dataset_id,
-                len(batch_items),
-                exc,
-            )
-            raise _hf_upload_exception(exc, file_name=f"{len(batch_items)} image(s)", target="image") from exc
-
     for item in prepared:
         stored_name = item["stored_name"]
         result = item["result"]
         content_type = item["content_type"]
-        local_path = None
-        if _can_stage_hf_upload_batch() or not remote_uploaded:
-            local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
-            logger.info(
-                "Image received session=%s file=%s stored=%s local=%s",
-                session_id,
+        with _upload_sessions_lock:
+            session_state = _upload_sessions.get(session_id)
+            if session_state is None:
+                raise HTTPException(status_code=500, detail="Upload session expired")
+            local_path = _stage_upload_image_to_session(
+                session_state,
+                project_id,
+                dataset_id,
                 stored_name,
-                stored_name,
-                local_path,
+                result.data,
             )
+        logger.info(
+            "Image staged for session commit session=%s file=%s path=%s",
+            session_id,
+            stored_name,
+            local_path,
+        )
 
         record_data = {
             "fileName": stored_name,
@@ -834,12 +848,11 @@ async def _upload_images_impl(
             "height": result.height,
             "mimeType": result.mime_type or content_type,
             "fileSize": len(result.data),
-            "status": "uploaded" if remote_uploaded else "queued",
-            "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
-            "hfSyncStatus": "synced" if remote_uploaded else ("pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped"),
+            "status": "queued",
+            "storageStatus": "local_ready",
+            "hfSyncStatus": "pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped",
         }
-        if local_path:
-            record_data["localPath"] = str(local_path)
+        record_data["localPath"] = str(local_path)
 
         record = await asyncio.to_thread(
             repo.create_image,
@@ -849,34 +862,29 @@ async def _upload_images_impl(
         )
         created.append(record)
 
-        if not remote_uploaded:
-            with _upload_sessions_lock:
-                session_state = _upload_sessions.get(session_id)
-                if session_state is not None:
-                    session_state["items"].append(
-                        {
-                            "image_id": record["id"],
-                            "stored_name": stored_name,
-                            "local_path": str(local_path),
-                        }
-                    )
-            logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
-        else:
-            logger.info("Image recorded as remote_ready and synced session=%s file=%s", session_id, stored_name)
+        with _upload_sessions_lock:
+            session_state = _upload_sessions.get(session_id)
+            if session_state is not None:
+                session_state["items"].append(
+                    {
+                        "image_id": record["id"],
+                        "stored_name": stored_name,
+                        "local_path": str(local_path),
+                    }
+                )
+        logger.info("Image added to upload queue session=%s file=%s", session_id, stored_name)
 
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
         if session is not None:
             if finalize_session:
                 session["finalize_requested"] = True
-            immediate = finalize_session or len(session["items"]) >= _UPLOAD_BATCH_SIZE
-            should_schedule = session.get("flush_task") is None and session["items"]
+            should_schedule = bool(finalize_session and session.get("flush_task") is None and session["items"])
         else:
-            immediate = False
             should_schedule = False
 
     if should_schedule:
-        _schedule_upload_flush(session_id, immediate=immediate)
+        _schedule_upload_flush(session_id, immediate=True)
 
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
 
@@ -947,42 +955,21 @@ async def upload_zip(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
-    remote_uploaded = False
-    immediate_hf_batch = _should_upload_dataset_images_to_hf() and not _can_stage_hf_upload_batch()
-    if prepared and immediate_hf_batch:
-        batch_items = [(item["stored_name"], item["result"].data) for item in prepared]
-        try:
-            loc = await asyncio.to_thread(
-                file_storage.upload_dataset_images_batch,
-                project_id,
-                dataset_id,
-                batch_items,
-            )
-            remote_uploaded = True
-            logger.info(
-                "ZIP images uploaded to HF in one commit project=%s dataset=%s count=%d repo=%s",
-                project_id,
-                dataset_id,
-                len(batch_items),
-                loc.get("hfRepo") if isinstance(loc, dict) else None,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Hugging Face batch ZIP image upload failed project=%s dataset=%s count=%d: %s",
-                project_id,
-                dataset_id,
-                len(batch_items),
-                exc,
-            )
-            raise _hf_upload_exception(exc, file_name=f"{len(batch_items)} ZIP image(s)", target="image") from exc
-
     for item in prepared:
         stored_name = item["stored_name"]
         result = item["result"]
         content_type = item["content_type"]
-        local_path = None
-        if _can_stage_hf_upload_batch() or not remote_uploaded:
-            local_path = _persist_dataset_image_locally(project_id, dataset_id, stored_name, result.data)
+        with _upload_sessions_lock:
+            session_state = _upload_sessions.get(session_id)
+            if session_state is None:
+                raise HTTPException(status_code=500, detail="Upload session expired")
+            local_path = _stage_upload_image_to_session(
+                session_state,
+                project_id,
+                dataset_id,
+                stored_name,
+                result.data,
+            )
 
         record_data = {
             "fileName": stored_name,
@@ -994,12 +981,11 @@ async def upload_zip(
             "height": result.height,
             "mimeType": result.mime_type or content_type,
             "fileSize": len(result.data),
-            "status": "uploaded" if remote_uploaded else "queued",
-            "storageStatus": "remote_ready" if remote_uploaded else "local_ready",
-            "hfSyncStatus": "synced" if remote_uploaded else ("pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped"),
+            "status": "queued",
+            "storageStatus": "local_ready",
+            "hfSyncStatus": "pending_hf_sync" if _should_upload_dataset_images_to_hf() else "skipped",
         }
-        if local_path:
-            record_data["localPath"] = str(local_path)
+        record_data["localPath"] = str(local_path)
 
         record = await asyncio.to_thread(
             repo.create_image,
@@ -1009,31 +995,28 @@ async def upload_zip(
         )
         created.append(record)
 
-        if not remote_uploaded:
-            with _upload_sessions_lock:
-                session_state = _upload_sessions.get(session_id)
-                if session_state is not None:
-                    session_state["items"].append(
-                        {
-                            "image_id": record["id"],
-                            "stored_name": stored_name,
-                            "local_path": str(local_path),
-                        }
-                    )
-            logger.info("ZIP image staged session=%s file=%s", session_id, stored_name)
-        else:
-            logger.info("ZIP image recorded as remote_ready and synced session=%s file=%s", session_id, stored_name)
+        with _upload_sessions_lock:
+            session_state = _upload_sessions.get(session_id)
+            if session_state is not None:
+                session_state["items"].append(
+                    {
+                        "image_id": record["id"],
+                        "stored_name": stored_name,
+                        "local_path": str(local_path),
+                    }
+                )
+        logger.info("ZIP image staged session=%s file=%s", session_id, stored_name)
 
     with _upload_sessions_lock:
         session = _upload_sessions.get(session_id)
-        if session is not None:
-            immediate = len(session["items"]) >= _UPLOAD_BATCH_SIZE
-            should_schedule = session.get("flush_task") is None and session["items"]
+        if session is not None and session["items"]:
+            session["finalize_requested"] = True
+            should_schedule = session.get("flush_task") is None
         else:
             should_schedule = False
 
     if should_schedule:
-        _schedule_upload_flush(session_id, immediate=immediate)
+        _schedule_upload_flush(session_id, immediate=True)
 
     await asyncio.to_thread(repo.recount_dataset_images, project_id, dataset_id)
     return {
@@ -1045,6 +1028,36 @@ async def upload_zip(
         "queued": len(created),
         "processing": True,
     }
+
+
+@api_router.post("/upload-models/batch-init")
+async def upload_models_batch_init(
+    project_id: str = Form(...),
+    _: None = Depends(verify_api_key),
+):
+    """Start a model upload batch — all staged models commit to Hugging Face in one push."""
+    _check_upload_config()
+    session_id = await asyncio.to_thread(model_batch_upload.init_batch, project_id)
+    return {"batchSessionId": session_id}
+
+
+@api_router.post("/upload-models/batch-finish")
+async def upload_models_batch_finish(
+    batch_session_id: str = Form(...),
+    _: None = Depends(verify_api_key),
+):
+    """Commit all staged models in one Hugging Face commit."""
+    _check_upload_config()
+    try:
+        models = await asyncio.to_thread(model_batch_upload.finalize_batch, batch_session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise _hf_upload_exception(exc, file_name="model batch", target="model") from exc
+    except Exception as exc:
+        logger.exception("Model batch upload failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"models": models, "count": len(models)}
 
 
 @api_router.post("/upload-model/init")
@@ -1099,11 +1112,17 @@ async def upload_model_chunk(
 @api_router.post("/upload-model/finish")
 async def upload_model_finish(
     session_id: str = Form(...),
+    batch_session_id: str = Form(default=""),
     _: None = Depends(verify_api_key),
 ):
     _check_upload_config()
+    batch_id = batch_session_id.strip() or None
     try:
-        model = await asyncio.to_thread(model_chunk_upload.finalize_session, session_id)
+        model = await asyncio.to_thread(
+            model_chunk_upload.finalize_session,
+            session_id,
+            batch_session_id=batch_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -1121,6 +1140,7 @@ async def upload_model(
     model_version: str = Form("1.0.0"),
     model_type: str = Form("pytorch"),
     description: str = Form(""),
+    batch_session_id: str = Form(default=""),
     file: UploadFile = File(...),
     _: None = Depends(verify_api_key),
 ):
@@ -1128,6 +1148,32 @@ async def upload_model(
     _check_upload_config()
     data = await file.read()
     file_name = _safe_filename(file.filename, "model.pt")
+    batch_id = batch_session_id.strip() or None
+
+    if batch_id:
+        try:
+            await asyncio.to_thread(
+                model_batch_upload.stage_model,
+                batch_id,
+                file_name,
+                data,
+                model_name=model_name,
+                model_version=model_version,
+                model_type=model_type,
+                description=description or None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if settings.local_storage_enabled and not settings.is_vercel:
+            await asyncio.to_thread(persist_model_bytes_locally, project_id, file_name, data)
+        return {
+            "staged": True,
+            "batchSessionId": batch_id,
+            "fileName": file_name,
+            "fileSize": len(data),
+            "modelName": model_name,
+        }
+
     if settings.local_storage_enabled and not settings.is_vercel:
         await asyncio.to_thread(persist_model_bytes_locally, project_id, file_name, data)
     if settings.hf_upload_enabled:

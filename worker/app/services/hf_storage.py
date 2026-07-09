@@ -691,6 +691,55 @@ def upload_model_file(
     )
 
 
+def upload_model_files_batch(
+    project_id: str,
+    items: list[tuple[str, bytes]],
+) -> dict:
+    """Upload multiple model files in a single HF commit via upload_folder."""
+    if not items:
+        raise ValueError("No models to upload")
+
+    if not hf_model_upload_enabled():
+        logger.info("Hugging Face upload is disabled; skipping model batch upload")
+        return {"hfRepo": settings.model_repo_id, "count": 0, "repoType": settings.model_repo_type}
+
+    repo_id = settings.model_repo_id
+    repo_type = settings.model_repo_type
+    _ensure_repo(repo_id, repo_type)
+    repo_folder = f"models/{project_id}"
+    used_names: set[str] = set()
+    local_names: list[str] = []
+
+    with tempfile.TemporaryDirectory(dir=_temp_dir()) as tmp:
+        tmp_path = Path(tmp)
+        for file_name, data in items:
+            local_name = _safe_local_name(file_name, used_names)
+            local_names.append(local_name)
+            (tmp_path / local_name).write_bytes(data)
+
+        with _hf_commit_lock:
+            def _do_upload():
+                _api().upload_folder(
+                    folder_path=str(tmp_path),
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    path_in_repo=repo_folder,
+                    commit_message=f"Upload {len(items)} model(s) to project {project_id}",
+                )
+
+            _upload_with_retry(f"upload_folder:{repo_folder}:models", _do_upload)
+
+    verify_paths = [f"{repo_folder}/{name}" for name in local_names]
+    _verify_repo_files(repo_id, repo_type, verify_paths)
+
+    return {
+        "hfRepo": repo_id,
+        "count": len(items),
+        "repoType": repo_type,
+        "localNames": local_names,
+    }
+
+
 def upload_export(project_id: str, file_name: str, data: bytes) -> dict:
     return upload_bytes(
         data,

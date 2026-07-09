@@ -579,8 +579,9 @@ async function uploadModelChunked(
     modelType: string;
     description?: string;
   },
-  onProgress?: (percent: number) => void
-): Promise<{ id: string; modelName: string }> {
+  onProgress?: (percent: number) => void,
+  batchSessionId?: string
+): Promise<{ id?: string; modelName?: string; staged?: boolean }> {
   const totalChunks = Math.ceil(data.file.size / MODEL_CHUNK_SIZE);
   const initForm = new FormData();
   initForm.append("project_id", projectId);
@@ -623,7 +624,10 @@ async function uploadModelChunked(
 
   const finishForm = new FormData();
   finishForm.append("session_id", sessionId);
-  const model = await uploadForm<{ id: string; modelName: string }>(
+  if (batchSessionId) {
+    finishForm.append("batch_session_id", batchSessionId);
+  }
+  const model = await uploadForm<{ id: string; modelName: string; staged?: boolean }>(
     "/api/upload-model/finish",
     finishForm,
     onProgress ? () => onProgress(99) : undefined,
@@ -631,6 +635,31 @@ async function uploadModelChunked(
   );
   onProgress?.(100);
   return model;
+}
+
+export async function initModelBatchUpload(projectId: string): Promise<string> {
+  const form = new FormData();
+  form.append("project_id", projectId);
+  const res = await uploadForm<{ batchSessionId: string }>(
+    "/api/upload-models/batch-init",
+    form,
+    undefined,
+    MODEL_UPLOAD_TIMEOUT_MS
+  );
+  return res.batchSessionId;
+}
+
+export async function finishModelBatchUpload(
+  batchSessionId: string
+): Promise<{ models: { id: string; modelName: string }[]; count: number }> {
+  const form = new FormData();
+  form.append("batch_session_id", batchSessionId);
+  return uploadForm(
+    "/api/upload-models/batch-finish",
+    form,
+    undefined,
+    MODEL_UPLOAD_TIMEOUT_MS
+  );
 }
 
 export async function uploadModel(
@@ -642,8 +671,10 @@ export async function uploadModel(
     modelType: string;
     description?: string;
   },
-  onProgress?: (percent: number) => void
-): Promise<{ id: string; modelName: string }> {
+  onProgress?: (percent: number) => void,
+  options?: { batchSessionId?: string }
+): Promise<{ id?: string; modelName?: string; staged?: boolean }> {
+  const batchSessionId = options?.batchSessionId;
   if (data.file.size <= MODEL_WORKER_MAX_BYTES) {
     const form = new FormData();
     form.append("project_id", projectId);
@@ -651,6 +682,9 @@ export async function uploadModel(
     form.append("model_version", data.modelVersion);
     form.append("model_type", data.modelType);
     form.append("description", data.description ?? "");
+    if (batchSessionId) {
+      form.append("batch_session_id", batchSessionId);
+    }
     form.append("file", data.file);
     return uploadForm(
       "/api/upload-model",
@@ -660,5 +694,52 @@ export async function uploadModel(
     );
   }
 
-  return uploadModelChunked(projectId, data, onProgress);
+  return uploadModelChunked(projectId, data, onProgress, batchSessionId);
+}
+
+export async function uploadModels(
+  projectId: string,
+  models: {
+    file: File;
+    modelName: string;
+    modelVersion: string;
+    modelType: string;
+    description?: string;
+  }[],
+  onProgress?: (percent: number) => void
+): Promise<{ models: { id: string; modelName: string }[]; count: number }> {
+  if (models.length === 0) {
+    return { models: [], count: 0 };
+  }
+  if (models.length === 1) {
+    const one = await uploadModel(projectId, models[0], onProgress);
+    return {
+      models: [
+        {
+          id: one.id ?? "",
+          modelName: one.modelName ?? models[0].modelName,
+        },
+      ],
+      count: 1,
+    };
+  }
+
+  const batchSessionId = await initModelBatchUpload(projectId);
+  for (let i = 0; i < models.length; i++) {
+    const item = models[i];
+    await uploadModel(
+      projectId,
+      item,
+      onProgress
+        ? (pct) => {
+            const overall = ((i + pct / 100) / models.length) * 95;
+            onProgress(Math.round(overall));
+          }
+        : undefined,
+      { batchSessionId }
+    );
+  }
+  const result = await finishModelBatchUpload(batchSessionId);
+  onProgress?.(100);
+  return result;
 }

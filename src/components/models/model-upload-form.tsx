@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { uploadModel } from "@/lib/api/uploads";
+import { uploadModels } from "@/lib/api/uploads";
 import { revalidateProject } from "@/lib/actions/revalidate";
 import { useProjectDrop } from "@/components/project/project-drop-provider";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
@@ -108,21 +108,26 @@ export function ModelUploadForm({ projectId }: ModelUploadFormProps) {
     const desc = description.trim() || undefined;
 
     try {
-      for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
-        setUploadLabel(`Uploading ${i + 1} of ${queue.length}: ${item.file.name}`);
-        await uploadModel(
-          projectId,
-          {
-            file: item.file,
-            modelName: item.name.trim(),
-            modelVersion: ver,
-            modelType: item.format,
-            description: desc,
-          },
-          (p) => setProgress(Math.round(((i + p / 100) / queue.length) * 100))
-        );
-        names.push(`${item.name.trim()} v${ver}`);
+      const payload = queue.map((item) => ({
+        file: item.file,
+        modelName: item.name.trim(),
+        modelVersion: ver,
+        modelType: item.format,
+        description: desc,
+      }));
+
+      setUploadLabel(
+        payload.length === 1
+          ? `Uploading ${payload[0].file.name}`
+          : `Uploading ${payload.length} models (one Hugging Face commit)…`
+      );
+
+      const result = await uploadModels(projectId, payload, (p) => setProgress(p));
+      for (const model of result.models) {
+        const label = model.modelName?.trim();
+        if (label) {
+          names.push(`${label} v${ver}`);
+        }
       }
 
       setProgress(100);
