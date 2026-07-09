@@ -20,14 +20,51 @@ function parseAutoLabelProgress(message: string | undefined) {
   if (!message) return null;
 
   const perModel = message.match(
-    /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*model\s+(\d+)\s*\/\s*(\d+)/i
+    /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*(\d+)\s*models merged/i
   );
   if (perModel) {
     return {
       image: Number(perModel[1]),
       images: Number(perModel[2]),
       model: Number(perModel[3]),
-      models: Number(perModel[4]),
+      models: Number(perModel[3]),
+      phase: "labeling" as const,
+    };
+  }
+
+  const perModelLegacy = message.match(
+    /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*model\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (perModelLegacy) {
+    return {
+      image: Number(perModelLegacy[1]),
+      images: Number(perModelLegacy[2]),
+      model: Number(perModelLegacy[3]),
+      models: Number(perModelLegacy[4]),
+    };
+  }
+
+  const modelsReady = message.match(
+    /All\s+(\d+)\s+models ready — starting labels on\s+(\d+)\s+image/i
+  );
+  if (modelsReady) {
+    return {
+      image: 0,
+      images: Number(modelsReady[2]),
+      model: Number(modelsReady[1]),
+      models: Number(modelsReady[1]),
+      phase: "models_ready" as const,
+    };
+  }
+
+  const loadingModel = message.match(/Loading model\s+(\d+)\s*\/\s*(\d+)\s+into memory/i);
+  if (loadingModel) {
+    return {
+      image: 0,
+      images: 0,
+      model: Number(loadingModel[1]),
+      models: Number(loadingModel[2]),
+      phase: "loading_models" as const,
     };
   }
 
@@ -188,11 +225,17 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
       ? `Saving labels ${parsed.image}/${parsed.images}`
       : "phase" in parsed && parsed.phase === "starting"
         ? `Preparing ${parsed.images} image(s)…`
+        : "phase" in parsed && parsed.phase === "loading_models"
+          ? `Loading models ${parsed.model}/${parsed.models}…`
+          : "phase" in parsed && parsed.phase === "models_ready"
+            ? `All ${parsed.models} models ready — starting ${parsed.images} image(s)…`
         : "phase" in parsed && parsed.phase === "refreshing"
           ? `Refreshing model ${parsed.model}/${parsed.models} after image ${parsed.image}/${parsed.images}…`
-        : parsed.models > 1
-          ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
-          : `Image ${parsed.image}/${parsed.images}`
+        : parsed.models > 1 && parsed.image > 0
+          ? `Image ${parsed.image}/${parsed.images} · ${parsed.models} models merged`
+          : parsed.models > 1
+            ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
+            : `Image ${parsed.image}/${parsed.images}`
     : job.progress_message || job.status;
 
   return (

@@ -42,6 +42,7 @@ class InferenceProfile:
 _inference_profile: ContextVar[InferenceProfile | None] = ContextVar(
     "inference_profile", default=None
 )
+_keep_all_models: ContextVar[bool] = ContextVar("keep_all_models", default=False)
 
 
 def set_inference_profile(profile: InferenceProfile | None) -> None:
@@ -50,6 +51,19 @@ def set_inference_profile(profile: InferenceProfile | None) -> None:
 
 def clear_inference_profile() -> None:
     _inference_profile.set(None)
+
+
+def set_keep_all_models(enabled: bool) -> None:
+    """When True, keep every loaded YOLO model in RAM (multi-model auto-label prep)."""
+    _keep_all_models.set(enabled)
+
+
+def clear_keep_all_models() -> None:
+    _keep_all_models.set(False)
+
+
+def _should_keep_all_models() -> bool:
+    return _keep_all_models.get()
 
 
 def _active_profile() -> InferenceProfile | None:
@@ -146,7 +160,7 @@ def get_model(model_path: Path) -> UniversalYOLOModel:
         return model
 
     with _yolo_lock:
-        if low_memory and _yolo_models:
+        if low_memory and _yolo_models and not _should_keep_all_models():
             logger.info("LOW_MEMORY_MODE: clearing %d cached model(s) before loading %s", len(_yolo_models), model_path)
             for cached in list(_yolo_models.values()):
                 try:

@@ -322,10 +322,17 @@ export function AutoLabelPanel({
               </>
             )}{" "}
             in &quot;{selectedDataset.name}&quot;
+            {selectedModelIds.length > 1 && (
+              <span className="block text-emerald-700">
+                Pehle saare {selectedModelIds.length} models load + merge honge, phir{" "}
+                {relabelAll ? selectedDataset.file_count : "unlabeled"} images par labeling
+                shuru hogi.
+              </span>
+            )}
             {selectedModelIds.length > 2 && (
               <span className="block text-amber-700">
-                Using {selectedModelIds.length} models — labeling runs one model at a time to
-                save memory. Large datasets may take several minutes.
+                Agar Railway RAM kam ho to worker automatically ek model at a time mode use
+                karega.
               </span>
             )}
             {selectedModelIds.length === 1 &&
