@@ -70,8 +70,9 @@ def _ensure_repo(repo_id: str, repo_type: str) -> None:
             raise RuntimeError(
                 f"Hugging Face repo not found: {repo_id} (type={repo_type}). "
                 "Create it once on huggingface.co, then set Railway env to that exact repo. "
-                "For a single repo use HF_DATASET_REPO=HF_MODEL_REPO=Adeel6480/robo_flow and "
-                "HF_DATASET_REPO_TYPE=HF_MODEL_REPO_TYPE=model. "
+                "For Adeel6480/robo_flow as a dataset repo use "
+                "HF_DATASET_REPO=HF_MODEL_REPO=Adeel6480/robo_flow and "
+                "HF_DATASET_REPO_TYPE=HF_MODEL_REPO_TYPE=dataset. "
                 "Set HF_AUTO_CREATE_REPO=true only if you want the worker to auto-create repos."
             ) from exc
         raise RuntimeError(

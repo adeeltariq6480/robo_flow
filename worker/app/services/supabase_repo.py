@@ -1,6 +1,7 @@
 """Supabase Postgres data access — drop-in replacement for firestore_repo."""
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from app.config import settings
@@ -9,6 +10,46 @@ from app.services import hf_storage as file_storage
 from app.services.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
+
+
+def _is_transient_http_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__} {exc}".lower()
+    markers = (
+        "http2",
+        "connection",
+        "timeout",
+        "timed out",
+        "reset",
+        "disconnect",
+        "remote protocol",
+        "read error",
+        "broken pipe",
+        "temporarily unavailable",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _execute_supabase(label: str, fn, *, max_attempts: int = 3):
+    delay = 0.4
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts - 1 or not _is_transient_http_error(exc):
+                raise
+            logger.warning(
+                "%s transient Supabase error (attempt %d/%d): %s",
+                label,
+                attempt + 1,
+                max_attempts,
+                exc,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 3.0)
+    if last_exc:
+        raise last_exc
 
 
 def now_iso() -> str:
@@ -545,16 +586,123 @@ def update_image_storage_fields(project_id: str, image_id: str, data: dict) -> N
         payload["last_error"] = data["last_error"]
     if not payload:
         return
+
+    def _run():
+        return (
+            _sb()
+            .table("images")
+            .update(payload)
+            .eq("id", image_id)
+            .eq("project_id", project_id)
+            .execute()
+        )
+
     try:
-        _sb().table("images").update(payload).eq("id", image_id).eq("project_id", project_id).execute()
+        _execute_supabase(f"update_image_storage_fields:{image_id}", _run)
     except Exception as exc:
         message = str(exc).lower()
         if "column" in message and "does not exist" in message:
-            fallback = {k: v for k, v in payload.items() if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}}
+            fallback = {
+                k: v
+                for k, v in payload.items()
+                if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}
+            }
             if fallback:
-                _sb().table("images").update(fallback).eq("id", image_id).eq("project_id", project_id).execute()
+                _execute_supabase(
+                    f"update_image_storage_fields_fallback:{image_id}",
+                    lambda: _sb()
+                    .table("images")
+                    .update(fallback)
+                    .eq("id", image_id)
+                    .eq("project_id", project_id)
+                    .execute(),
+                )
         else:
             raise
+
+
+def bulk_update_image_storage_fields(
+    project_id: str,
+    image_ids: list[str],
+    data: dict,
+) -> None:
+    """Update many images in one Supabase request (same payload for all)."""
+    ids = [str(image_id) for image_id in image_ids if image_id]
+    if not ids:
+        return
+
+    payload: dict = {}
+    if "status" in data:
+        payload["status"] = data["status"]
+    if "local_path" in data:
+        payload["local_path"] = data["local_path"]
+    if "localPath" in data:
+        payload["local_path"] = data["localPath"]
+    if "storage_status" in data:
+        payload["storage_status"] = data["storage_status"]
+    if "storageStatus" in data:
+        payload["storage_status"] = data["storageStatus"]
+    if "hf_sync_status" in data:
+        payload["hf_sync_status"] = data["hf_sync_status"]
+    if "hfSyncStatus" in data:
+        payload["hf_sync_status"] = data["hfSyncStatus"]
+    if "hfPath" in data:
+        payload["hf_path"] = data["hfPath"]
+    if "hf_path" in data:
+        payload["hf_path"] = data["hf_path"]
+    if "lastError" in data:
+        payload["last_error"] = data["lastError"]
+    if "last_error" in data:
+        payload["last_error"] = data["last_error"]
+    if not payload:
+        return
+
+    def _run():
+        return (
+            _sb()
+            .table("images")
+            .update(payload)
+            .eq("project_id", project_id)
+            .in_("id", ids)
+            .execute()
+        )
+
+    try:
+        _execute_supabase(f"bulk_update_images:{len(ids)}", _run)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "column" in message and "does not exist" in message:
+            fallback = {
+                k: v
+                for k, v in payload.items()
+                if k not in {"local_path", "storage_status", "hf_sync_status", "last_error"}
+            }
+            if fallback:
+                _execute_supabase(
+                    f"bulk_update_images_fallback:{len(ids)}",
+                    lambda: _sb()
+                    .table("images")
+                    .update(fallback)
+                    .eq("project_id", project_id)
+                    .in_("id", ids)
+                    .execute(),
+                )
+        else:
+            raise
+
+
+def mark_dataset_images_synced(project_id: str, dataset_id: str) -> int:
+    """Mark every image in a dataset as HF-synced in one DB call."""
+    res = _execute_supabase(
+        f"mark_dataset_images_synced:{dataset_id}",
+        lambda: _sb()
+        .table("images")
+        .update({"hf_sync_status": "synced", "storage_status": "remote_ready"})
+        .eq("project_id", project_id)
+        .eq("dataset_id", dataset_id)
+        .execute(),
+    )
+    return len(res.data or [])
 
 
 def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:

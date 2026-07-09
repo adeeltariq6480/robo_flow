@@ -24,8 +24,56 @@ const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 /** YOLO .pt files can be large — allow longer worker upload time. */
 const MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function workerFetchHeaders(): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (BROWSER_WORKER_API_KEY) {
+    headers["X-Worker-Key"] = BROWSER_WORKER_API_KEY;
+  }
+  return headers;
+}
+
+async function workerJsonFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = UPLOAD_TIMEOUT_MS
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        ...workerFetchHeaders(),
+        ...(init.headers as Record<string, string> | undefined),
+      },
+    });
+    if (!res.ok) {
+      const raw = await res.text();
+      let message = `Request failed (${res.status})`;
+      try {
+        const body = JSON.parse(raw) as { detail?: string };
+        if (body.detail) message = body.detail;
+      } catch {
+        if (raw) message = raw.slice(0, 300);
+      }
+      if (res.status === 401) {
+        message =
+          "Worker rejected API key (401). Remove WORKER_API_KEY on Railway, or set the same value as NEXT_PUBLIC_WORKER_API_KEY on Vercel.";
+      }
+      throw new Error(message);
+    }
+    const raw = await res.text();
+    return raw ? (JSON.parse(raw) as T) : ({} as T);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Request timed out — try again in a moment.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Size-aware batches: fewer commits than 1-by-1, small enough to avoid timeouts. */
@@ -355,6 +403,64 @@ export async function uploadImages(
   return combined;
 }
 
+export interface DatasetSyncPreview {
+  localImagesCount: number;
+  pendingImageSync: number;
+  imagesSynced: boolean;
+}
+
+export async function getDatasetSyncPreview(
+  projectId: string,
+  datasetId: string
+): Promise<DatasetSyncPreview> {
+  const data = await workerJsonFetch<
+    DatasetSyncPreview & {
+      local_images_count?: number;
+      pending_image_sync?: number;
+      images_synced?: boolean;
+    }
+  >(`/api/datasets/${projectId}/${datasetId}/sync-preview`);
+  return {
+    localImagesCount: data.localImagesCount ?? data.local_images_count ?? 0,
+    pendingImageSync: data.pendingImageSync ?? data.pending_image_sync ?? 0,
+    imagesSynced: data.imagesSynced ?? data.images_synced ?? false,
+  };
+}
+
+export async function waitForDatasetBackgroundSync(
+  projectId: string,
+  datasetId: string,
+  options?: { maxWaitMs?: number; pollMs?: number }
+): Promise<void> {
+  const maxWaitMs = options?.maxWaitMs ?? 2 * 60 * 1000;
+  let pollMs = options?.pollMs ?? 8000;
+  const started = Date.now();
+  let consecutiveErrors = 0;
+
+  while (Date.now() - started < maxWaitMs) {
+    try {
+      const preview = await getDatasetSyncPreview(projectId, datasetId);
+      consecutiveErrors = 0;
+      if (preview.imagesSynced || preview.pendingImageSync === 0) {
+        return;
+      }
+    } catch {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 3) {
+        throw new Error(
+          "Worker is busy or unreachable while waiting for background HF sync — retry HF sync in a moment."
+        );
+      }
+      pollMs = Math.min(pollMs * 2, 20000);
+    }
+    await sleep(pollMs);
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface HfFileCheckResult {
   dbImagesCount: number;
   remoteFilesCount: number;
@@ -365,48 +471,90 @@ export interface HfFileCheckResult {
 export async function finalizeDatasetHfUpload(
   projectId: string,
   datasetId: string
-): Promise<{ ok?: boolean; count?: number }> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/datasets/${projectId}/${datasetId}/finalize-upload`,
-    { method: "POST", cache: "no-store" }
+): Promise<{ ok?: boolean; count?: number; message?: string }> {
+  return workerJsonFetch(
+    `/api/datasets/${projectId}/${datasetId}/finalize-upload`,
+    { method: "POST" },
+    UPLOAD_TIMEOUT_MS
   );
-  if (!res.ok) {
-    const raw = await res.text();
-    let message = `HF sync failed (${res.status})`;
-    try {
-      const body = JSON.parse(raw) as { detail?: string };
-      if (body.detail) message = body.detail;
-    } catch {
-      if (raw) message = raw.slice(0, 300);
-    }
-    throw new Error(message);
-  }
-  return res.json() as Promise<{ ok?: boolean; count?: number }>;
 }
 
 export async function checkDatasetHfFiles(
   projectId: string,
   datasetId: string
 ): Promise<HfFileCheckResult> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/admin/datasets/${projectId}/${datasetId}/hf-file-check`,
-    { cache: "no-store" }
-  );
-  if (!res.ok) {
-    throw new Error(`Could not check Hugging Face files (${res.status})`);
-  }
-  const data = (await res.json()) as HfFileCheckResult & {
-    db_images_count?: number;
-    remote_files_count?: number;
-    matched_by_filename?: number;
-    missing_remote?: number;
-  };
+  const data = await workerJsonFetch<
+    HfFileCheckResult & {
+      db_images_count?: number;
+      remote_files_count?: number;
+      hf_files_found?: number;
+      matched_by_filename?: number;
+      missing_remote?: number;
+    }
+  >(`/api/admin/datasets/${projectId}/${datasetId}/hf-file-check`);
   return {
     dbImagesCount: data.dbImagesCount ?? data.db_images_count ?? 0,
-    remoteFilesCount: data.remoteFilesCount ?? data.remote_files_count ?? 0,
+    remoteFilesCount:
+      data.remoteFilesCount ?? data.remote_files_count ?? data.hf_files_found ?? 0,
     matchedByFilename: data.matchedByFilename ?? data.matched_by_filename ?? 0,
     missingRemote: data.missingRemote ?? data.missing_remote ?? 0,
   };
+}
+
+export interface SyncDatasetHfOptions {
+  waitForBackground?: boolean;
+  onStatus?: (message: string) => void;
+}
+
+/** Check HF first; only call finalize-upload when files are still missing. */
+export async function syncDatasetToHf(
+  projectId: string,
+  datasetId: string,
+  options: SyncDatasetHfOptions = {}
+): Promise<HfFileCheckResult> {
+  const report = (message: string) => options.onStatus?.(message);
+
+  if (options.waitForBackground) {
+    report("Waiting for worker to finish background upload…");
+    await waitForDatasetBackgroundSync(projectId, datasetId);
+  }
+
+  report("Checking Hugging Face…");
+  let check = await checkDatasetHfFiles(projectId, datasetId);
+  const alreadySynced =
+    check.dbImagesCount > 0 &&
+    check.matchedByFilename >= check.dbImagesCount &&
+    check.missingRemote === 0;
+
+  if (!alreadySynced && check.missingRemote === 0 && check.matchedByFilename === 0) {
+    // DB may still be catching up — one short wait before finalize.
+    report("Waiting for worker background sync…");
+    try {
+      await waitForDatasetBackgroundSync(projectId, datasetId, {
+        maxWaitMs: 45_000,
+        pollMs: 10_000,
+      });
+      check = await checkDatasetHfFiles(projectId, datasetId);
+    } catch {
+      // Continue to finalize attempt below.
+    }
+  }
+
+  const syncedAfterWait =
+    check.dbImagesCount > 0 &&
+    check.matchedByFilename >= check.dbImagesCount &&
+    check.missingRemote === 0;
+
+  if (!syncedAfterWait) {
+    report("Pushing remaining images to Hugging Face…");
+    const result = await finalizeDatasetHfUpload(projectId, datasetId);
+    if (result.message) {
+      report(result.message);
+    }
+    check = await checkDatasetHfFiles(projectId, datasetId);
+  }
+
+  return check;
 }
 
 export function uploadZip(

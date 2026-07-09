@@ -30,8 +30,15 @@ async def lifespan(app: FastAPI):
         logger.info("HF_TOKEN present=%s", bool(settings.hf_token and settings.hf_token.strip()))
         logger.info("HF_DATASET_REPO=%s", settings.dataset_repo_id or None)
         logger.info("HF_MODEL_REPO=%s", settings.model_repo_id or None)
-        logger.info("HF dataset upload repo_type=%s", settings.dataset_repo_type)
-        logger.info("HF model upload repo_type=%s", settings.model_repo_type)
+        logger.info("HF dataset upload repo_type=%s (images)", settings.dataset_repo_type)
+        logger.info("HF model upload repo_type=%s (weights)", settings.model_repo_type)
+        if settings.dataset_repo_type != "dataset":
+            logger.warning(
+                "HF_DATASET_REPO_TYPE=%s — image uploads expect repo_type=dataset. "
+                "If Adeel6480/robo_flow is a Hugging Face *dataset* repo, set "
+                "HF_DATASET_REPO_TYPE=dataset and HF_MODEL_REPO_TYPE=dataset on Railway.",
+                settings.dataset_repo_type,
+            )
         logger.info("HF_AUTO_CREATE_REPO=%s", settings.hf_auto_create_repo)
         if (
             settings.dataset_repo_id
@@ -86,10 +93,23 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             status_code=exc.status_code,
             content={"detail": exc.detail},
         )
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    detail = str(exc) or "Internal Server Error"
+    lowered = detail.lower()
+    if any(
+        token in lowered
+        for token in ("http2", "httpcore", "connection", "remote protocol", "read error")
+    ):
+        logger.error(
+            "Transient upstream error on %s %s: %s",
+            request.method,
+            request.url.path,
+            detail,
+        )
+    else:
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc) or "Internal Server Error"},
+        content={"detail": detail},
     )
 
 

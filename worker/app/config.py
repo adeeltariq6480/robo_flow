@@ -258,10 +258,11 @@ class Settings(BaseSettings):
     @property
     def dataset_repo_type(self) -> str:
         if self.dataset_repo_id and self.dataset_repo_id == self.model_repo_id:
+            # Same repo id: image uploads must use the dataset repo type when set.
             return (
-                self.hf_model_repo_type.strip().lower()
-                or self.hf_dataset_repo_type.strip().lower()
-                or "model"
+                self.hf_dataset_repo_type.strip().lower()
+                or self.hf_model_repo_type.strip().lower()
+                or "dataset"
             )
         return self.hf_dataset_repo_type.strip().lower() or "dataset"
 

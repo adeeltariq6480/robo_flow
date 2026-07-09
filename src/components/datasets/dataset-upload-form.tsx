@@ -4,8 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   buildUploadBatches,
-  checkDatasetHfFiles,
-  finalizeDatasetHfUpload,
+  syncDatasetToHf,
   uploadImages,
   uploadZip,
 } from "@/lib/api/uploads";
@@ -55,6 +54,11 @@ export function DatasetUploadForm({
   const router = useRouter();
   const projectDrop = useProjectDrop();
   const abortRef = useRef<AbortController | null>(null);
+  const sessionRestoreRef = useRef(false);
+  const hfSyncTaskRef = useRef<Promise<void> | null>(null);
+  const persistSessionRef = useRef<(patch: Partial<PersistedUploadSession>) => void>(
+    () => {}
+  );
 
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [defaultClassId, setDefaultClassId] = useState(ALL_CLASS_ID);
@@ -108,27 +112,80 @@ export function DatasetUploadForm({
     [projectId, datasetId, datasetName, phase, progress, queue, restoredSession, processing]
   );
 
-  const runHfFinalize = useCallback(async () => {
-    setPhase("hf_syncing");
-    setHfStatus("Pushing images to Hugging Face…");
-    persistSession({ status: "hf_syncing" });
-    try {
-      await finalizeDatasetHfUpload(projectId, datasetId);
-      const check = await checkDatasetHfFiles(projectId, datasetId);
-      setHfStatus(
-        `${check.matchedByFilename}/${check.dbImagesCount} images found on Hugging Face`
-      );
-      if (check.missingRemote > 0) {
-        setHfStatus(
-          `${check.matchedByFilename} on HF · ${check.missingRemote} still missing — check HF_DATASET_REPO on Railway`
-        );
+  persistSessionRef.current = persistSession;
+
+  const formatHfStatus = useCallback(
+    (matched: number, total: number, missing: number) => {
+      if (total <= 0) return "No images in dataset yet";
+      if (missing > 0) {
+        return `${matched}/${total} on Hugging Face · ${missing} still missing — retry HF sync or check Railway HF_DATASET_REPO`;
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "HF sync failed";
-      setHfStatus(message);
-      setError(message);
-    }
-  }, [projectId, datasetId, persistSession]);
+      return `${matched}/${total} images on Hugging Face`;
+    },
+    []
+  );
+
+  const completeUploadSession = useCallback(
+    async (summary?: PersistedUploadSummary | null) => {
+      setPhase("done");
+      persistSessionRef.current({
+        status: "completed",
+        progress: 100,
+        summary: summary ?? undefined,
+        processing: false,
+      });
+      await clearUploadSession(projectId, datasetId);
+      setRestoredSession(null);
+      setQueue([]);
+      await revalidateProject(projectId);
+      router.refresh();
+    },
+    [projectId, datasetId, router]
+  );
+
+  const runHfFinalize = useCallback(
+    async (options?: { force?: boolean; waitForBackground?: boolean }) => {
+      if (hfSyncTaskRef.current && !options?.force) {
+        return hfSyncTaskRef.current;
+      }
+
+      const task = (async () => {
+        setPhase("hf_syncing");
+        setError(null);
+        setHfStatus("Checking Hugging Face…");
+        persistSessionRef.current({ status: "hf_syncing" });
+
+        try {
+          const check = await syncDatasetToHf(projectId, datasetId, {
+            waitForBackground: options?.waitForBackground,
+            onStatus: (message) => setHfStatus(message),
+          });
+          setHfStatus(
+            formatHfStatus(
+              check.matchedByFilename,
+              check.dbImagesCount,
+              check.missingRemote
+            )
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "HF sync failed";
+          setHfStatus(message);
+          setError(message);
+          throw err;
+        }
+      })();
+
+      hfSyncTaskRef.current = task;
+      try {
+        await task;
+      } finally {
+        if (hfSyncTaskRef.current === task) {
+          hfSyncTaskRef.current = null;
+        }
+      }
+    },
+    [projectId, datasetId, formatHfStatus]
+  );
 
   const runUpload = useCallback(
     async (
@@ -252,54 +309,95 @@ export function DatasetUploadForm({
         completedBatches: batches.length,
       });
 
-      await runHfFinalize();
+      await runHfFinalize({ waitForBackground: queuedBackgroundUpload });
 
-      setPhase("done");
-      persistSession({ status: "completed", progress: 100, summary });
-      await clearUploadSession(projectId, datasetId);
-      setRestoredSession(null);
-      setQueue([]);
-
-      await revalidateProject(projectId);
-      router.refresh();
+      await completeUploadSession(normalizeUploadSummary(summary));
     },
-    [projectId, datasetId, persistSession, restoredSession, router, runHfFinalize]
+    [projectId, datasetId, persistSession, restoredSession, completeUploadSession, runHfFinalize]
   );
 
   useEffect(() => {
+    sessionRestoreRef.current = false;
+  }, [projectId, datasetId]);
+
+  useEffect(() => {
+    if (sessionRestoreRef.current) return;
+    sessionRestoreRef.current = true;
+
     let cancelled = false;
+
     (async () => {
       const saved = loadUploadSession(projectId, datasetId);
       if (!saved || cancelled) return;
+
       if (saved.status === "completed") {
         await clearUploadSession(projectId, datasetId);
         return;
       }
+
       setRestoredSession(saved);
       setUploadSummary(normalizeUploadSummary(saved.summary));
       setProgress(saved.progress);
       setProcessing(Boolean(saved.processing));
+
+      const uploadComplete =
+        saved.completedBatches >= saved.totalBatches &&
+        saved.completedFiles >= saved.totalFiles &&
+        saved.totalFiles > 0;
+
       if (saved.status === "paused") {
         setPhase("paused");
-        setError(saved.error ?? "Upload was interrupted");
-      } else if (saved.status === "hf_syncing") {
-        setPhase("hf_syncing");
-        setHfStatus("Finishing Hugging Face upload…");
-        void runHfFinalize().then(() => {
-          if (!cancelled) setPhase("done");
-        });
-      } else if (saved.status === "uploading") {
+        setError(saved.error ?? "Upload paused — tap Resume to continue");
+        return;
+      }
+
+      if (saved.status === "uploading") {
+        if (uploadComplete) {
+          setPhase("hf_syncing");
+          setHfStatus("Finishing Hugging Face sync…");
+          try {
+            await runHfFinalize({ waitForBackground: Boolean(saved.processing) });
+            if (!cancelled) {
+              await completeUploadSession(normalizeUploadSummary(saved.summary));
+            }
+          } catch {
+            if (!cancelled) {
+              setPhase("hf_syncing");
+            }
+          }
+          return;
+        }
         setPhase("paused");
-        setError("Upload was interrupted — tap Resume to continue");
-      } else if (saved.status === "failed") {
+        setError("Upload paused — tap Resume to continue");
+        return;
+      }
+
+      if (saved.status === "hf_syncing") {
+        setPhase("hf_syncing");
+        setHfStatus("Finishing Hugging Face sync…");
+        try {
+          await runHfFinalize({ waitForBackground: Boolean(saved.processing) });
+          if (!cancelled) {
+            await completeUploadSession(normalizeUploadSummary(saved.summary));
+          }
+        } catch {
+          if (!cancelled) {
+            setPhase("hf_syncing");
+          }
+        }
+        return;
+      }
+
+      if (saved.status === "failed") {
         setPhase("paused");
         setError(saved.error ?? "Upload failed");
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [projectId, datasetId, runHfFinalize]);
+  }, [projectId, datasetId, runHfFinalize, completeUploadSession]);
 
   useEffect(() => {
     if (!uploading) return;
@@ -415,7 +513,7 @@ export function DatasetUploadForm({
 
   async function handleRetryHf() {
     setError(null);
-    await runHfFinalize();
+    await runHfFinalize({ force: true, waitForBackground: processing });
   }
 
   if (done) {
@@ -585,7 +683,7 @@ export function DatasetUploadForm({
             )}
 
             <p className="mt-4 text-xs text-slate-500">
-              You can reload this page — progress is saved. Use Resume to continue.
+              Progress is saved if you reload. Use Resume to continue a paused upload.
             </p>
           </div>
         </Card>

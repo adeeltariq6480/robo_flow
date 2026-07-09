@@ -103,8 +103,8 @@ export default function HfCleanupPage() {
         <h1 className="text-3xl font-semibold">Hugging Face Cleanup</h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Delete files inside a repo, or permanently remove an entire repository
-          (e.g. extra <code className="text-xs">robo-flow-datasets</code>). Keep{" "}
-          <strong>Adeel6480/robo_flow</strong> — that is your main repo.
+          (e.g. extra <code className="text-xs">robo-flow-datasets</code>).{" "}
+          Keep <strong>Adeel6480/robo_flow</strong> — that is your main dataset repo for images.
         </p>
 
         <div className="mt-8 space-y-6">
@@ -131,7 +131,7 @@ export default function HfCleanupPage() {
               <option value="model">model</option>
             </select>
             <p className="mt-2 text-xs text-slate-500">
-              <code>robo-flow-datasets</code> → dataset · <code>robo_flow</code> → model
+              <code>robo-flow-datasets</code> → old extra repo · <code>robo_flow</code> → dataset (images + models)
             </p>
           </div>
 
