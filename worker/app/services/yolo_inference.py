@@ -12,6 +12,7 @@ from PIL import Image, ImageOps
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
 from app.services.detection_merge import merge_detections
+from app.services.label_classes import is_excluded_detection_class
 from app.services.supabase_repo import resolve_project_class_id
 from app.services.universal_yolo_loader import UniversalYOLOModel, clear_legacy_runtime_state
 import os
@@ -330,6 +331,8 @@ def run_yolo_inference(
         class_name = det.get("class_name", str(det.get("class_id", "unknown")))
         mapped_name = config.class_name_map.get(class_name, class_name)
         lookup = resolve_project_class_id(class_id_map or {}, mapped_name)
+        if not lookup or is_excluded_detection_class(mapped_name):
+            continue
 
         bbox = det.get("bbox", [0, 0, 1, 1])
         detections.append(

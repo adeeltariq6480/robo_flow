@@ -10,7 +10,13 @@ from app.config import settings
 from app.core.jobs import JobCancelled, is_job_cancelled, raise_if_job_cancelled, update_job
 from app.models.schemas import DetectionBox, JobConfig
 from app.services import hf_storage as file_storage
-from app.services.detection_merge import merge_detections
+from app.services.label_classes import (
+    build_model_class_name_map,
+    class_maps_for_project,
+    filter_saveable_detections,
+    is_excluded_detection_class,
+    yolo_index_for_object,
+)
 from app.services.supabase_repo import (
     attach_annotation_fields_to_images,
     classify_queue,
@@ -283,12 +289,14 @@ def _persist_image_labels(
     num_models: int,
 ) -> int:
     """Merge detections from all models, save annotations + YOLO label file."""
+    combined = filter_saveable_detections(combined)
     merged = merge_detections(combined, iou_threshold=config.iou)
     merged = merge_detections(
         merged,
         iou_threshold=config.iou,
         class_agnostic=True,
     )
+    merged = filter_saveable_detections(merged)
     detections = [d.model_dump() for d in merged]
     objects = detections_to_objects(detections)
     class_known = (
@@ -314,15 +322,15 @@ def _persist_image_labels(
         update_image_queue(project_id, file_id, queue_type, reason)
 
     try:
-        from app.services.export_builder import _class_index_map
-
-        class_index = _class_index_map(project_id)
+        by_name, by_id = class_maps_for_project(project_id)
         stem = (_image_file_name(file_row) or str(file_row.get("id"))).rsplit(".", 1)[0]
         labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
         labels_dir.mkdir(parents=True, exist_ok=True)
         lines = []
         for o in objects:
-            cls_idx = class_index.get(o.get("className"), 0)
+            cls_idx = yolo_index_for_object(o, by_name=by_name, by_id=by_id)
+            if cls_idx is None:
+                continue
             xc = (o["xMin"] + o["xMax"]) / 2
             yc = (o["yMin"] + o["yMax"]) / 2
             w = (o["xMax"] - o["xMin"])
@@ -333,6 +341,11 @@ def _persist_image_labels(
         logger.exception("Failed to write label file for image %s", file_id)
 
     return len(objects)
+
+
+def _config_for_model(config: JobConfig, project_id: str, model_id: str) -> JobConfig:
+    model_map = build_model_class_name_map(project_id, model_id, config.class_name_map)
+    return config.model_copy(update={"class_name_map": model_map})
 
 
 def _no_images_message() -> str:
@@ -1158,13 +1171,14 @@ async def run_auto_label(
 
                 try:
                     for model_id in active_model_ids:
+                        model_config = _config_for_model(config, project_id, model_id)
                         try:
                             inference = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     run_yolo_inference,
                                     model_paths[model_id],
                                     image_path,
-                                    config,
+                                    model_config,
                                     model_name=model_id,
                                     class_id_map=class_id_map,
                                 ),
@@ -1331,7 +1345,7 @@ async def run_auto_label(
                                     run_yolo_inference,
                                     model_path,
                                     image_path,
-                                    config,
+                                    _config_for_model(config, project_id, model_id),
                                     model_name=model_id,
                                     class_id_map=class_id_map,
                                 ),

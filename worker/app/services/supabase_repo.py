@@ -1162,32 +1162,39 @@ def save_image_annotations(
     _sb().table("annotation_objects").delete().eq("image_id", image_id).execute()
     objects = dedupe_objects(objects)
     class_map = get_project_class_map(project_id)
+    from app.services.label_classes import is_excluded_detection_class
+
     if objects:
-        rows = [
-            {
-                "annotation_id": ann_id,
-                "project_id": project_id,
-                "image_id": image_id,
-                "class_id": (
-                    obj.get("classId")
-                    or obj.get("project_class_id")
-                    or resolve_project_class_id(
-                        class_map,
-                        obj.get("className") or obj.get("class_name", ""),
-                    )
-                ),
-                "class_index": obj.get("classIndex", 0),
-                "class_name": obj.get("className") or obj.get("class_name", "unknown"),
-                "x_min": obj["xMin"],
-                "y_min": obj["yMin"],
-                "x_max": obj["xMax"],
-                "y_max": obj["yMax"],
-                "confidence": obj.get("confidence", 1.0),
-                "source": source,
-            }
-            for obj in objects
-        ]
-        _sb().table("annotation_objects").insert(rows).execute()
+        rows = []
+        for obj in objects:
+            class_name = obj.get("className") or obj.get("class_name", "unknown")
+            if is_excluded_detection_class(str(class_name)):
+                continue
+            class_id = (
+                obj.get("classId")
+                or obj.get("project_class_id")
+                or resolve_project_class_id(class_map, str(class_name))
+            )
+            if not class_id:
+                continue
+            rows.append(
+                {
+                    "annotation_id": ann_id,
+                    "project_id": project_id,
+                    "image_id": image_id,
+                    "class_id": class_id,
+                    "class_index": obj.get("classIndex", 0),
+                    "class_name": class_name,
+                    "x_min": obj["xMin"],
+                    "y_min": obj["yMin"],
+                    "x_max": obj["xMax"],
+                    "y_max": obj["yMax"],
+                    "confidence": obj.get("confidence", 1.0),
+                    "source": source,
+                }
+            )
+        if rows:
+            _sb().table("annotation_objects").insert(rows).execute()
     return ann_id
 
 

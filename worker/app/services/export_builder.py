@@ -13,6 +13,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from app.services import hf_storage, supabase_repo
+from app.services.label_classes import class_maps_for_project, yolo_index_for_object
 
 
 def _class_index_map(project_id: str) -> dict[str, int]:
@@ -55,9 +56,9 @@ def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
     ]
 
     if fmt == "yolo":
-        payload = _build_yolo(data, class_index, classes_ordered)
+        payload = _build_yolo(project_id, data, class_index, classes_ordered)
     elif fmt == "coco":
-        payload = _build_coco(data, class_index, classes_ordered)
+        payload = _build_coco(project_id, data, class_index, classes_ordered)
     elif fmt in ("voc", "pascal_voc", "pascalvoc"):
         payload = _build_voc(data, class_index)
     elif fmt == "csv":
@@ -73,7 +74,12 @@ def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
     return buf.getvalue(), f"{fmt}-export-{ts}.zip"
 
 
-def _build_yolo(data, class_index, classes_ordered) -> dict[str, str | bytes]:
+def _build_yolo(
+    project_id: str,
+    data,
+    class_index,
+    classes_ordered,
+) -> dict[str, str | bytes]:
     files: dict[str, str | bytes] = {}
     files["classes.txt"] = "\n".join(classes_ordered) + ("\n" if classes_ordered else "")
     names_block = "\n".join(
@@ -95,11 +101,14 @@ def _build_yolo(data, class_index, classes_ordered) -> dict[str, str | bytes]:
         "  classes.txt                  — class names, one per line\n"
         "  data.yaml                    — YOLO dataset config\n"
     )
+    by_name, by_id = class_maps_for_project(project_id)
     for entry in data:
         img = entry["image"]
         lines = []
         for o in entry["objects"]:
-            idx = class_index.get(o.get("className"), 0)
+            idx = yolo_index_for_object(o, by_name=by_name, by_id=by_id)
+            if idx is None:
+                continue
             xc = (o["xMin"] + o["xMax"]) / 2
             yc = (o["yMin"] + o["yMax"]) / 2
             w = o["xMax"] - o["xMin"]
@@ -112,11 +121,12 @@ def _build_yolo(data, class_index, classes_ordered) -> dict[str, str | bytes]:
     return files
 
 
-def _build_coco(data, class_index, classes_ordered) -> dict[str, str | bytes]:
+def _build_coco(project_id: str, data, class_index, classes_ordered) -> dict[str, str | bytes]:
     categories = [
         {"id": class_index[name], "name": name, "supercategory": "none"}
         for name in classes_ordered
     ]
+    by_name, by_id = class_maps_for_project(project_id)
     images = []
     annotations = []
     ann_id = 1
@@ -131,6 +141,9 @@ def _build_coco(data, class_index, classes_ordered) -> dict[str, str | bytes]:
             "height": h,
         })
         for o in entry["objects"]:
+            category_id = yolo_index_for_object(o, by_name=by_name, by_id=by_id)
+            if category_id is None:
+                continue
             abs_xmin = o["xMin"] * w
             abs_ymin = o["yMin"] * h
             abs_w = (o["xMax"] - o["xMin"]) * w
@@ -138,7 +151,7 @@ def _build_coco(data, class_index, classes_ordered) -> dict[str, str | bytes]:
             annotations.append({
                 "id": ann_id,
                 "image_id": img_id,
-                "category_id": class_index.get(o.get("className"), 0),
+                "category_id": category_id,
                 "bbox": [abs_xmin, abs_ymin, abs_w, abs_h],
                 "area": abs_w * abs_h,
                 "iscrowd": 0,
