@@ -1,43 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import {
-  deleteHfCleanup,
-  deleteHfRepo,
-  previewHfCleanup,
-} from "@/lib/worker/client";
+import { deleteHfCleanup, previewHfCleanup } from "@/lib/worker/client";
 
-const DEFAULT_REPO_ID = "Adeel6480/robo-flow-datasets";
+const DEFAULT_REPO_ID = "Adeel6480/robo_flow";
 
 export default function HfCleanupPage() {
   const [repoId, setRepoId] = useState(DEFAULT_REPO_ID);
   const [repoType, setRepoType] = useState("dataset");
   const [files, setFiles] = useState<string[] | null>(null);
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
-  const [fileConfirmation, setFileConfirmation] = useState("");
-  const [repoConfirmation, setRepoConfirmation] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [deleteResult, setDeleteResult] = useState<{
     deleted_count: number;
     deleted_files: string[];
     message?: string;
   } | null>(null);
-  const [deleteRepoResult, setDeleteRepoResult] = useState<{
-    deleted_repo: string;
-    message?: string;
-  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingDelete, setLoadingDelete] = useState(false);
-  const [loadingDeleteRepo, setLoadingDeleteRepo] = useState(false);
 
-  const canDeleteFiles = fileConfirmation === "DELETE";
-  const canDeleteRepo =
-    repoConfirmation.trim() === repoId.trim() && repoId.trim().length > 0;
+  const canDelete = confirmation === "DELETE";
 
   async function handlePreview() {
     setError(null);
     setDeleteResult(null);
-    setDeleteRepoResult(null);
     setPreviewMessage(null);
     setFiles(null);
     setLoadingPreview(true);
@@ -53,7 +40,7 @@ export default function HfCleanupPage() {
     }
   }
 
-  async function handleDeleteFiles() {
+  async function handleDelete() {
     setError(null);
     setDeleteResult(null);
     setLoadingDelete(true);
@@ -62,7 +49,7 @@ export default function HfCleanupPage() {
       const result = await deleteHfCleanup({
         repo_id: repoId,
         repo_type: repoType,
-        confirmation: fileConfirmation,
+        confirmation,
       });
       setDeleteResult(result);
       setFiles(result.deleted_files);
@@ -73,45 +60,17 @@ export default function HfCleanupPage() {
     }
   }
 
-  async function handleDeleteRepo() {
-    setError(null);
-    setDeleteRepoResult(null);
-    setLoadingDeleteRepo(true);
-
-    try {
-      const result = await deleteHfRepo({
-        repo_id: repoId,
-        repo_type: repoType,
-        confirmation: repoConfirmation.trim(),
-      });
-      setDeleteRepoResult({
-        deleted_repo: result.deleted_repo,
-        message: result.message,
-      });
-      setFiles([]);
-      setPreviewMessage("Repository removed from Hugging Face.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Repo delete failed");
-    } finally {
-      setLoadingDeleteRepo(false);
-    }
-  }
-
   return (
     <div className="mx-auto max-w-4xl px-4 py-10 text-slate-900">
       <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-3xl font-semibold">Hugging Face Cleanup</h1>
+        <h1 className="text-3xl font-semibold">Temporary Hugging Face Cleanup</h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Delete files inside a repo, or permanently remove an entire repository
-          (e.g. extra <code className="text-xs">robo-flow-datasets</code>).{" "}
-          Keep <strong>Adeel6480/robo_flow</strong> — that is your main dataset repo for images.
+          Remove this page after cleanup is complete.
         </p>
 
         <div className="mt-8 space-y-6">
           <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Hugging Face repo ID
-            </label>
+            <label className="block text-sm font-medium text-slate-700">Hugging Face repo ID</label>
             <input
               className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:outline-none"
               value={repoId}
@@ -130,9 +89,6 @@ export default function HfCleanupPage() {
               <option value="dataset">dataset</option>
               <option value="model">model</option>
             </select>
-            <p className="mt-2 text-xs text-slate-500">
-              <code>robo-flow-datasets</code> → old extra repo · <code>robo_flow</code> → dataset (images + models)
-            </p>
           </div>
 
           <button
@@ -158,14 +114,16 @@ export default function HfCleanupPage() {
 
           {files && (
             <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">
-                Files found ({files.length})
-              </p>
-              <p className="mt-1 text-sm text-slate-600">
-                Option 1 below clears files but keeps the empty repo on Hugging Face.
-              </p>
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Files found ({files.length})</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    This will delete all files inside the repo but will NOT delete the repo itself.
+                  </p>
+                </div>
+              </div>
 
-              <div className="mt-4 max-h-96 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
+              <div className="max-h-96 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
                 {files.length === 0 ? (
                   <p>No files found.</p>
                 ) : (
@@ -182,91 +140,44 @@ export default function HfCleanupPage() {
           )}
 
           {files && files.length > 0 ? (
-            <div className="rounded-3xl border border-orange-200 bg-orange-50 p-6">
-              <p className="text-base font-semibold text-orange-900">
-                Option 1 — Delete repo contents only
-              </p>
-              <p className="mt-2 text-sm leading-6 text-orange-800">
-                Removes all files. The repo shell stays on Hugging Face. Type{" "}
-                <span className="font-semibold">DELETE</span> to confirm.
+            <div className="rounded-3xl border border-red-200 bg-red-50 p-6">
+              <p className="text-base font-semibold text-red-900">Danger zone</p>
+              <p className="mt-2 text-sm leading-6 text-red-700">
+                Type <span className="font-semibold">DELETE</span> below to enable the delete button.
               </p>
 
               <div className="mt-4 space-y-4">
                 <input
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm shadow-sm focus:border-orange-500 focus:outline-none"
-                  value={fileConfirmation}
-                  onChange={(event) => setFileConfirmation(event.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm shadow-sm focus:border-red-500 focus:outline-none"
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
                   placeholder="Type DELETE to confirm"
                 />
                 <button
                   type="button"
-                  onClick={handleDeleteFiles}
-                  disabled={!canDeleteFiles || loadingDelete}
-                  className="inline-flex items-center justify-center rounded-xl bg-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-orange-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  onClick={handleDelete}
+                  disabled={!canDelete || loadingDelete}
+                  className="inline-flex items-center justify-center rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
-                  {loadingDelete ? "Deleting files…" : "Delete repo contents"}
+                  {loadingDelete ? "Deleting…" : "Delete Repo Contents"}
                 </button>
               </div>
             </div>
           ) : null}
 
-          <div className="rounded-3xl border border-red-300 bg-red-50 p-6">
-            <p className="text-base font-semibold text-red-900">
-              Option 2 — Delete entire repository (permanent)
-            </p>
-            <p className="mt-2 text-sm leading-6 text-red-800">
-              This removes <strong>{repoId || "the repo"}</strong> completely from Hugging
-              Face. Cannot be undone. The worker blocks deletion if this repo is still set
-              in Railway <code className="text-xs">HF_DATASET_REPO</code> /{" "}
-              <code className="text-xs">HF_MODEL_REPO</code>.
-            </p>
-            <p className="mt-2 text-sm text-red-700">
-              Type the exact repo id below to confirm:
-            </p>
-
-            <div className="mt-4 space-y-4">
-              <input
-                className="w-full rounded-xl border border-red-300 px-4 py-3 text-sm shadow-sm focus:border-red-600 focus:outline-none"
-                value={repoConfirmation}
-                onChange={(event) => setRepoConfirmation(event.target.value)}
-                placeholder={repoId || "owner/repo"}
-              />
-              <button
-                type="button"
-                onClick={handleDeleteRepo}
-                disabled={!canDeleteRepo || loadingDeleteRepo}
-                className="inline-flex items-center justify-center rounded-xl bg-red-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                {loadingDeleteRepo ? "Deleting repository…" : "Delete repository permanently"}
-              </button>
-            </div>
-          </div>
-
           {deleteResult ? (
             <div className="rounded-3xl border border-green-200 bg-emerald-50 p-5 text-sm text-slate-900">
-              <p className="font-semibold text-emerald-900">File cleanup completed</p>
+              <p className="font-semibold text-emerald-900">Cleanup completed</p>
               <p className="mt-2">Deleted files: {deleteResult.deleted_count}</p>
-              {deleteResult.deleted_files.length > 0 && (
-                <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3">
-                  <ul className="space-y-2">
-                    {deleteResult.deleted_files.map((file) => (
-                      <li key={file} className="truncate text-slate-700">
-                        {file}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {deleteRepoResult ? (
-            <div className="rounded-3xl border border-green-200 bg-emerald-50 p-5 text-sm text-slate-900">
-              <p className="font-semibold text-emerald-900">Repository deleted</p>
-              <p className="mt-2">{deleteRepoResult.message}</p>
-              <p className="mt-1 text-slate-600">
-                Removed: <code>{deleteRepoResult.deleted_repo}</code>
-              </p>
+              <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3">
+                <ul className="space-y-2">
+                  {deleteResult.deleted_files.map((file) => (
+                    <li key={file} className="truncate text-slate-700">
+                      {file}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           ) : null}
         </div>
