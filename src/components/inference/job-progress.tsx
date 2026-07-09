@@ -53,6 +53,19 @@ function parseAutoLabelProgress(message: string | undefined) {
     };
   }
 
+  const refreshing = message.match(
+    /Refreshing model memory after image\s+(\d+)\s*\/\s*(\d+).*model\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (refreshing) {
+    return {
+      image: Number(refreshing[1]),
+      images: Number(refreshing[2]),
+      model: Number(refreshing[3]),
+      models: Number(refreshing[4]),
+      phase: "refreshing" as const,
+    };
+  }
+
   const merged = message.match(
     /Labeling image\s+(\d+)\s*\/\s*(\d+)(?:\s*\((\d+)\s*models merged\))?/i
   );
@@ -175,6 +188,8 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
       ? `Saving labels ${parsed.image}/${parsed.images}`
       : "phase" in parsed && parsed.phase === "starting"
         ? `Preparing ${parsed.images} image(s)…`
+        : "phase" in parsed && parsed.phase === "refreshing"
+          ? `Refreshing model ${parsed.model}/${parsed.models} after image ${parsed.image}/${parsed.images}…`
         : parsed.models > 1
           ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
           : `Image ${parsed.image}/${parsed.images}`

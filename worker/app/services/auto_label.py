@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 MODEL_DOWNLOAD_TIMEOUT_SECONDS = 600
 MODEL_WARMUP_TIMEOUT_SECONDS = 900
+IMAGE_PREP_TIMEOUT_SECONDS = int(os.getenv("AUTO_LABEL_IMAGE_PREP_TIMEOUT_SECONDS", "90"))
+MODEL_REFRESH_TIMEOUT_SECONDS = int(os.getenv("AUTO_LABEL_MODEL_REFRESH_TIMEOUT_SECONDS", "300"))
 
 
 async def _safe_update_model_status(project_id: str, model_id: str, status: str) -> None:
@@ -823,7 +825,20 @@ async def run_auto_label(
             prep_failures[file_id] = "Not an image file"
             return None
         try:
-            return await asyncio.to_thread(download_image_row, row, file_id)
+            return await asyncio.wait_for(
+                asyncio.to_thread(download_image_row, row, file_id),
+                timeout=IMAGE_PREP_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Image download timed out after %ss image=%s",
+                IMAGE_PREP_TIMEOUT_SECONDS,
+                file_id,
+            )
+            prep_failures[file_id] = (
+                f"Image download timed out after {IMAGE_PREP_TIMEOUT_SECONDS}s"
+            )
+            return None
         except Exception as exc:
             logger.warning("Image preparation failed %s: %s", file_id, exc)
             if _image_hf_path(row) and ("404" in str(exc) or "not found" in str(exc).lower()):
@@ -938,12 +953,12 @@ async def run_auto_label(
         len(loaded_model_ids),
     )
 
-    unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "15" if low_memory_mode else "0")
+    unload_every_raw = os.getenv("MODEL_UNLOAD_EVERY_IMAGES", "0")
     gc_every_raw = os.getenv("AUTO_LABEL_GC_EVERY_IMAGES", "5" if low_memory_mode else "0")
     try:
         unload_every_value = int(unload_every_raw)
     except ValueError:
-        unload_every_value = 15 if low_memory_mode else 0
+        unload_every_value = 0
     try:
         gc_every_value = int(gc_every_raw)
     except ValueError:
@@ -951,6 +966,50 @@ async def run_auto_label(
     unload_every = unload_every_value if unload_every_value > 0 else None
     gc_every = gc_every_value if gc_every_value > 0 else None
     images_done = 0
+
+    async def _refresh_model_memory(
+        model_path: Path,
+        *,
+        image_num: int,
+        model_num: int,
+        model_count: int,
+    ) -> bool:
+        """Unload/reload YOLO to free RAM — bounded by timeout so jobs don't freeze."""
+        await update_job(
+            job_id,
+            progress_message=(
+                f"Refreshing model memory after image {image_num}/{total} "
+                f"(model {model_num}/{model_count})…"
+            ),
+            processed_items=min(image_num, total),
+            project_id=project_id,
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(unload_model, model_path),
+                timeout=60,
+            )
+            gc.collect()
+            await asyncio.wait_for(
+                asyncio.to_thread(load_yolo_model, model_path),
+                timeout=MODEL_REFRESH_TIMEOUT_SECONDS,
+            )
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Model refresh timed out after image %d job=%s",
+                image_num,
+                job_id,
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "Model refresh failed after image %d job=%s: %s",
+                image_num,
+                job_id,
+                exc,
+            )
+            return False
 
     for mi, model_id in enumerate(loaded_model_ids):
         if cancelled_requested:
@@ -1007,7 +1066,7 @@ async def run_auto_label(
                     floor=25,
                     ceiling=90,
                 )
-                if idx % progress_step == 0 or idx == total - 1:
+                if idx % progress_step == 0 or idx == total - 1 or idx < 3:
                     await update_job(
                         job_id,
                         progress=overall_pct,
@@ -1057,9 +1116,18 @@ async def run_auto_label(
                     if gc_every and (idx + 1) % gc_every == 0:
                         gc.collect()
                     if unload_every and (idx + 1) % unload_every == 0:
-                        await asyncio.to_thread(unload_model, model_path)
-                        gc.collect()
-                        await asyncio.to_thread(load_yolo_model, model_path)
+                        refreshed = await _refresh_model_memory(
+                            model_path,
+                            image_num=idx + 1,
+                            model_num=mi + 1,
+                            model_count=len(loaded_model_ids),
+                        )
+                        if not refreshed:
+                            logger.warning(
+                                "Skipping remaining images for model %s after refresh timeout",
+                                model_id,
+                            )
+                            break
                 except Exception as exc:
                     logger.warning(
                         "Inference failed job=%s model=%s image=%s: %s",
