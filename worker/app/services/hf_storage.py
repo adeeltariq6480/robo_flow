@@ -13,6 +13,7 @@ Model repo (HF model):
 """
 
 import logging
+import os
 import tempfile
 import threading
 import time
@@ -597,50 +598,33 @@ def upload_labels_from_folder_batched(
     *,
     batch_size: int = 200,
 ) -> dict:
-    """Upload label files in batches to avoid HF commit rate spikes."""
+    """Upload all label files in one HF commit (batch_size kept for API compat)."""
+    del batch_size  # unused — one commit per label session
     folder = Path(folder_path)
     files = [p for p in folder.iterdir() if p.is_file()] if folder.exists() else []
     if not files:
         return {"hfRepo": settings.dataset_repo_id, "count": 0, "batches": 0}
-    if not hf_dataset_upload_enabled():
-        logger.info("HF upload disabled; skipping batched labels upload for dataset %s", dataset_id)
-        return {"hfRepo": settings.dataset_repo_id, "count": len(files), "batches": 0}
 
-    repo_id = settings.dataset_repo_id
-    _ensure_repo(repo_id, settings.dataset_repo_type)
-    repo_folder = f"datasets/{project_id}/{dataset_id}/labels"
-    batch_size = max(1, batch_size)
-    uploaded = 0
-    batches = 0
-
-    for start in range(0, len(files), batch_size):
-        batch = files[start : start + batch_size]
-        with tempfile.TemporaryDirectory(dir=_temp_dir()) as tmp:
-            tmp_path = Path(tmp)
-            for source in batch:
-                (tmp_path / source.name).write_bytes(source.read_bytes())
-
-            with _hf_commit_lock:
-                def _do_upload():
-                    _api().upload_folder(
-                        folder_path=str(tmp_path),
-                        repo_id=repo_id,
-                        repo_type=settings.dataset_repo_type,
-                        path_in_repo=repo_folder,
-                        commit_message=f"Upload {len(batch)} labels to dataset {dataset_id}",
-                    )
-
-                _upload_with_retry(f"upload_folder:{repo_folder}:labels:{start}", _do_upload)
-
-        _verify_repo_files(
-            repo_id,
-            settings.dataset_repo_type,
-            [f"{repo_folder}/{source.name}" for source in batch],
+    max_files = int(
+        os.getenv(
+            "LABEL_UPLOAD_SESSION_MAX",
+            os.getenv("UPLOAD_SESSION_MAX_IMAGES", "500"),
         )
-        uploaded += len(batch)
-        batches += 1
+    )
+    if len(files) > max_files:
+        logger.warning(
+            "Label folder has %d files (recommended max %d) — uploading in one commit anyway",
+            len(files),
+            max_files,
+        )
 
-    return {"hfRepo": repo_id, "count": uploaded, "batches": batches}
+    result = upload_labels_from_folder(
+        project_id,
+        dataset_id,
+        folder_path,
+        len(files),
+    )
+    return {**result, "batches": 1}
 
 
 def upload_dataset_zip(

@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 
 from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
+from app.services.detection_merge import merge_detections
 from app.services.model_errors import IncompatibleModelError
 from app.services.universal_yolo_loader import UniversalYOLOModel, clear_legacy_runtime_state
 import os
@@ -265,7 +266,12 @@ def run_yolo_inference(
                 )
 
             imgsz = inference_imgsz_for(max_side)
-            detections_raw = model.predict(prepared_image, imgsz=imgsz)
+            detections_raw = model.predict(
+                prepared_image,
+                imgsz=imgsz,
+                conf=config.confidence,
+                iou=config.iou,
+            )
             if max_side != inference_max_side():
                 logger.info(
                     "Inference used fallback resolution %dpx (primary=%dpx)",
@@ -325,6 +331,13 @@ def run_yolo_inference(
                 height=round(bbox[3] - bbox[1], 6),
             )
         )
+
+    detections = merge_detections(detections, iou_threshold=config.iou)
+    detections = merge_detections(
+        detections,
+        iou_threshold=config.iou,
+        class_agnostic=True,
+    )
 
     logger.info("Inference completed: %d detections in %.1f ms", len(detections), elapsed_ms)
     return InferenceResult(

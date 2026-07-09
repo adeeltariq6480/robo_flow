@@ -1148,6 +1148,12 @@ async def run_auto_label(
             per_model = per_image_models.get(file_id, {})
 
             merged = merge_detections(combined, iou_threshold=config.iou)
+            # One physical object → one label (drop overlapping boxes across classes too).
+            merged = merge_detections(
+                merged,
+                iou_threshold=config.iou,
+                class_agnostic=True,
+            )
             detections = [d.model_dump() for d in merged]
             objects = detections_to_objects(detections)
             class_known = (
@@ -1211,20 +1217,21 @@ async def run_auto_label(
         labels_dir = settings.dataset_files_dir / str(project_id) / str(dataset_id) / "labels"
         if labels_dir.exists():
             try:
-                batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "200")))
+                file_count = sum(
+                    1 for p in labels_dir.iterdir() if p.is_file()
+                )
                 label_commit = await asyncio.to_thread(
-                    file_storage.upload_labels_from_folder_batched,
+                    file_storage.upload_labels_from_folder,
                     project_id,
                     dataset_id,
                     str(labels_dir),
-                    batch_size=batch_size,
+                    file_count,
                 )
                 logger.info(
-                    "Auto-label labels uploaded to HF project=%s dataset=%s count=%s batches=%s",
+                    "Auto-label labels uploaded to HF in one commit project=%s dataset=%s count=%s",
                     project_id,
                     dataset_id,
                     label_commit.get("count"),
-                    label_commit.get("batches"),
                 )
             except Exception as exc:
                 logger.exception("Failed to upload auto-label label files to HF for %s/%s: %s", project_id, dataset_id, exc)

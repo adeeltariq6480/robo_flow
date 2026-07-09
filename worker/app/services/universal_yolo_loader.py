@@ -493,7 +493,14 @@ class UniversalYOLOModel:
             logger.exception("ONNX load failed")
             raise
 
-    def predict(self, image: Image.Image | str, imgsz: int | None = None) -> list[dict]:
+    def predict(
+        self,
+        image: Image.Image | str,
+        imgsz: int | None = None,
+        *,
+        conf: float | None = None,
+        iou: float | None = None,
+    ) -> list[dict]:
         """
         Run inference and return normalized detections.
         
@@ -521,7 +528,7 @@ class UniversalYOLOModel:
 
         try:
             if self.loader_type == "ultralytics":
-                return self._predict_ultralytics(image, imgsz=imgsz)
+                return self._predict_ultralytics(image, imgsz=imgsz, conf=conf, iou=iou)
             elif self.loader_type == "yolov5":
                 return self._predict_yolov5(image)
             elif self.loader_type == "yolov7":
@@ -534,7 +541,14 @@ class UniversalYOLOModel:
             logger.exception("Inference failed: %s", exc)
             raise RuntimeError(f"Inference failed: {exc}") from exc
 
-    def _predict_ultralytics(self, image: Image.Image, imgsz: int | None = None) -> list[dict]:
+    def _predict_ultralytics(
+        self,
+        image: Image.Image,
+        imgsz: int | None = None,
+        *,
+        conf: float | None = None,
+        iou: float | None = None,
+    ) -> list[dict]:
         """Run inference with ultralytics model."""
         import torch
 
@@ -542,7 +556,8 @@ class UniversalYOLOModel:
             from app.services.yolo_inference import inference_imgsz_for, inference_max_side
 
             imgsz = inference_imgsz_for(inference_max_side())
-        conf = float(os.getenv("YOLO_CONF", "0.25"))
+        conf_val = conf if conf is not None else float(os.getenv("YOLO_CONF", "0.25"))
+        iou_val = iou if iou is not None else float(os.getenv("YOLO_IOU", "0.45"))
 
         # Force CPU inference mode and controlled options to reduce memory
         try:
@@ -551,7 +566,8 @@ class UniversalYOLOModel:
                     image,
                     device="cpu",
                     imgsz=imgsz,
-                    conf=conf,
+                    conf=conf_val,
+                    iou=iou_val,
                     verbose=False,
                     save=False,
                     save_txt=False,

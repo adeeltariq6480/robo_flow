@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.config import settings
 from app.services import hf_storage as file_storage
+from app.services.detection_merge import dedupe_objects
 
 from app.services.supabase_client import get_supabase
 
@@ -1067,7 +1068,8 @@ def list_annotation_objects(project_id: str, image_id: str) -> list[dict]:
         .eq("image_id", image_id)
         .execute()
     )
-    return [_object_row(r) for r in res.data or []]
+    rows = [_object_row(r) for r in res.data or []]
+    return dedupe_objects(rows)
 
 
 def save_image_annotations(
@@ -1112,6 +1114,7 @@ def save_image_annotations(
         ann_id = str(res.data[0]["id"])
 
     _sb().table("annotation_objects").delete().eq("image_id", image_id).execute()
+    objects = dedupe_objects(objects)
     if objects:
         rows = [
             {

@@ -1712,13 +1712,13 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
         raise HTTPException(status_code=400, detail="Hugging Face upload is disabled")
 
     try:
-        batch_size = int(os.getenv("LABEL_UPLOAD_BATCH_SIZE", os.getenv("UPLOAD_BATCH_SIZE", "200")))
+        file_count = sum(1 for p in folder.iterdir() if p.is_file())
         res = await asyncio.to_thread(
-            file_storage.upload_labels_from_folder_batched,
+            file_storage.upload_labels_from_folder,
             project_id,
             dataset_id,
             str(folder),
-            batch_size=batch_size,
+            file_count,
         )
     except Exception as exc:
         logger.exception("Finalize labels failed for %s/%s: %s", project_id, dataset_id, exc)
