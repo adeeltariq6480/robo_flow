@@ -22,7 +22,7 @@ BUCKET_DATASETS = "datasets"
 BUCKET_MODELS = "models"
 BUCKET_EXPORTS = "exports"
 
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument thththththht
 def _bucket_for_repo_type(repo_type: str) -> str:
     return BUCKET_MODELS if repo_type == REPO_TYPE_MODEL else BUCKET_DATASETS
 
