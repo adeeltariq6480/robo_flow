@@ -222,16 +222,20 @@ class Settings(BaseSettings):
     def dataset_repo_id(self) -> str:
         if self.hf_dataset_repo:
             return self.hf_dataset_repo
+        if self.hf_model_repo:
+            return self.hf_model_repo
         if self.hf_username:
-            return f"{self.hf_username}/robo-flow-datasets"
+            return f"{self.hf_username}/robo_flow"
         return ""
 
     @property
     def model_repo_id(self) -> str:
         if self.hf_model_repo:
             return self.hf_model_repo
+        if self.hf_dataset_repo:
+            return self.hf_dataset_repo
         if self.hf_username:
-            return f"{self.hf_username}/robo-flow-models"
+            return f"{self.hf_username}/robo_flow"
         return ""
 
     @property
@@ -248,11 +252,19 @@ class Settings(BaseSettings):
 
     @property
     def dataset_repo_type(self) -> str:
+        if self.dataset_repo_id and self.dataset_repo_id == self.model_repo_id:
+            return (
+                self.hf_model_repo_type.strip().lower()
+                or self.hf_dataset_repo_type.strip().lower()
+                or "model"
+            )
         return self.hf_dataset_repo_type.strip().lower() or "dataset"
 
     @property
     def model_repo_type(self) -> str:
-        return self.hf_model_repo_type.strip().lower() or "model"
+        if self.hf_model_repo and self.hf_model_repo != self.dataset_repo_id:
+            return self.hf_model_repo_type.strip().lower() or "model"
+        return self.dataset_repo_type
 
     @property
     def storage_base_path(self) -> Path:

@@ -1309,6 +1309,62 @@ async def delete_hf_cleanup(
     }
 
 
+@api_router.post("/admin/hf-cleanup/delete-repo")
+async def delete_hf_repo(
+    body: dict = Body(...),
+    _: None = Depends(verify_api_key),
+):
+    """Permanently delete a Hugging Face repository (irreversible)."""
+    repo_id = str(body.get("repo_id", "")).strip()
+    repo_type = str(body.get("repo_type", "")).strip()
+    confirmation = str(body.get("confirmation", "")).strip()
+
+    logger.info("cleanup delete-repo requested repo=%s type=%s", repo_id, repo_type)
+    repo_id, repo_type = _validate_hf_cleanup_args(repo_id, repo_type)
+
+    if confirmation != repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Type the exact repo id ({repo_id}) to confirm permanent deletion",
+        )
+
+    configured = {settings.dataset_repo_id, settings.model_repo_id}
+    configured.discard("")
+    if repo_id in configured:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Refusing to delete {repo_id} — it is the active HF_DATASET_REPO or "
+                "HF_MODEL_REPO on this worker. Change Railway env to another repo first, redeploy, "
+                "then delete."
+            ),
+        )
+
+    api = _hf_api()
+    try:
+        api.delete_repo(repo_id=repo_id, repo_type=repo_type, missing_ok=False)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "not found" in message or "404" in message:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Repository not found: {repo_id} ({repo_type})",
+            ) from exc
+        logger.exception("cleanup delete-repo failed repo=%s type=%s", repo_id, repo_type)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete repository: {exc}",
+        ) from exc
+
+    logger.info("cleanup delete-repo completed repo=%s type=%s", repo_id, repo_type)
+    return {
+        "success": True,
+        "deleted_repo": repo_id,
+        "repo_type": repo_type,
+        "message": f"Repository {repo_id} was permanently deleted from Hugging Face.",
+    }
+
+
 @api_router.get("/admin/hf-storage-check")
 async def hf_storage_check(_: None = Depends(verify_api_key)):
     result = {

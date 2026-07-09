@@ -215,3 +215,19 @@ export async function deleteHfCleanup(body: {
     }
   );
 }
+
+export async function deleteHfRepo(body: {
+  repo_id: string;
+  repo_type: string;
+  confirmation: string;
+}) {
+  return workerFetch<{
+    success: boolean;
+    deleted_repo: string;
+    repo_type: string;
+    message?: string;
+  }>("/api/admin/hf-cleanup/delete-repo", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
