@@ -308,9 +308,20 @@ export function AutoLabelPanel({
         {selectedDataset && (
           <p className="text-sm text-slate-500">
             {selectedModelIds.length} model
-            {selectedModelIds.length !== 1 ? "s" : ""} → {selectedDataset.file_count} image
-            {selectedDataset.file_count !== 1 ? "s" : ""} labeled (merged, not doubled) in &quot;
-            {selectedDataset.name}&quot;
+            {selectedModelIds.length !== 1 ? "s" : ""} →{" "}
+            {relabelAll ? (
+              <>
+                <strong>{selectedDataset.file_count}</strong> image
+                {selectedDataset.file_count !== 1 ? "s" : ""} (sab, including pehle labeled /
+                empty detections)
+              </>
+            ) : (
+              <>
+                unlabeled + empty detections only (pehle labeled skip) — dataset mein{" "}
+                <strong>{selectedDataset.file_count}</strong> total
+              </>
+            )}{" "}
+            in &quot;{selectedDataset.name}&quot;
             {selectedModelIds.length > 2 && (
               <span className="block text-amber-700">
                 Using {selectedModelIds.length} models — labeling runs one model at a time to
@@ -411,8 +422,11 @@ export function AutoLabelPanel({
         {isRunning && (
           <Alert variant="info">
             Labeling <strong>{selectedDatasetName}</strong> with {selectedModelIds.length}{" "}
-            model{selectedModelIds.length !== 1 ? "s" : ""}. You can switch pages and return —
-            progress is saved.
+            model{selectedModelIds.length !== 1 ? "s" : ""}
+            {relabelAll
+              ? ` — relabel all ${selectedDataset?.file_count ?? ""} images`
+              : " — sirf unlabeled / empty detections"}
+            . You can switch pages and return — progress is saved.
           </Alert>
         )}
 

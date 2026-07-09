@@ -30,6 +30,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
     const skippedNotEligible = (result.skipped_not_eligible as number) ?? 0;
     const skippedNotRemoteReady = (result.skipped_not_remote_ready as number) ?? 0;
     const skippedAlreadyLabeled = (result.skipped_already_labeled as number) ?? 0;
+    const relabelAll = (result.relabel_all as boolean) ?? false;
     const modelsUsed = (result.models_loaded as number) ?? (result.models_used as number) ?? 1;
     const modelsSelected = (result.models_selected as number) ?? modelsUsed;
     const modelsFailed = (result.models_failed as number) ?? 0;
@@ -76,7 +77,8 @@ export function DetectionResults({ job }: { job: JobResponse }) {
               {modelsUsed !== 1 ? "s" : ""}
             </>
           )}
-          {dbTotal > total && ` · ${dbTotal} total in dataset`}
+          {dbTotal > total && !relabelAll && ` · ${dbTotal} total in dataset`}
+          {relabelAll && dbTotal > 0 && ` · relabel all mode (${dbTotal} in dataset)`}
           {failed > 0 && ` · ${failed} image errors`}
         </p>
         {modelsFailed > 0 && modelsUsed > 0 && (
@@ -111,10 +113,9 @@ export function DetectionResults({ job }: { job: JobResponse }) {
             Baqi images ke liye pehle HF sync check karo, phir &quot;Label remaining&quot; dabao.
           </p>
         )}
-        {skippedAlreadyLabeled > 0 && labeled < dbTotal && (
+        {skippedAlreadyLabeled > 0 && labeled < dbTotal && !relabelAll && (
           <p className="mt-2 text-amber-800">
-            Sab dubara label karni hon to worker API se{" "}
-            <code className="text-xs">relabel_all: true</code> bhejo.
+            Sab dubara label karni hon to &quot;Relabel all images&quot; checkbox tick karo.
           </p>
         )}
         {modelFailures.length > 0 && (
