@@ -2,6 +2,8 @@ import logging
 import gc
 import threading
 import time
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
@@ -28,12 +30,40 @@ _yolo_models: dict[str, UniversalYOLOModel] = {}
 _yolo_lock = threading.Lock()
 
 
+@dataclass(frozen=True)
+class InferenceProfile:
+    max_side: int
+    min_side: int
+    imgsz: int
+    prefer_quality: bool = True
+
+
+_inference_profile: ContextVar[InferenceProfile | None] = ContextVar(
+    "inference_profile", default=None
+)
+
+
+def set_inference_profile(profile: InferenceProfile | None) -> None:
+    _inference_profile.set(profile)
+
+
+def clear_inference_profile() -> None:
+    _inference_profile.set(None)
+
+
+def _active_profile() -> InferenceProfile | None:
+    return _inference_profile.get()
+
+
 def _low_memory_mode() -> bool:
     return os.getenv("LOW_MEMORY_MODE", "true").lower() != "false"
 
 
 def inference_max_side() -> int:
     """Primary auto-label resolution — separate from upload quality."""
+    profile = _active_profile()
+    if profile is not None:
+        return profile.max_side
     raw = os.getenv("INFERENCE_MAX_IMAGE_SIZE") or os.getenv("MAX_IMAGE_SIZE")
     if raw:
         try:
@@ -45,6 +75,9 @@ def inference_max_side() -> int:
 
 def inference_min_side() -> int:
     """OOM fallback — only used when primary size exhausts Railway RAM."""
+    profile = _active_profile()
+    if profile is not None:
+        return profile.min_side
     raw = os.getenv("INFERENCE_MIN_IMAGE_SIZE")
     if raw:
         try:
@@ -56,6 +89,9 @@ def inference_min_side() -> int:
 
 def inference_imgsz_for(side: int) -> int:
     """Keep YOLO imgsz aligned with the prepared image side."""
+    profile = _active_profile()
+    if profile is not None:
+        return max(128, profile.imgsz)
     raw = os.getenv("YOLO_IMGSZ")
     if raw:
         try:
@@ -71,6 +107,10 @@ def inference_size_ladder() -> list[int]:
     minimum = min(inference_min_side(), primary)
     if minimum >= primary:
         return [primary]
+
+    profile = _active_profile()
+    if profile is not None and profile.prefer_quality:
+        return [primary, minimum]
 
     soft = int(os.getenv("MEMORY_SOFT_LIMIT_MB", "700" if _low_memory_mode() else "2400"))
     rss = get_process_memory_mb()
@@ -317,6 +357,7 @@ def release_all_models() -> None:
                 logger.debug("Failed to unload cached model", exc_info=True)
         _yolo_models.clear()
     clear_legacy_runtime_state()
+    clear_inference_profile()
 
 
 def _prepare_inference_image(image_path: Path, max_side: int) -> Image.Image:

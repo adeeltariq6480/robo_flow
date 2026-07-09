@@ -274,6 +274,21 @@ export function AutoLabelPanel({
                 save memory. Large datasets may take several minutes.
               </span>
             )}
+            {selectedModelIds.length === 1 &&
+              selectedDataset.file_count > 0 &&
+              selectedDataset.file_count <= 80 && (
+                <span className="block text-emerald-700">
+                  1 model + ≤80 images — worker uses high-quality 640px inference for clearer
+                  labels. 50–70 images per run is ideal on Railway.
+                </span>
+              )}
+            {selectedModelIds.length === 1 && selectedDataset.file_count > 80 && (
+              <span className="block text-amber-700">
+                Dataset has {selectedDataset.file_count} images. For clearer labels, label in
+                batches of 50–70 (split dataset or use &quot;Label remaining&quot;) with one model
+                only.
+              </span>
+            )}
           </p>
         )}
 

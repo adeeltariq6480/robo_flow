@@ -32,11 +32,14 @@ from app.services.storage import (
 )
 from app.services.model_errors import IncompatibleModelError
 from app.services.yolo_inference import (
+    InferenceProfile,
     MemoryLimitExceeded,
+    clear_inference_profile,
     get_process_memory_mb,
     load_yolo_model,
     release_all_models,
     run_yolo_inference,
+    set_inference_profile,
     unload_model,
 )
 
@@ -581,6 +584,25 @@ async def run_auto_label(
     low_threshold = int(getattr(config, "low_label_threshold", 1) or 1)
     num_models = len(model_ids)
     progress_step = _progress_interval(total)
+
+    if num_models == 1 and total <= settings.auto_label_quality_max_images:
+        set_inference_profile(
+            InferenceProfile(
+                max_side=settings.auto_label_quality_inference_max,
+                min_side=settings.auto_label_quality_inference_min,
+                imgsz=settings.auto_label_quality_yolo_imgsz,
+                prefer_quality=True,
+            )
+        )
+        logger.info(
+            "Quality inference: %dpx (fallback %dpx, imgsz=%d) for %d images with 1 model",
+            settings.auto_label_quality_inference_max,
+            settings.auto_label_quality_inference_min,
+            settings.auto_label_quality_yolo_imgsz,
+            total,
+        )
+    else:
+        clear_inference_profile()
 
     logger.info(
         "Auto-label job %s: %d images, %d models, project=%s dataset=%s",
@@ -1127,6 +1149,7 @@ async def run_auto_label(
             f"on Railway/VPS and that classes match your YOLO model. Examples: {hint}"
         )
 
+    clear_inference_profile()
     return _compact_job_result(
         dataset_id=dataset_id,
         model_ids=loaded_model_ids,

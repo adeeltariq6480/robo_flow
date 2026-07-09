@@ -180,6 +180,25 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("YOLO_IMGSZ"),
         description="YOLO model input size for auto-label (match INFERENCE_MAX_IMAGE_SIZE)",
     )
+    auto_label_quality_max_images: int = Field(
+        default=80,
+        validation_alias=AliasChoices("AUTO_LABEL_QUALITY_MAX_IMAGES"),
+        description="Use high-res inference when image count is at or below this (1 model jobs)",
+    )
+    auto_label_quality_inference_max: int = Field(
+        default=640,
+        validation_alias=AliasChoices("AUTO_LABEL_QUALITY_INFERENCE_MAX"),
+        description="High-quality auto-label inference size (1 model, small batch)",
+    )
+    auto_label_quality_inference_min: int = Field(
+        default=480,
+        validation_alias=AliasChoices("AUTO_LABEL_QUALITY_INFERENCE_MIN"),
+        description="OOM fallback for quality profile — still sharper than 256px",
+    )
+    auto_label_quality_yolo_imgsz: int = Field(
+        default=640,
+        validation_alias=AliasChoices("AUTO_LABEL_QUALITY_YOLO_IMGSZ"),
+    )
     hf_hub_disable_xet: bool = Field(
         default=True,
         validation_alias=AliasChoices("HF_HUB_DISABLE_XET"),
