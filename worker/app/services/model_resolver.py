@@ -281,6 +281,96 @@ def sync_project_models_to_hf(project_id: str) -> dict:
     }
 
 
+def migrate_project_models_from_dataset_repo(project_id: str) -> dict:
+    """Move model weights mistakenly stored in the HF dataset repo into the model repo."""
+    from huggingface_hub import hf_hub_download
+    from app.services.supabase_repo import list_models, update_model_fields
+
+    file_storage.require_hf_model_upload()
+    repo_id = settings.model_repo_id
+    if not repo_id:
+        return {"migrated": 0, "message": "HF_MODEL_REPO not configured"}
+
+    prefix = f"models/{project_id}/"
+    dataset_type = file_storage.REPO_TYPE_DATASET
+    model_type = settings.model_repo_type
+
+    try:
+        dataset_files = file_storage._api().list_repo_files(
+            repo_id=repo_id, repo_type=dataset_type
+        )
+    except Exception as exc:
+        logger.warning("Model migration: could not list dataset repo: %s", exc)
+        return {"migrated": 0, "error": str(exc)}
+
+    candidates = [
+        path
+        for path in dataset_files
+        if path.startswith(prefix) and Path(path).suffix.lower() in _MODEL_SUFFIXES
+    ]
+    if not candidates:
+        return {"migrated": 0, "message": "No model files in dataset repo to migrate"}
+
+    payload: list[tuple[str, bytes]] = []
+    migrated_paths: list[str] = []
+    skipped = 0
+
+    for path in candidates:
+        if file_storage._repo_file_exists(repo_id, model_type, path):
+            skipped += 1
+            continue
+        try:
+            local = hf_hub_download(
+                repo_id=repo_id,
+                filename=path,
+                repo_type=dataset_type,
+                token=settings.hf_token,
+            )
+            file_name = Path(path).name
+            payload.append((file_name, Path(local).read_bytes()))
+            migrated_paths.append(path)
+        except Exception as exc:
+            logger.warning("Model migration download failed path=%s: %s", path, exc)
+
+    if not payload:
+        return {
+            "migrated": 0,
+            "skippedAlreadyOnModelRepo": skipped,
+            "message": "Model files already on model repo or download failed.",
+        }
+
+    loc = file_storage.upload_model_files_batch(project_id, payload)
+
+    rows = list_models(project_id)
+    updated = 0
+    for row in rows:
+        model_id = str(row["id"])
+        hf_path = str(row.get("hfPath") or row.get("hf_path") or "")
+        file_name = Path(hf_path).name if hf_path else ""
+        if file_name and any(file_name == Path(p).name for p in migrated_paths):
+            update_model_fields(
+                project_id,
+                model_id,
+                {
+                    "hfRepo": loc["hfRepo"],
+                    "hfPath": file_storage.model_path(project_id, file_name),
+                },
+            )
+            updated += 1
+
+    return {
+        "migrated": len(payload),
+        "dbUpdated": updated,
+        "skippedAlreadyOnModelRepo": skipped,
+        "hfRepo": loc.get("hfRepo"),
+        "repoType": loc.get("repoType"),
+        "files": [name for name, _ in payload],
+        "message": (
+            f"Migrated {len(payload)} model file(s) from dataset repo to model repo."
+        ),
+    }
+
+
 def check_model_available(
     project_id: str,
     model_id: str,
@@ -461,11 +551,13 @@ def resolve_model_path_in_repo(
 
 
 def _repo_types_to_try(primary: str) -> list[str]:
-    order = [primary]
-    for candidate in (settings.model_repo_type, settings.dataset_repo_type):
-        if candidate not in order:
+    """Model weight lookups — model namespace only (not dataset repo)."""
+    model_type = file_storage.REPO_TYPE_MODEL
+    order: list[str] = []
+    for candidate in (primary, settings.model_repo_type, model_type):
+        if candidate and candidate not in order:
             order.append(candidate)
-    return order
+    return order or [model_type]
 
 
 def _hf_download_path(

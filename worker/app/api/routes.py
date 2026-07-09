@@ -1261,16 +1261,22 @@ async def models_availability(project_id: str, _: None = Depends(verify_api_key)
 @api_router.post("/models/{project_id}/sync-hf")
 async def sync_models_to_hf(project_id: str, _: None = Depends(verify_api_key)):
     """Push local model files on the worker disk to Hugging Face."""
-    from app.services.model_resolver import sync_project_models_to_hf
+    from app.services.model_resolver import (
+        migrate_project_models_from_dataset_repo,
+        sync_project_models_to_hf,
+    )
 
     try:
+        migration = await asyncio.to_thread(
+            migrate_project_models_from_dataset_repo, project_id
+        )
         result = await asyncio.to_thread(sync_project_models_to_hf, project_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Model HF sync failed project=%s", project_id)
         raise _hf_upload_exception(exc, file_name="models", target="model") from exc
-    return result
+    return {"migration": migration, **result}
 
 
 @api_router.delete("/models/{project_id}/{model_id}")

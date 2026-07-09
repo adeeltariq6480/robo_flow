@@ -271,12 +271,8 @@ class Settings(BaseSettings):
         explicit = self.hf_model_repo_type.strip().lower()
         if explicit:
             return explicit
-        # Separate model repo → always use Hugging Face "model" API
-        if self.hf_model_repo and self.hf_model_repo != self.dataset_repo_id:
-            return "model"
-        # Single shared repo (images + weights in one dataset repo)
-        if self.dataset_repo_id and self.dataset_repo_id == self.model_repo_id:
-            return self.dataset_repo_type
+        # Same repo NAME on HF is valid — models always use the *model* namespace.
+        # Images use dataset namespace (see dataset_repo_type).
         return "model"
 
     @property

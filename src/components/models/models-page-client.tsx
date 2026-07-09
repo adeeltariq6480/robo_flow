@@ -161,8 +161,12 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
           <p className="mt-1 text-sm">
             Models sirf database mein hain — HF repo empty ho sakta hai. Pehle{" "}
             <strong>Push to Hugging Face</strong> try karein (agar Railway disk par files hain),
-            warna dubara upload karein. Models <strong>model repo</strong> mein save hoti hain
-            (images wala dataset repo alag hota hai — same name ho sakta hai lekin URL different).
+            Models sirf database mein hain — HF repo empty ho sakta hai. Pehle{" "}
+            <strong>Push to Hugging Face</strong> try karein (dataset repo se model repo
+            migrate + Railway disk se push). Images dataset repo mein, models model repo mein
+            save hoti hain — same name ho sakta hai lekin URL alag (
+            <code className="text-xs">huggingface.co/datasets/…</code> vs{" "}
+            <code className="text-xs">huggingface.co/…</code>).
           </p>
           <Button
             type="button"

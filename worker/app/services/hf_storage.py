@@ -363,10 +363,19 @@ def upload_bytes(
     path_in_repo: str,
     commit_message: str | None = None,
 ) -> dict:
-    repo_id = (
-        settings.dataset_repo_id if repo_type == settings.dataset_repo_type
-        else settings.model_repo_id
-    )
+    if repo_type == REPO_TYPE_MODEL:
+        repo_id = settings.model_repo_id
+    elif repo_type == REPO_TYPE_DATASET:
+        repo_id = settings.dataset_repo_id
+    elif repo_type == settings.model_repo_type:
+        repo_id = settings.model_repo_id
+    elif repo_type == settings.dataset_repo_type:
+        repo_id = settings.dataset_repo_id
+    else:
+        raise RuntimeError(
+            f"Unknown Hugging Face repo_type={repo_type!r}. "
+            "Use 'dataset' for images/labels/exports and 'model' for model weights."
+        )
     if not repo_id:
         raise RuntimeError(
             f"Missing Hugging Face repo for repo_type={repo_type}. "
