@@ -129,7 +129,7 @@ def upload_dataset_images_batch(
 
     return {"hfRepo": BUCKET_DATASETS, "count": len(items), "localNames": local_names}
 
-
+# pylint: disable=unused-argument
 def upload_dataset_images_from_folder(
     project_id: str,
     dataset_id: str,
