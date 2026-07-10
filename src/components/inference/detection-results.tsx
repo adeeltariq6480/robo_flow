@@ -78,7 +78,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
             </>
           )}
           {dbTotal > total && !relabelAll && ` · ${dbTotal} total in dataset`}
-          {relabelAll && dbTotal > 0 && ` · relabel all mode (${dbTotal} in dataset)`}
+          {relabelAll && dbTotal > 0 && ` · relabel labeled images mode`}
           {failed > 0 && ` · ${failed} image errors`}
         </p>
         {modelsFailed > 0 && modelsUsed > 0 && (
@@ -115,7 +115,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         )}
         {skippedAlreadyLabeled > 0 && labeled < dbTotal && !relabelAll && (
           <p className="mt-2 text-amber-800">
-            To relabel everything, tick &quot;Relabel all images&quot;.
+            To relabel images that already have labels, tick &quot;Relabel already labeled images&quot;.
           </p>
         )}
         {modelFailures.length > 0 && (

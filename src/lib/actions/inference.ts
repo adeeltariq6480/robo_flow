@@ -7,7 +7,9 @@ import {
   getJob,
   cancelJob,
   resumeJob,
+  getDatasetLabelStats,
   type JobConfig,
+  type DatasetLabelStats,
 } from "@/lib/worker/client";
 import {
   getModelsAvailability,
@@ -42,6 +44,17 @@ export async function startTestRun(
   }
 }
 
+export async function fetchDatasetLabelStats(
+  projectId: string,
+  datasetId: string
+): Promise<DatasetLabelStats | { error: string }> {
+  try {
+    return await getDatasetLabelStats(projectId, datasetId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Worker unavailable" };
+  }
+}
+
 export async function startAutoLabel(
   projectId: string,
   modelIds: string[],
@@ -59,6 +72,7 @@ export async function startAutoLabel(
       model_ids: modelIds,
       dataset_id: datasetId,
       skip_labeled: options?.skipLabeled ?? false,
+      relabel_all: config?.relabel_all ?? false,
       config,
     });
   } catch (e) {

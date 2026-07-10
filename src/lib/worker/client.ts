@@ -153,6 +153,22 @@ export async function submitModelCompare(body: {
   );
 }
 
+export interface DatasetLabelStats {
+  total: number;
+  eligible: number;
+  ready: number;
+  unlabeled: number;
+  already_labeled: number;
+  skipped_not_eligible: number;
+  skipped_not_remote_ready: number;
+}
+
+export async function getDatasetLabelStats(projectId: string, datasetId: string) {
+  return workerFetch<DatasetLabelStats>(
+    `/api/datasets/${projectId}/${datasetId}/label-stats`
+  );
+}
+
 /** Poll job status — prefers project-scoped route (more reliable than global registry). */
 export async function getJob(
   jobId: string,

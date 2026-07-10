@@ -485,6 +485,75 @@ def _needs_auto_label(row: dict) -> bool:
     return True
 
 
+def resolve_dataset_label_plan(
+    project_id: str,
+    dataset_id: str,
+    db_file_list: list[dict],
+    *,
+    relabel_all: bool,
+) -> dict:
+    """Compute which images will be labeled for default vs relabel mode."""
+    db_total = len(db_file_list)
+    eligible_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
+        project_id, dataset_id, db_file_list
+    )
+    remote_image_mode = _remote_image_mode()
+    if remote_image_mode:
+        ready_list = [f for f in eligible_list if _vercel_remote_ready(f)]
+    else:
+        ready_list = list(eligible_list)
+
+    skipped_not_remote_ready = (
+        len(eligible_list) - len(ready_list) if remote_image_mode else 0
+    )
+    unlabeled_list = [f for f in ready_list if _needs_auto_label(f)]
+    already_labeled_list = [f for f in ready_list if not _needs_auto_label(f)]
+
+    if relabel_all:
+        file_list = already_labeled_list
+        skipped_already_labeled = 0
+    else:
+        file_list = unlabeled_list
+        skipped_already_labeled = len(already_labeled_list)
+
+    return {
+        "db_total": db_total,
+        "eligible": len(eligible_list),
+        "ready": len(ready_list),
+        "unlabeled": len(unlabeled_list),
+        "already_labeled": len(already_labeled_list),
+        "skipped_not_eligible": skipped_not_eligible,
+        "skipped_not_remote_ready": skipped_not_remote_ready,
+        "skipped_already_labeled": skipped_already_labeled,
+        "file_list": file_list,
+        "total": len(file_list),
+    }
+
+
+def get_dataset_label_stats(project_id: str, dataset_id: str) -> dict:
+    """Preview counts for auto-label UI (unlabeled vs already labeled)."""
+    db_file_list = [
+        _normalise_image_row(row)
+        for row in list_dataset_images(project_id, dataset_id)
+    ]
+    attach_annotation_fields_to_images(project_id, db_file_list)
+    default_plan = resolve_dataset_label_plan(
+        project_id, dataset_id, db_file_list, relabel_all=False
+    )
+    relabel_plan = resolve_dataset_label_plan(
+        project_id, dataset_id, db_file_list, relabel_all=True
+    )
+    return {
+        "total": default_plan["db_total"],
+        "eligible": default_plan["eligible"],
+        "ready": default_plan["ready"],
+        "unlabeled": default_plan["unlabeled"],
+        "already_labeled": relabel_plan["already_labeled"],
+        "skipped_not_eligible": default_plan["skipped_not_eligible"],
+        "skipped_not_remote_ready": default_plan["skipped_not_remote_ready"],
+    }
+
+
 def _relabel_all_enabled(data: dict, config: JobConfig) -> bool:
     payload = data.get("input_payload") or {}
     if _truthy_flag(payload.get("relabel_all")):
@@ -755,37 +824,32 @@ async def run_auto_label(
             attach_annotation_fields_to_images(project_id, db_file_list)
         gc.collect()
 
-    eligible_list, skipped_not_eligible, _remote_by_name = _build_label_file_list(
-        project_id, dataset_id, db_file_list
-    )
-    remote_image_mode = _remote_image_mode()
     relabel_all = _relabel_all_enabled(data, config)
 
-    if remote_image_mode:
-        ready_list = [f for f in eligible_list if _vercel_remote_ready(f)]
-    else:
-        ready_list = list(eligible_list)
-
-    skipped_not_remote_ready = len(eligible_list) - len(ready_list) if remote_image_mode else 0
-    ready_before_filter = len(ready_list)
-    if relabel_all:
-        file_list = ready_list
-        skipped_already_labeled = 0
-    else:
-        file_list = [f for f in ready_list if _needs_auto_label(f)]
-        skipped_already_labeled = ready_before_filter - len(file_list)
-
-    total = len(file_list)
+    label_plan = resolve_dataset_label_plan(
+        project_id,
+        dataset_id,
+        db_file_list,
+        relabel_all=relabel_all,
+    )
+    file_list = label_plan["file_list"]
+    skipped_not_eligible = label_plan["skipped_not_eligible"]
+    skipped_not_remote_ready = label_plan["skipped_not_remote_ready"]
+    skipped_already_labeled = label_plan["skipped_already_labeled"]
+    total = label_plan["total"]
+    remote_image_mode = _remote_image_mode()
 
     logger.info(
-        "Auto-label filtering: db_total=%d eligible=%d skipped_not_eligible=%d skipped_not_remote_ready=%d skipped_already_labeled=%d final_total=%d relabel_all=%s",
+        "Auto-label filtering: db_total=%d eligible=%d skipped_not_eligible=%d skipped_not_remote_ready=%d skipped_already_labeled=%d final_total=%d relabel_all=%s unlabeled=%d already_labeled=%d",
         db_total,
-        len(eligible_list),
+        label_plan["eligible"],
         skipped_not_eligible,
         skipped_not_remote_ready,
         skipped_already_labeled,
         total,
         relabel_all,
+        label_plan["unlabeled"],
+        label_plan["already_labeled"],
     )
 
     logger.info(
@@ -806,6 +870,22 @@ async def run_auto_label(
     )
 
     if total == 0:
+        if relabel_all:
+            return _compact_job_result(
+                project_id=project_id,
+                dataset_id=dataset_id,
+                model_ids=model_ids,
+                selected_model_ids=selected_model_ids,
+                total=0,
+                labeled=0,
+                failed=0,
+                all_results=[],
+                db_total=db_total,
+                skipped_not_eligible=skipped_not_eligible,
+                skipped_not_remote_ready=skipped_not_remote_ready,
+                skipped_already_labeled=label_plan["already_labeled"],
+                relabel_all=relabel_all,
+            )
         if skipped_already_labeled > 0 and not relabel_all:
             return _compact_job_result(
                 project_id=project_id,

@@ -48,7 +48,7 @@ class JobConfig(BaseModel):
     )
     relabel_all: bool = Field(
         default=False,
-        description="For auto_label: re-process images that are already labeled/reviewed",
+        description="For auto_label: re-process images that are already labeled",
     )
 
 

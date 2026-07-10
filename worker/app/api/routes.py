@@ -1781,6 +1781,19 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
     return {"ok": True, "commit": res}
 
 
+@api_router.get("/datasets/{project_id}/{dataset_id}/label-stats")
+async def dataset_label_stats(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    """Counts for auto-label UI: unlabeled vs already labeled images."""
+    from app.services.auto_label import get_dataset_label_stats
+
+    try:
+        stats = await asyncio.to_thread(get_dataset_label_stats, project_id, dataset_id)
+    except Exception as exc:
+        logger.exception("Label stats failed for %s/%s: %s", project_id, dataset_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return stats
+
+
 @api_router.get("/datasets/{project_id}/{dataset_id}/sync-preview")
 async def dataset_sync_preview(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
     cache_key = f"{project_id}:{dataset_id}"
@@ -2183,13 +2196,18 @@ async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key
 @jobs_router.post("/auto-label", response_model=JobCreateResponse)
 @api_router.post("/auto-label", response_model=JobCreateResponse)
 async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api_key)):
+    from app.services.auto_label import get_dataset_label_stats
+
     relabel_all = body.relabel_all or body.config.relabel_all
-    total = repo.count_dataset_images(body.project_id, body.dataset_id)
+    stats = await asyncio.to_thread(
+        get_dataset_label_stats, body.project_id, body.dataset_id
+    )
+    scope_count = stats["already_labeled"] if relabel_all else stats["unlabeled"]
     model_ids = body.resolved_model_ids()
     job_id, queue, position = await submit_job(
         body.project_id, JobType.AUTO_LABEL,
         model_id=model_ids[0], model_ids=model_ids,
-        dataset_id=body.dataset_id, config=body.config, total_items=total,
+        dataset_id=body.dataset_id, config=body.config, total_items=scope_count,
         input_payload={
             "model_ids": model_ids,
             "skip_labeled": body.skip_labeled,
@@ -2197,9 +2215,9 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         },
     )
     scope = (
-        f"all {total} image(s) (including already labeled)"
+        f"{scope_count} already labeled image(s)"
         if relabel_all
-        else f"up to {total} image(s) (unlabeled / empty detections only)"
+        else f"{scope_count} unlabeled / empty-detection image(s)"
     )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,

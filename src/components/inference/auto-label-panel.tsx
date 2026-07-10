@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   cancelInferenceJob,
+  fetchDatasetLabelStats,
   fetchModelsAvailability,
   resumeInferenceJob,
   startAutoLabel,
 } from "@/lib/actions/inference";
+import type { DatasetLabelStats } from "@/lib/worker/client";
 import type { JobResponse } from "@/lib/worker/client";
 import type { Model, Dataset } from "@/lib/types/database";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -69,9 +71,14 @@ export function AutoLabelPanel({
   const [unavailableIds, setUnavailableIds] = useState<Set<string>>(new Set());
   const [unavailableReasons, setUnavailableReasons] = useState<Record<string, string>>({});
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [labelStats, setLabelStats] = useState<DatasetLabelStats | null>(null);
+  const [labelStatsLoading, setLabelStatsLoading] = useState(false);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
+  const imagesToLabel = relabelAll
+    ? (labelStats?.already_labeled ?? 0)
+    : (labelStats?.unlabeled ?? 0);
   const isRunning = !!jobId && !completedJob;
   const labeled = labeledCount(completedJob);
   const dbTotal =
@@ -120,6 +127,29 @@ export function AutoLabelPanel({
       cancelled = true;
     };
   }, [projectId, models]);
+
+  useEffect(() => {
+    if (!datasetId) {
+      setLabelStats(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLabelStatsLoading(true);
+    fetchDatasetLabelStats(projectId, datasetId).then((result) => {
+      if (cancelled) return;
+      if ("error" in result) {
+        setLabelStats(null);
+      } else {
+        setLabelStats(result);
+      }
+      setLabelStatsLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, datasetId, completedJob?.status]);
 
   useEffect(() => {
     setSelectedModelIds((prev) => {
@@ -305,28 +335,43 @@ export function AutoLabelPanel({
           )}
         </div>
 
-        {selectedDataset && (
+        {selectedDataset && selectedModelIds.length > 0 && (
           <p className="text-sm text-slate-500">
             {selectedModelIds.length} model
             {selectedModelIds.length !== 1 ? "s" : ""} →{" "}
-            {relabelAll ? (
+            {labelStatsLoading ? (
+              <>counting images…</>
+            ) : relabelAll ? (
               <>
-                <strong>{selectedDataset.file_count}</strong> image
-                {selectedDataset.file_count !== 1 ? "s" : ""} (all, including previously labeled /
-                empty detections)
+                <strong>{imagesToLabel}</strong> already labeled image
+                {imagesToLabel !== 1 ? "s" : ""} to relabel
+                {labelStats && labelStats.total > imagesToLabel && (
+                  <> ({labelStats.unlabeled} unlabeled skipped)</>
+                )}
               </>
             ) : (
               <>
-                unlabeled + empty detections only (already labeled skipped) —{" "}
-                <strong>{selectedDataset.file_count}</strong> total in dataset
+                <strong>{imagesToLabel}</strong> unlabeled / empty-detection image
+                {imagesToLabel !== 1 ? "s" : ""} to label
+                {labelStats && labelStats.already_labeled > 0 && (
+                  <> ({labelStats.already_labeled} already labeled skipped)</>
+                )}
               </>
             )}{" "}
             in &quot;{selectedDataset.name}&quot;
+            {labelStats && (
+              <span className="block text-slate-400">
+                {labelStats.total} total in dataset
+                {labelStats.skipped_not_eligible > 0 &&
+                  ` · ${labelStats.skipped_not_eligible} not eligible`}
+                {labelStats.skipped_not_remote_ready > 0 &&
+                  ` · ${labelStats.skipped_not_remote_ready} missing on HF`}
+              </span>
+            )}
             {selectedModelIds.length > 1 && (
               <span className="block text-emerald-700">
                 All {selectedModelIds.length} models are prepared and merged first, then labeling
-                starts on{" "}
-                {relabelAll ? selectedDataset.file_count : "unlabeled"} images.
+                starts on {imagesToLabel || (relabelAll ? "labeled" : "unlabeled")} images.
               </span>
             )}
             {selectedModelIds.length > 2 && (
@@ -335,19 +380,25 @@ export function AutoLabelPanel({
                 all results before saving.
               </span>
             )}
+            {!labelStatsLoading && imagesToLabel === 0 && (
+              <span className="block text-amber-700">
+                {relabelAll
+                  ? "No already labeled images in this dataset. Uncheck Relabel to label unlabeled images."
+                  : "No unlabeled images left. Check Relabel already labeled images to run again on labeled images."}
+              </span>
+            )}
             {selectedModelIds.length === 1 &&
-              selectedDataset.file_count > 0 &&
-              selectedDataset.file_count <= 80 && (
+              imagesToLabel > 0 &&
+              imagesToLabel <= 80 && (
                 <span className="block text-emerald-700">
                   1 model + ≤80 images — worker uses high-quality 640px inference for clearer
                   labels. 50–70 images per run is ideal on Railway.
                 </span>
               )}
-            {selectedModelIds.length === 1 && selectedDataset.file_count > 80 && (
+            {selectedModelIds.length === 1 && imagesToLabel > 80 && (
               <span className="block text-amber-700">
-                Dataset has {selectedDataset.file_count} images. For clearer labels, label in
-                batches of 50–70 (split dataset or use &quot;Label remaining&quot;) with one model
-                only.
+                {imagesToLabel} images to process. For clearer labels, label in batches of 50–70
+                (split dataset or use &quot;Label remaining&quot;) with one model only.
               </span>
             )}
           </p>
@@ -379,8 +430,19 @@ export function AutoLabelPanel({
             disabled={isRunning}
             className="rounded border-slate-300"
           />
-          Relabel all images (including already labeled / empty detections)
+          Relabel already labeled images
         </label>
+
+        {!relabelAll && (
+          <p className="text-xs text-slate-500">
+            Default: only unlabeled images and empty detections are processed.
+          </p>
+        )}
+        {relabelAll && (
+          <p className="text-xs text-slate-500">
+            Relabel mode: only images that already have labels will be processed again.
+          </p>
+        )}
 
         <p className="text-xs text-amber-800">
           For tilted or angled shelf photos, keep confidence around 0.10–0.20. The worker also
@@ -390,7 +452,7 @@ export function AutoLabelPanel({
         <Button
           onClick={() => handleRun(false)}
           loading={loading}
-          disabled={isRunning || selectedModelIds.length === 0}
+          disabled={isRunning || selectedModelIds.length === 0 || imagesToLabel === 0}
         >
           {!loading && <Tags className="h-4 w-4" />}
           {loading
@@ -431,8 +493,8 @@ export function AutoLabelPanel({
             Labeling <strong>{selectedDatasetName}</strong> with {selectedModelIds.length}{" "}
             model{selectedModelIds.length !== 1 ? "s" : ""}
             {relabelAll
-              ? ` — relabel all ${selectedDataset?.file_count ?? ""} images`
-              : " — unlabeled / empty detections only"}
+              ? ` — relabel ${imagesToLabel} already labeled image${imagesToLabel !== 1 ? "s" : ""}`
+              : ` — label ${imagesToLabel} unlabeled image${imagesToLabel !== 1 ? "s" : ""}`}
             . You can switch pages and return — progress is saved.
           </Alert>
         )}
