@@ -208,6 +208,7 @@ export function AutoLabelPanel({
           datasetId,
           jobId: result.id,
           jobType: "auto_label",
+          createdAt: Date.now(),
         });
         return;
       }
@@ -272,6 +273,7 @@ export function AutoLabelPanel({
         datasetId,
         jobId: result.jobId,
         jobType: "auto_label",
+        createdAt: Date.now(),
       });
     } else {
       setColabWatching(true);
