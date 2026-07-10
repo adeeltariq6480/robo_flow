@@ -58,6 +58,7 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 MODEL_DOWNLOAD_TIMEOUT_SECONDS = 600
 MODEL_WARMUP_TIMEOUT_SECONDS = 900
 IMAGE_PREP_TIMEOUT_SECONDS = int(os.getenv("AUTO_LABEL_IMAGE_PREP_TIMEOUT_SECONDS", "90"))
+PERSIST_TIMEOUT_SECONDS = int(os.getenv("AUTO_LABEL_PERSIST_TIMEOUT_SECONDS", "60"))
 
 
 async def _safe_update_model_status(project_id: str, model_id: str, status: str) -> None:
@@ -208,11 +209,46 @@ def _is_image_row(file_row: dict) -> bool:
     )
 
 def _progress_interval(total: int) -> int:
-    if total <= 50:
+    if total <= 20:
         return 1
-    if total <= 200:
+    if total <= 100:
+        return 2
+    if total <= 500:
         return 5
     return 10
+
+
+def _should_emit_detail(idx: int, step: int, total: int) -> bool:
+    """Whether to push granular progress for this image index."""
+    return idx < 5 or idx % step == 0 or idx == total - 1
+
+
+def _should_emit_model_substep(idx: int, step: int, total: int, num_models: int) -> bool:
+    """Per-model inference updates — always for small batches or step boundaries."""
+    return num_models <= 4 or _should_emit_detail(idx, step, total)
+
+
+def _multi_model_image_progress(
+    idx: int,
+    total: int,
+    model_idx: int,
+    model_count: int,
+    *,
+    floor: int = 25,
+    ceiling: int = 95,
+) -> int:
+    """Map image index + model index to overall job progress (any N models)."""
+    work_units = max(total, 1) * max(model_count, 1)
+    done = idx * model_count + model_idx + 1
+    ratio = min(max(done / work_units, 0.0), 1.0)
+    return min(ceiling, max(floor, int(floor + ratio * (ceiling - floor))))
+
+
+async def _persist_labels_async(**kwargs) -> int:
+    return await asyncio.wait_for(
+        asyncio.to_thread(_persist_image_labels, **kwargs),
+        timeout=PERSIST_TIMEOUT_SECONDS,
+    )
 
 
 def _compact_job_result(
@@ -882,6 +918,75 @@ async def run_auto_label(
         ratio = min(max(done / total_work, 0.0), 1.0)
         return min(ceiling, max(floor, int(floor + ratio * (ceiling - floor))))
 
+    async def _report_progress(
+        *,
+        idx: int,
+        message: str,
+        processed: int | None = None,
+        model_idx: int | None = None,
+        model_count: int | None = None,
+        floor: int = 25,
+        ceiling: int = 95,
+    ) -> None:
+        if model_idx is not None and model_count is not None:
+            pct = _multi_model_image_progress(
+                idx, total, model_idx, model_count, floor=floor, ceiling=ceiling
+            )
+        else:
+            pct = _work_progress(idx + 1, total, floor=floor, ceiling=ceiling)
+        await update_job(
+            job_id,
+            progress=pct,
+            progress_message=message,
+            processed_items=processed if processed is not None else labeled,
+            project_id=project_id,
+        )
+
+    async def _save_labeled_image(
+        *,
+        file_row: dict,
+        file_id: str,
+        combined: list[DetectionBox],
+        per_model: dict[str, int],
+    ) -> bool:
+        """Persist merged labels; return True on success."""
+        nonlocal labeled, failed
+        try:
+            det_count = await _persist_labels_async(
+                project_id=project_id,
+                dataset_id=dataset_id,
+                job_id=job_id,
+                file_row=file_row,
+                file_id=file_id,
+                combined=combined,
+                per_model=per_model,
+                config=config,
+                low_threshold=low_threshold,
+                num_models=num_models,
+            )
+            labeled += 1
+            all_results.append(
+                {
+                    "file_id": file_id,
+                    "detections": det_count,
+                    "per_model": per_model,
+                }
+            )
+            return True
+        except asyncio.TimeoutError:
+            failed += 1
+            all_results.append(
+                {
+                    "file_id": file_id,
+                    "error": f"Save timed out after {PERSIST_TIMEOUT_SECONDS}s",
+                }
+            )
+            return False
+        except Exception as exc:
+            failed += 1
+            all_results.append({"file_id": file_id, "error": str(exc)})
+            return False
+
     def _cleanup_image_path(path: object) -> None:
         try:
             image_path = Path(path)
@@ -1140,6 +1245,7 @@ async def run_auto_label(
 
     if combined_mode:
         try:
+            n_active = len(active_model_ids)
             for idx, file_row in enumerate(file_list):
                 if await asyncio.to_thread(is_job_cancelled, job_id, project_id):
                     cancelled_requested = True
@@ -1149,16 +1255,16 @@ async def run_auto_label(
                 if file_id in prep_failures:
                     continue
 
-                if idx % progress_step == 0 or idx == total - 1 or idx < 3:
-                    await update_job(
-                        job_id,
-                        progress=_work_progress(idx + 1, total, floor=25, ceiling=95),
-                        progress_message=(
-                            f"Image {idx + 1}/{total} · "
-                            f"{len(active_model_ids)} models merged"
+                detail = _should_emit_detail(idx, progress_step, total)
+
+                if detail:
+                    await _report_progress(
+                        idx=idx,
+                        message=(
+                            f"Downloading image {idx + 1}/{total} · "
+                            f"{n_active} model(s)…"
                         ),
-                        processed_items=idx + 1,
-                        project_id=project_id,
+                        processed=labeled,
                     )
 
                 image_path = await prepare_image(file_id)
@@ -1170,7 +1276,18 @@ async def run_auto_label(
                 image_failed = False
 
                 try:
-                    for model_id in active_model_ids:
+                    for mi, model_id in enumerate(active_model_ids):
+                        if _should_emit_model_substep(idx, progress_step, total, n_active):
+                            await _report_progress(
+                                idx=idx,
+                                message=(
+                                    f"Image {idx + 1}/{total} · model {mi + 1}/"
+                                    f"{n_active} inferencing…"
+                                ),
+                                processed=labeled,
+                                model_idx=mi,
+                                model_count=n_active,
+                            )
                         model_config = _config_for_model(config, project_id, model_id)
                         try:
                             inference = await asyncio.wait_for(
@@ -1213,30 +1330,32 @@ async def run_auto_label(
                 if image_failed or file_id in prep_failures:
                     continue
 
-                try:
-                    det_count = _persist_image_labels(
-                        project_id=project_id,
-                        dataset_id=dataset_id,
-                        job_id=job_id,
-                        file_row=file_row,
-                        file_id=file_id,
-                        combined=combined_dets,
-                        per_model=per_model,
-                        config=config,
-                        low_threshold=low_threshold,
-                        num_models=num_models,
+                if detail:
+                    await _report_progress(
+                        idx=idx,
+                        message=(
+                            f"Saving image {idx + 1}/{total} · "
+                            f"{n_active} model(s) merged…"
+                        ),
+                        processed=labeled,
                     )
-                    labeled += 1
-                    all_results.append(
-                        {
-                            "file_id": file_id,
-                            "detections": det_count,
-                            "per_model": per_model,
-                        }
+
+                await _save_labeled_image(
+                    file_row=file_row,
+                    file_id=file_id,
+                    combined=combined_dets,
+                    per_model=per_model,
+                )
+
+                if detail:
+                    await _report_progress(
+                        idx=idx,
+                        message=(
+                            f"Image {idx + 1}/{total} done "
+                            f"({labeled}/{total} saved)"
+                        ),
+                        processed=labeled,
                     )
-                except Exception as exc:
-                    failed += 1
-                    all_results.append({"file_id": file_id, "error": str(exc)})
 
                 if gc_every and (idx + 1) % gc_every == 0:
                     gc.collect()
@@ -1259,9 +1378,11 @@ async def run_auto_label(
 
         per_image_dets: dict[str, list[DetectionBox]] = defaultdict(list)
         per_image_models: dict[str, dict[str, int]] = defaultdict(dict)
+        saved_ids: set[str] = set()
         sequential_ids = [
             mid for mid in loaded_model_ids if mid not in model_failures
         ]
+        models_needed = len(sequential_ids)
 
         for mi, model_id in enumerate(sequential_ids):
             if cancelled_requested:
@@ -1273,7 +1394,7 @@ async def run_auto_label(
                 job_id,
                 progress=_work_progress(mi, max(len(sequential_ids), 1), floor=10, ceiling=25),
                 progress_message=f"Loading model {mi + 1}/{len(sequential_ids)}…",
-                processed_items=0,
+                processed_items=labeled,
                 project_id=project_id,
             )
 
@@ -1304,6 +1425,7 @@ async def run_auto_label(
                     f"Model {mi + 1}/{len(sequential_ids)} ready — scanning "
                     f"{total} image(s)…"
                 ),
+                processed_items=labeled,
                 project_id=project_id,
             )
 
@@ -1314,25 +1436,23 @@ async def run_auto_label(
                         break
 
                     file_id = str(file_row["id"])
-                    if file_id in prep_failures:
+                    if file_id in prep_failures or file_id in saved_ids:
                         continue
 
-                    overall_pct = _work_progress(
-                        mi * total + idx + 1,
-                        max(len(sequential_ids) * total, 1),
-                        floor=25,
-                        ceiling=88,
-                    )
-                    if idx % progress_step == 0 or idx == total - 1 or idx < 3:
-                        await update_job(
-                            job_id,
-                            progress=overall_pct,
-                            progress_message=(
-                                f"Image {idx + 1}/{total} · model {mi + 1}/"
-                                f"{len(sequential_ids)} (merge at end)…"
+                    detail = _should_emit_detail(idx, progress_step, total)
+
+                    if detail:
+                        await _report_progress(
+                            idx=idx,
+                            message=(
+                                f"Downloading image {idx + 1}/{total} · "
+                                f"model {mi + 1}/{models_needed}…"
                             ),
-                            processed_items=idx + 1,
-                            project_id=project_id,
+                            processed=labeled,
+                            model_idx=mi,
+                            model_count=models_needed,
+                            floor=25,
+                            ceiling=88,
                         )
 
                     try:
@@ -1340,6 +1460,21 @@ async def run_auto_label(
                         if image_path is None:
                             continue
                         try:
+                            if _should_emit_model_substep(
+                                idx, progress_step, total, models_needed
+                            ):
+                                await _report_progress(
+                                    idx=idx,
+                                    message=(
+                                        f"Image {idx + 1}/{total} · model "
+                                        f"{mi + 1}/{models_needed} inferencing…"
+                                    ),
+                                    processed=labeled,
+                                    model_idx=mi,
+                                    model_count=models_needed,
+                                    floor=25,
+                                    ceiling=88,
+                                )
                             inference = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     run_yolo_inference,
@@ -1352,7 +1487,9 @@ async def run_auto_label(
                                 timeout=inference_timeout,
                             )
                             per_image_dets[file_id].extend(inference.detections)
-                            per_image_models[file_id][model_id] = len(inference.detections)
+                            per_image_models[file_id][model_id] = len(
+                                inference.detections
+                            )
                         except asyncio.TimeoutError:
                             if file_id not in prep_failures:
                                 prep_failures[file_id] = (
@@ -1363,6 +1500,31 @@ async def run_auto_label(
                         finally:
                             _cleanup_image_path(image_path)
 
+                        if (
+                            file_id not in prep_failures
+                            and len(per_image_models.get(file_id, {})) >= models_needed
+                        ):
+                            if detail:
+                                await _report_progress(
+                                    idx=idx,
+                                    message=(
+                                        f"Saving image {idx + 1}/{total} · "
+                                        f"{models_needed} model(s) merged…"
+                                    ),
+                                    processed=labeled,
+                                    floor=90,
+                                    ceiling=99,
+                                )
+                            if await _save_labeled_image(
+                                file_row=file_row,
+                                file_id=file_id,
+                                combined=per_image_dets.get(file_id, []),
+                                per_model=per_image_models.get(file_id, {}),
+                            ):
+                                saved_ids.add(file_id)
+                                per_image_dets.pop(file_id, None)
+                                per_image_models.pop(file_id, None)
+
                         if gc_every and (idx + 1) % gc_every == 0:
                             gc.collect()
                     except Exception as exc:
@@ -1372,46 +1534,38 @@ async def run_auto_label(
                 await asyncio.to_thread(unload_model, model_path)
                 gc.collect()
 
-        logger.info("Job %s: merging and saving labels for %d images", job_id, total)
-
+        # Save any images that received partial model results (e.g. last model failed).
         for idx, file_row in enumerate(file_list):
             file_id = str(file_row["id"])
-            if file_id in prep_failures:
+            if (
+                file_id in prep_failures
+                or file_id in saved_ids
+                or file_id not in per_image_dets
+            ):
                 continue
 
-            if idx % progress_step == 0 or idx == total - 1:
-                await update_job(
-                    job_id,
-                    progress=_work_progress(idx + 1, total, floor=90, ceiling=99),
-                    progress_message=f"Merging & saving image {idx + 1}/{total}…",
-                    processed_items=idx + 1,
-                    project_id=project_id,
+            if _should_emit_detail(idx, progress_step, total):
+                await _report_progress(
+                    idx=idx,
+                    message=(
+                        f"Saving image {idx + 1}/{total} · "
+                        f"{len(per_image_models.get(file_id, {}))}/{models_needed} "
+                        f"model(s)…"
+                    ),
+                    processed=labeled,
+                    floor=90,
+                    ceiling=99,
                 )
 
-            try:
-                det_count = _persist_image_labels(
-                    project_id=project_id,
-                    dataset_id=dataset_id,
-                    job_id=job_id,
-                    file_row=file_row,
-                    file_id=file_id,
-                    combined=per_image_dets.get(file_id, []),
-                    per_model=per_image_models.get(file_id, {}),
-                    config=config,
-                    low_threshold=low_threshold,
-                    num_models=num_models,
-                )
-                labeled += 1
-                all_results.append(
-                    {
-                        "file_id": file_id,
-                        "detections": det_count,
-                        "per_model": per_image_models.get(file_id, {}),
-                    }
-                )
-            except Exception as exc:
-                failed += 1
-                all_results.append({"file_id": file_id, "error": str(exc)})
+            if await _save_labeled_image(
+                file_row=file_row,
+                file_id=file_id,
+                combined=per_image_dets.get(file_id, []),
+                per_model=per_image_models.get(file_id, {}),
+            ):
+                saved_ids.add(file_id)
+                per_image_dets.pop(file_id, None)
+                per_image_models.pop(file_id, None)
 
     loaded_model_ids = [
         mid for mid in model_ids if mid in model_paths and mid not in model_failures

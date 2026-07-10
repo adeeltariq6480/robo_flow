@@ -12,7 +12,7 @@ interface JobProgressProps {
   onComplete?: (job: JobResponse) => void;
 }
 
-const POLL_MS = 8000;
+const POLL_MS = 3000;
 const MAX_POLL_ERRORS = 15;
 
 /** Parse worker auto-label progress messages. */
@@ -41,6 +41,61 @@ function parseAutoLabelProgress(message: string | undefined) {
       images: Number(perModelLegacy[2]),
       model: Number(perModelLegacy[3]),
       models: Number(perModelLegacy[4]),
+      phase: "labeling" as const,
+    };
+  }
+
+  const downloading = message.match(
+    /Downloading image\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (downloading) {
+    const modelsMatch = message.match(/(\d+)\s*model\(s\)/i);
+    return {
+      image: Number(downloading[1]),
+      images: Number(downloading[2]),
+      model: 0,
+      models: modelsMatch ? Number(modelsMatch[1]) : 1,
+      phase: "downloading" as const,
+    };
+  }
+
+  const inferencing = message.match(
+    /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*model\s+(\d+)\s*\/\s*(\d+)\s+inferencing/i
+  );
+  if (inferencing) {
+    return {
+      image: Number(inferencing[1]),
+      images: Number(inferencing[2]),
+      model: Number(inferencing[3]),
+      models: Number(inferencing[4]),
+      phase: "labeling" as const,
+    };
+  }
+
+  const savingNew = message.match(
+    /Saving image\s+(\d+)\s*\/\s*(\d+)/i
+  );
+  if (savingNew) {
+    const modelsMatch = message.match(/(\d+)\s*model\(s\)/i);
+    return {
+      image: Number(savingNew[1]),
+      images: Number(savingNew[2]),
+      model: modelsMatch ? Number(modelsMatch[1]) : 1,
+      models: modelsMatch ? Number(modelsMatch[1]) : 1,
+      phase: "saving" as const,
+    };
+  }
+
+  const imageDone = message.match(
+    /Image\s+(\d+)\s*\/\s*(\d+)\s+done\s+\((\d+)\/(\d+)\s+saved\)/i
+  );
+  if (imageDone) {
+    return {
+      image: Number(imageDone[3]),
+      images: Number(imageDone[4]),
+      model: 1,
+      models: 1,
+      phase: "labeling" as const,
     };
   }
 
@@ -213,15 +268,21 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
   const barPercent = Math.min(100, job.progress ?? 0);
   const imageTotal = parsed?.images ?? job.total_items ?? 0;
   const imageCurrent =
-    parsed && parsed.image > 0
+    parsed && "phase" in parsed && parsed.phase === "labeling" && parsed.image > 0
       ? parsed.image
-      : job.processed_items > 0
-        ? job.processed_items
-        : 0;
+      : parsed && "phase" in parsed && parsed.phase === "saving" && parsed.image > 0
+        ? parsed.image
+        : job.processed_items > 0
+          ? job.processed_items
+          : parsed && parsed.image > 0
+            ? parsed.image
+            : 0;
   const imageCounter = imageTotal > 0 ? `${imageCurrent}/${imageTotal}` : null;
 
   const statusLabel = parsed
-    ? "phase" in parsed && parsed.phase === "saving"
+    ? "phase" in parsed && parsed.phase === "downloading"
+      ? `Downloading image ${parsed.image}/${parsed.images}…`
+      : "phase" in parsed && parsed.phase === "saving"
       ? `Saving labels ${parsed.image}/${parsed.images}`
       : "phase" in parsed && parsed.phase === "starting"
         ? `Preparing ${parsed.images} image(s)…`
@@ -231,11 +292,15 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
             ? `All ${parsed.models} models ready — starting ${parsed.images} image(s)…`
         : "phase" in parsed && parsed.phase === "refreshing"
           ? `Refreshing model ${parsed.model}/${parsed.models} after image ${parsed.image}/${parsed.images}…`
+        : "phase" in parsed && parsed.phase === "labeling" && parsed.model > 0 && parsed.models > 1
+          ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
         : parsed.models > 1 && parsed.image > 0
           ? `Image ${parsed.image}/${parsed.images} · ${parsed.models} models merged`
           : parsed.models > 1
             ? `Image ${parsed.image}/${parsed.images} · model ${parsed.model}/${parsed.models}`
-            : `Image ${parsed.image}/${parsed.images}`
+            : parsed.image > 0
+              ? `Image ${parsed.image}/${parsed.images}`
+              : job.progress_message || job.status
     : job.progress_message || job.status;
 
   return (
