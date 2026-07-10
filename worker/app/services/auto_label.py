@@ -10,6 +10,7 @@ from app.config import settings
 from app.core.jobs import JobCancelled, is_job_cancelled, raise_if_job_cancelled, update_job
 from app.models.schemas import DetectionBox, JobConfig
 from app.services import hf_storage as file_storage
+from app.services.detection_merge import merge_detections
 from app.services.label_classes import (
     build_model_class_name_map,
     class_maps_for_project,
