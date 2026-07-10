@@ -58,6 +58,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--confidence", type=float, default=0.15)
     parser.add_argument("--iou", type=float, default=0.45)
     parser.add_argument("--relabel", action="store_true")
+    parser.add_argument("--job-id", default=os.getenv("COLAB_JOB_ID", ""))
     parser.add_argument("--hf-token", default=os.getenv("HF_TOKEN", ""))
     parser.add_argument(
         "--supabase-url",
@@ -158,9 +159,10 @@ def _submit_railway_job(args: argparse.Namespace) -> dict:
 
 
 async def _run_colab_session(args: argparse.Namespace) -> str:
-    from app.core.jobs import create_job_record, process_job, register_job_project
-    from app.models.schemas import JobConfig, JobType
+    from app.core.jobs import create_job_record, process_job, register_job_project, update_job
+    from app.models.schemas import JobConfig, JobStatus, JobType
     from app.services.auto_label import get_dataset_label_stats
+    from app.services.supabase_repo import get_labelling_job
 
     model_ids = _model_id_list(args)
     stats = await asyncio.to_thread(
@@ -175,6 +177,14 @@ async def _run_colab_session(args: argparse.Namespace) -> str:
 
     if scope_count == 0:
         print("Nothing to process.")
+        if args.job_id:
+            await update_job(
+                args.job_id,
+                status=JobStatus.FAILED,
+                progress_message="Nothing to process",
+                error_message="No images matched the selected label mode",
+                project_id=args.project_id,
+            )
         return ""
 
     config = JobConfig(
@@ -184,17 +194,35 @@ async def _run_colab_session(args: argparse.Namespace) -> str:
         relabel_all=args.relabel,
     )
 
-    job_id = await create_job_record(
-        args.project_id,
-        JobType.AUTO_LABEL,
-        model_id=model_ids[0],
-        model_ids=model_ids,
-        dataset_id=args.dataset_id,
-        config=config,
-        input_payload={"model_ids": model_ids, "relabel_all": args.relabel},
-        total_items=scope_count,
-    )
-    register_job_project(job_id, args.project_id)
+    job_id = (args.job_id or "").strip()
+    if job_id:
+        existing = await asyncio.to_thread(
+            get_labelling_job, args.project_id, job_id
+        )
+        if not existing:
+            raise RuntimeError(f"Pre-created job not found: {job_id}")
+        register_job_project(job_id, args.project_id)
+        await update_job(
+            job_id,
+            status=JobStatus.QUEUED,
+            progress=0,
+            progress_message="Colab connected — installing and loading models…",
+            total_items=scope_count,
+            project_id=args.project_id,
+        )
+        print(f"Using pre-created job id: {job_id}")
+    else:
+        job_id = await create_job_record(
+            args.project_id,
+            JobType.AUTO_LABEL,
+            model_id=model_ids[0],
+            model_ids=model_ids,
+            dataset_id=args.dataset_id,
+            config=config,
+            input_payload={"model_ids": model_ids, "relabel_all": args.relabel},
+            total_items=scope_count,
+        )
+        register_job_project(job_id, args.project_id)
 
     print()
     print("=" * 60)
@@ -232,6 +260,20 @@ async def _run_with_fallback(args: argparse.Namespace) -> int:
     except Exception as exc:
         print()
         print(f"Colab failed: {exc}")
+        if args.job_id:
+            try:
+                from app.core.jobs import update_job
+                from app.models.schemas import JobStatus
+
+                await update_job(
+                    args.job_id,
+                    status=JobStatus.FAILED,
+                    progress_message="Colab failed",
+                    error_message=str(exc),
+                    project_id=args.project_id,
+                )
+            except Exception:
+                pass
         if args.no_railway_fallback:
             print("Railway fallback disabled (--no-railway-fallback).")
             raise

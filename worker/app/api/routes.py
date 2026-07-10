@@ -1786,7 +1786,10 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
 
 @api_router.post("/colab/launch", response_model=ColabLaunchResponse)
 async def colab_launch(body: ColabLaunchRequest, _: None = Depends(verify_api_key)):
-    """Create a pre-filled Colab notebook URL (IDs + secrets embedded, 15 min link)."""
+    """Create a pre-filled Colab notebook URL and a queued job the app can track immediately."""
+    from app.core.jobs import create_job_record, register_job_project, update_job
+    from app.models.schemas import JobConfig, JobStatus, JobType
+    from app.services.auto_label import get_dataset_label_stats
     from app.services.colab_launch import build_colab_url, sign_launch_token
 
     if not settings.supabase_configured or not settings.hf_configured:
@@ -1795,20 +1798,62 @@ async def colab_launch(body: ColabLaunchRequest, _: None = Depends(verify_api_ke
             detail="Worker missing Supabase or Hugging Face config for Colab launch",
         )
 
+    model_ids = [str(m).strip() for m in body.model_ids if str(m).strip()]
+    stats = await asyncio.to_thread(
+        get_dataset_label_stats, body.project_id, body.dataset_id
+    )
+    scope_count = stats["already_labeled"] if body.relabel_all else stats["unlabeled"]
+    if scope_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No images to label for this dataset. Upload images or enable Relabel.",
+        )
+
+    config = JobConfig(
+        confidence=body.confidence,
+        iou=body.iou,
+        save_to_dataset=True,
+        relabel_all=body.relabel_all,
+    )
+    job_id = await create_job_record(
+        body.project_id,
+        JobType.AUTO_LABEL,
+        model_id=model_ids[0],
+        model_ids=model_ids,
+        dataset_id=body.dataset_id,
+        config=config,
+        input_payload={
+            "model_ids": model_ids,
+            "relabel_all": body.relabel_all,
+            "source": "colab",
+        },
+        total_items=scope_count,
+    )
+    register_job_project(job_id, body.project_id)
+    await update_job(
+        job_id,
+        status=JobStatus.QUEUED,
+        progress=0,
+        progress_message="Waiting for Google Colab — open Colab and click Run all",
+        project_id=body.project_id,
+    )
+
     token = sign_launch_token(
         {
             "project_id": body.project_id,
             "dataset_id": body.dataset_id,
-            "model_ids": body.model_ids,
+            "model_ids": model_ids,
             "confidence": body.confidence,
             "iou": body.iou,
             "relabel_all": body.relabel_all,
+            "job_id": job_id,
         }
     )
     return ColabLaunchResponse(
         colab_url=build_colab_url(token),
+        job_id=job_id,
         expires_in_minutes=15,
-        message="Colab will open with everything pre-filled — click Run all",
+        message="Colab opened — click Run all. Progress appears in the app immediately.",
     )
 
 

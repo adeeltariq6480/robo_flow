@@ -98,6 +98,7 @@ class ColabLaunchRequest(BaseModel):
 
 class ColabLaunchResponse(BaseModel):
     colab_url: str
+    job_id: str | None = None
     expires_in_minutes: int = 15
     message: str = "Notebook opened in Colab — use Run all"
 

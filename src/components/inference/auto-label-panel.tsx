@@ -251,10 +251,25 @@ export function AutoLabelPanel({
       return;
     }
     window.open(result.colabUrl, "_blank", "noopener,noreferrer");
-    setColabWatching(true);
-    setColabWatchMessage(
-      "Colab opened. Click Runtime → Run all, then return here — progress will appear automatically."
-    );
+    if (result.jobId) {
+      setJobId(result.jobId);
+      setCompletedJob(null);
+      setColabWatching(false);
+      setColabWatchMessage(
+        "Job started — waiting for Colab (Run all). Progress updates below."
+      );
+      writeActiveInferenceJob({
+        projectId,
+        datasetId,
+        jobId: result.jobId,
+        jobType: "auto_label",
+      });
+    } else {
+      setColabWatching(true);
+      setColabWatchMessage(
+        "Colab opened. Click Runtime → Run all, then return here — progress will appear automatically."
+      );
+    }
     setColabLoading(false);
   }
 
@@ -562,11 +577,11 @@ export function AutoLabelPanel({
         </div>
 
         <p className="text-xs text-slate-500">
-          <strong>Open in Colab</strong> — Runtime → <strong>Run all</strong> in Colab, then keep
-          this page open. Progress appears here when labeling starts (after install, ~2–5 min).
+          <strong>Open in Colab</strong> — progress appears on this page as soon as you click the
+          button. Then in Colab: Runtime → <strong>Run all</strong>.
         </p>
 
-        {colabWatching && colabWatchMessage && (
+        {(colabWatching || (jobId && !completedJob)) && colabWatchMessage && (
           <Alert variant="info">{colabWatchMessage}</Alert>
         )}
 

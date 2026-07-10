@@ -97,14 +97,13 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
     project_id = str(payload["project_id"])
     dataset_id = str(payload["dataset_id"])
     model_ids = ",".join(str(m) for m in payload.get("model_ids") or [])
+    job_id = str(payload.get("job_id") or "")
     confidence = float(payload.get("confidence") or 0.15)
     iou = float(payload.get("iou") or 0.45)
     relabel = bool(payload.get("relabel_all"))
-    relabel_flag = "--relabel" if relabel else ""
     repo_url = github_repo_url()
     railway_url = public_worker_url()
     worker_key = os.getenv("WORKER_API_KEY", "").strip()
-    key_flag = f'--worker-api-key "{worker_key}"' if worker_key else ""
 
     setup_source = [
         "import os, subprocess, sys\n",
@@ -122,12 +121,15 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
         f'PROJECT_ID = {json.dumps(project_id)}\n',
         f'DATASET_ID = {json.dumps(dataset_id)}\n',
         f'MODEL_IDS = {json.dumps(model_ids)}\n',
+        f"JOB_ID = {json.dumps(job_id)}\n",
         f"CONFIDENCE = {confidence}\n",
         f"IOU = {iou}\n",
         f"REPO_URL = {json.dumps(repo_url)}\n",
         f"RAILWAY_URL = {json.dumps(railway_url)}\n",
         'print("Config loaded for project:", PROJECT_ID)\n',
         'print("Dataset:", DATASET_ID, "| Models:", MODEL_IDS)\n',
+        'if JOB_ID:\n',
+        '    print("Job id (track in app):", JOB_ID)\n',
     ]
 
     install_source = [
@@ -145,17 +147,26 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
         "print('=' * 60)\n",
         "print('STEP 2/2: Starting auto-label. Watch your Vercel app for progress.')\n",
         "print('=' * 60)\n",
-        f'relabel_flag = "{relabel_flag}"\n',
-        f'key_flag = "{key_flag}"\n',
-        "!python scripts/colab_auto_label.py \\\n",
-        "  --project-id {PROJECT_ID} \\\n",
-        "  --dataset-id {DATASET_ID} \\\n",
-        "  --model-ids {MODEL_IDS} \\\n",
-        "  --confidence {CONFIDENCE} \\\n",
-        "  --iou {IOU} \\\n",
-        "  --railway-url {RAILWAY_URL} \\\n",
-        "  {key_flag} \\\n",
-        "  {relabel_flag}\n",
+        "cmd = [\n",
+        "    sys.executable,\n",
+        "    'scripts/colab_auto_label.py',\n",
+        "    '--project-id', PROJECT_ID,\n",
+        "    '--dataset-id', DATASET_ID,\n",
+        "    '--model-ids', MODEL_IDS,\n",
+        "    '--confidence', str(CONFIDENCE),\n",
+        "    '--iou', str(IOU),\n",
+        "    '--railway-url', RAILWAY_URL,\n",
+        "]\n",
+        "if JOB_ID:\n",
+        "    cmd.extend(['--job-id', JOB_ID])\n",
+        f"if {json.dumps(relabel)}:\n",
+        "    cmd.append('--relabel')\n",
+        "if os.environ.get('WORKER_API_KEY'):\n",
+        "    cmd.extend(['--worker-api-key', os.environ['WORKER_API_KEY']])\n",
+        "print('Running:', ' '.join(cmd))\n",
+        "result = subprocess.run(cmd, check=False)\n",
+        "if result.returncode != 0:\n",
+        "    raise SystemExit(result.returncode)\n",
     ]
 
     cells = [
