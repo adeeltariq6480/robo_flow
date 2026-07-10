@@ -32,6 +32,19 @@ function parseAutoLabelProgress(message: string | undefined) {
     };
   }
 
+  const labelingMerged = message.match(
+    /Labeling image\s+(\d+)\s*\/\s*(\d+)\s*·\s*all\s+(\d+)\s*model\(s\)\s*merged/i
+  );
+  if (labelingMerged) {
+    return {
+      image: Number(labelingMerged[1]),
+      images: Number(labelingMerged[2]),
+      model: Number(labelingMerged[3]),
+      models: Number(labelingMerged[3]),
+      phase: "labeling" as const,
+    };
+  }
+
   const perModelLegacy = message.match(
     /Image\s+(\d+)\s*\/\s*(\d+)\s*·\s*model\s+(\d+)\s*\/\s*(\d+)/i
   );
@@ -100,7 +113,7 @@ function parseAutoLabelProgress(message: string | undefined) {
   }
 
   const modelsReady = message.match(
-    /All\s+(\d+)\s+models ready — starting labels on\s+(\d+)\s+image/i
+    /All\s+(\d+)\s+models?\s+merged(?:\s+in memory)?\s*—\s*starting labels on\s+(\d+)\s+image/i
   );
   if (modelsReady) {
     return {
@@ -112,13 +125,15 @@ function parseAutoLabelProgress(message: string | undefined) {
     };
   }
 
-  const loadingModel = message.match(/Loading model\s+(\d+)\s*\/\s*(\d+)\s+into memory/i);
-  if (loadingModel) {
+  const preparingModel = message.match(
+    /Preparing model\s+(\d+)\s*\/\s*(\d+)\s+for merge/i
+  );
+  if (preparingModel) {
     return {
       image: 0,
       images: 0,
-      model: Number(loadingModel[1]),
-      models: Number(loadingModel[2]),
+      model: Number(preparingModel[1]),
+      models: Number(preparingModel[2]),
       phase: "loading_models" as const,
     };
   }
@@ -289,7 +304,7 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
         : "phase" in parsed && parsed.phase === "loading_models"
           ? `Loading models ${parsed.model}/${parsed.models}…`
           : "phase" in parsed && parsed.phase === "models_ready"
-            ? `All ${parsed.models} models ready — starting ${parsed.images} image(s)…`
+            ? `All ${parsed.models} models merged — starting ${parsed.images} image(s)…`
         : "phase" in parsed && parsed.phase === "refreshing"
           ? `Refreshing model ${parsed.model}/${parsed.models} after image ${parsed.image}/${parsed.images}…`
         : "phase" in parsed && parsed.phase === "labeling" && parsed.model > 0 && parsed.models > 1
