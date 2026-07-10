@@ -119,15 +119,45 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("UPLOAD_REJECT_BLURRY"),
     )
-    upload_blur_threshold: float = Field(
-        default=100.0,
-        validation_alias=AliasChoices("UPLOAD_BLUR_THRESHOLD"),
-        description="Laplacian variance minimum; lower = more rejections",
+    upload_blur_lap_min: float = Field(
+        default=40.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_LAP_MIN"),
+        description="Hard reject when Laplacian variance is below this",
     )
-    upload_blur_sobel_threshold: float = Field(
+    upload_blur_sobel_min: float = Field(
+        default=6.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_SOBEL_MIN"),
+        description="Hard reject when mean Sobel gradient is below this",
+    )
+    upload_blur_motion_lap_min: float = Field(
+        default=100.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_MOTION_LAP_MIN"),
+        description="Motion-blur check only runs when Laplacian is at or above this",
+    )
+    upload_blur_motion_lap_max: float = Field(
+        default=500.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_MOTION_LAP_MAX"),
+        description="Motion-blur check only runs when Laplacian is at or below this",
+    )
+    upload_blur_motion_sobel_cap: float = Field(
         default=22.0,
-        validation_alias=AliasChoices("UPLOAD_BLUR_SOBEL_THRESHOLD"),
-        description="Mean Sobel gradient minimum — catches motion blur Laplacian misses",
+        validation_alias=AliasChoices("UPLOAD_BLUR_MOTION_SOBEL_CAP"),
+        description="Motion-blur check only runs when Sobel is below this",
+    )
+    upload_blur_motion_sqrt_ratio: float = Field(
+        default=1.2,
+        validation_alias=AliasChoices("UPLOAD_BLUR_MOTION_SQRT_RATIO"),
+        description="Reject motion smear when sobel/sqrt(laplacian) is below this",
+    )
+    upload_blur_soft_lap_max: float = Field(
+        default=70.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_SOFT_LAP_MAX"),
+        description="Soft blur pair: reject when lap below this AND sobel below soft sobel max",
+    )
+    upload_blur_soft_sobel_max: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_SOFT_SOBEL_MAX"),
+        description="Soft blur pair: reject when sobel below this AND lap below soft lap max",
     )
 
     upload_blur_max_side: int = Field(
@@ -195,15 +225,40 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTO_LABEL_REJECT_BLURRY"),
         description="Skip blurry images during auto-label (same sharpness test as upload)",
     )
-    auto_label_blur_threshold: float = Field(
-        default=100.0,
-        validation_alias=AliasChoices("AUTO_LABEL_BLUR_THRESHOLD"),
-        description="Laplacian variance minimum for auto-label; raise to reject more soft images",
+    auto_label_blur_lap_min: float = Field(
+        default=40.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_LAP_MIN"),
+        description="Hard reject when Laplacian variance is below this",
     )
-    auto_label_blur_sobel_threshold: float = Field(
-        default=22.0,
-        validation_alias=AliasChoices("AUTO_LABEL_BLUR_SOBEL_THRESHOLD"),
-        description="Mean Sobel gradient minimum for auto-label blur gate",
+    auto_label_blur_sobel_min: float = Field(
+        default=6.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_SOBEL_MIN"),
+        description="Hard reject when mean Sobel gradient is below this",
+    )
+    auto_label_blur_motion_lap_min: float = Field(
+        default=100.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_MOTION_LAP_MIN"),
+    )
+    auto_label_blur_motion_lap_max: float = Field(
+        default=500.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_MOTION_LAP_MAX"),
+    )
+    auto_label_blur_motion_sobel_cap: float = Field(
+        default=21.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_MOTION_SOBEL_CAP"),
+    )
+    auto_label_blur_motion_sqrt_ratio: float = Field(
+        default=1.15,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_MOTION_SQRT_RATIO"),
+        description="Slightly stricter motion-blur check than upload",
+    )
+    auto_label_blur_soft_lap_max: float = Field(
+        default=70.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_SOFT_LAP_MAX"),
+    )
+    auto_label_blur_soft_sobel_max: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_SOFT_SOBEL_MAX"),
     )
     hf_hub_disable_xet: bool = Field(
         default=True,

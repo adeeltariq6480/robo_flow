@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import gc
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,18 +57,55 @@ class BlurMetrics:
     laplacian: float
     sobel_mean: float
 
+    def _sobel_per_sqrt_lap(self) -> float:
+        return self.sobel_mean / math.sqrt(max(self.laplacian, 1.0))
+
+    def is_too_blurry(self, *, for_auto_label: bool = False) -> bool:
+        """
+        Reject only clearly bad images — not every fridge-through-glass photo.
+
+        Old rule required lap>=100 AND sobel>=22, which skipped almost all shelf
+        photos (sobel often 14–20 even when usable).
+        """
+        if for_auto_label:
+            lap_min = settings.auto_label_blur_lap_min
+            sobel_min = settings.auto_label_blur_sobel_min
+            motion_lap = settings.auto_label_blur_motion_lap_min
+            motion_lap_max = settings.auto_label_blur_motion_lap_max
+            motion_sobel_cap = settings.auto_label_blur_motion_sobel_cap
+            motion_sqrt_ratio = settings.auto_label_blur_motion_sqrt_ratio
+            soft_lap = settings.auto_label_blur_soft_lap_max
+            soft_sobel = settings.auto_label_blur_soft_sobel_max
+        else:
+            lap_min = settings.upload_blur_lap_min
+            sobel_min = settings.upload_blur_sobel_min
+            motion_lap = settings.upload_blur_motion_lap_min
+            motion_lap_max = settings.upload_blur_motion_lap_max
+            motion_sobel_cap = settings.upload_blur_motion_sobel_cap
+            motion_sqrt_ratio = settings.upload_blur_motion_sqrt_ratio
+            soft_lap = settings.upload_blur_soft_lap_max
+            soft_sobel = settings.upload_blur_soft_sobel_max
+
+        if self.laplacian < lap_min:
+            return True
+        if self.sobel_mean < sobel_min:
+            return True
+        if (
+            motion_lap <= self.laplacian <= motion_lap_max
+            and self.sobel_mean < motion_sobel_cap
+            and self._sobel_per_sqrt_lap() < motion_sqrt_ratio
+        ):
+            return True
+        if self.laplacian < soft_lap and self.sobel_mean < soft_sobel:
+            return True
+        return False
+
     @property
     def is_sharp(self) -> bool:
-        return (
-            self.laplacian >= settings.upload_blur_threshold
-            and self.sobel_mean >= settings.upload_blur_sobel_threshold
-        )
+        return not self.is_too_blurry(for_auto_label=False)
 
     def is_sharp_for_auto_label(self) -> bool:
-        return (
-            self.laplacian >= settings.auto_label_blur_threshold
-            and self.sobel_mean >= settings.auto_label_blur_sobel_threshold
-        )
+        return not self.is_too_blurry(for_auto_label=True)
 
 
 def _gray_for_blur(img: Image.Image) -> Image.Image:
@@ -112,12 +150,12 @@ def is_image_too_blurry(
     for_auto_label: bool = False,
     threshold: float | None = None,
 ) -> tuple[bool, BlurMetrics]:
-    """Return (too_blurry, metrics). Rejects when laplacian OR sobel is too low."""
+    """Return (too_blurry, metrics). Uses composite blur rules, not a flat sobel floor."""
     metrics = blur_metrics_for_path(path)
-    if for_auto_label or settings.auto_label_reject_blurry:
-        too_blurry = not metrics.is_sharp_for_auto_label()
+    if for_auto_label:
+        too_blurry = metrics.is_too_blurry(for_auto_label=True)
     else:
-        too_blurry = not metrics.is_sharp()
+        too_blurry = metrics.is_too_blurry(for_auto_label=False)
     if threshold is not None:
         too_blurry = metrics.laplacian < threshold
     return too_blurry, metrics
@@ -155,14 +193,13 @@ def preprocess_upload_image(data: bytes, file_name: str) -> PreprocessResult:
 
             if settings.upload_reject_blurry:
                 metrics = blur_metrics_for_image(img)
-                if not metrics.is_sharp():
+                if metrics.is_too_blurry(for_auto_label=False):
                     logger.info(
-                        "Skipping blurry upload %s (laplacian=%.2f < %.2f or sobel=%.2f < %.2f)",
+                        "Skipping blurry upload %s (lap=%.2f sobel=%.2f sqrt_ratio=%.3f)",
                         file_name,
                         metrics.laplacian,
-                        settings.upload_blur_threshold,
                         metrics.sobel_mean,
-                        settings.upload_blur_sobel_threshold,
+                        metrics._sobel_per_sqrt_lap(),
                     )
                     return PreprocessResult(
                         accepted=False,

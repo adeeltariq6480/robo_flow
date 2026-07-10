@@ -722,7 +722,7 @@ export function DatasetUploadForm({
       <Card>
         <CardHeader
           title={`Upload to ${datasetName}`}
-          description="Images are auto-rotated to portrait when needed. Blurry photos are skipped. Progress survives page reload."
+          description="Images are auto-rotated to portrait when needed. Only heavily blurred or motion-blurred photos are skipped. Progress survives page reload."
         />
 
         {classes.length > 0 && (
