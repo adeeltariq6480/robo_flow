@@ -30,6 +30,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
     const skippedNotEligible = (result.skipped_not_eligible as number) ?? 0;
     const skippedNotRemoteReady = (result.skipped_not_remote_ready as number) ?? 0;
     const skippedAlreadyLabeled = (result.skipped_already_labeled as number) ?? 0;
+    const skippedBlurry = (result.skipped_blurry as number) ?? 0;
     const relabelAll = (result.relabel_all as boolean) ?? false;
     const modelsUsed = (result.models_loaded as number) ?? (result.models_used as number) ?? 1;
     const modelsSelected = (result.models_selected as number) ?? modelsUsed;
@@ -47,6 +48,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         : failed > 0 ||
             skippedNotEligible > 0 ||
             skippedNotRemoteReady > 0 ||
+            skippedBlurry > 0 ||
             modelsFailed > 0
           ? "warning"
           : "success";
@@ -104,6 +106,12 @@ export function DetectionResults({ job }: { job: JobResponse }) {
             {skippedNotEligible > 0 && (
               <li>
                 {skippedNotEligible} missing — record in DB but file not found on HF/disk
+              </li>
+            )}
+            {skippedBlurry > 0 && (
+              <li>
+                {skippedBlurry} skipped — too blurry for labeling (only sharp images are
+                processed)
               </li>
             )}
           </ul>

@@ -11,6 +11,7 @@ from app.core.jobs import JobCancelled, is_job_cancelled, raise_if_job_cancelled
 from app.models.schemas import DetectionBox, JobConfig
 from app.services import hf_storage as file_storage
 from app.services.detection_merge import merge_detections
+from app.services.image_preprocess import is_image_too_blurry
 from app.services.label_classes import (
     build_model_class_name_map,
     class_maps_for_project,
@@ -267,6 +268,7 @@ def _compact_job_result(
     skipped_not_eligible: int = 0,
     skipped_not_remote_ready: int = 0,
     skipped_already_labeled: int = 0,
+    skipped_blurry: int = 0,
     relabel_all: bool = False,
 ) -> dict:
     error_rows = [r for r in all_results if r.get("error")]
@@ -298,6 +300,8 @@ def _compact_job_result(
         result["skipped_not_remote_ready"] = skipped_not_remote_ready
     if skipped_already_labeled:
         result["skipped_already_labeled"] = skipped_already_labeled
+    if skipped_blurry:
+        result["skipped_blurry"] = skipped_blurry
     if relabel_all:
         result["relabel_all"] = True
     if model_failures:
@@ -991,6 +995,7 @@ async def run_auto_label(
     # push small Railway containers into OOM when model runtimes are also loaded.
     prep_failures: dict[str, str] = {}
     model_failures: dict[str, str] = {}
+    skipped_blurry = 0
     file_by_id: dict[str, dict] = {str(f["id"]): f for f in file_list}
 
     def _work_progress(done: int, total_work: int, *, floor: int = 5, ceiling: int = 99) -> int:
@@ -1081,6 +1086,7 @@ async def run_auto_label(
             logger.debug("Failed to delete temporary auto-label image %s", path)
 
     async def prepare_image(file_id: str) -> Path | None:
+        nonlocal skipped_blurry
         if file_id in prep_failures:
             return None
         row = file_by_id.get(file_id)
@@ -1091,7 +1097,7 @@ async def run_auto_label(
             prep_failures[file_id] = "Not an image file"
             return None
         try:
-            return await asyncio.wait_for(
+            local_path = await asyncio.wait_for(
                 asyncio.to_thread(download_image_row, row, file_id),
                 timeout=IMAGE_PREP_TIMEOUT_SECONDS,
             )
@@ -1120,6 +1126,31 @@ async def run_auto_label(
                 )
             prep_failures[file_id] = str(exc)
             return None
+
+        if settings.auto_label_reject_blurry:
+            try:
+                too_blurry, metrics = await asyncio.to_thread(
+                    is_image_too_blurry, local_path, for_auto_label=True
+                )
+            except Exception as exc:
+                logger.warning("Blur check failed for %s: %s", file_id, exc)
+                too_blurry, metrics = False, None
+            if too_blurry and metrics is not None:
+                skipped_blurry += 1
+                prep_failures[file_id] = (
+                    f"Image too blurry (laplacian {metrics.laplacian:.1f}, "
+                    f"sobel {metrics.sobel_mean:.1f})"
+                )
+                logger.info(
+                    "Skipping blurry image %s lap=%.2f sobel=%.2f",
+                    file_id,
+                    metrics.laplacian,
+                    metrics.sobel_mean,
+                )
+                _cleanup_image_path(local_path)
+                return None
+
+        return local_path
 
     cancelled_requested = False
     progress_items = 0
@@ -1565,5 +1596,6 @@ async def run_auto_label(
         skipped_not_eligible=skipped_not_eligible,
         skipped_not_remote_ready=skipped_not_remote_ready,
         skipped_already_labeled=skipped_already_labeled,
+        skipped_blurry=skipped_blurry,
         relabel_all=relabel_all,
     )

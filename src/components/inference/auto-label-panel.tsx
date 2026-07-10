@@ -471,8 +471,8 @@ export function AutoLabelPanel({
         )}
 
         <p className="text-xs text-amber-800">
-          For tilted or angled shelf photos, keep confidence around 0.10–0.20. The worker also
-          applies EXIF and portrait correction during inference.
+          For tilted or angled shelf photos, keep confidence around 0.10–0.20. Blurry or
+          motion-blurred images are skipped automatically — only sharp photos are labeled.
         </p>
 
         <div className="flex flex-wrap gap-2">

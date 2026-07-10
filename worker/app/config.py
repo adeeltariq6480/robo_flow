@@ -120,9 +120,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("UPLOAD_REJECT_BLURRY"),
     )
     upload_blur_threshold: float = Field(
-        default=80.0,
+        default=100.0,
         validation_alias=AliasChoices("UPLOAD_BLUR_THRESHOLD"),
         description="Laplacian variance minimum; lower = more rejections",
+    )
+    upload_blur_sobel_threshold: float = Field(
+        default=22.0,
+        validation_alias=AliasChoices("UPLOAD_BLUR_SOBEL_THRESHOLD"),
+        description="Mean Sobel gradient minimum — catches motion blur Laplacian misses",
     )
 
     upload_blur_max_side: int = Field(
@@ -184,6 +189,21 @@ class Settings(BaseSettings):
     auto_label_quality_yolo_imgsz: int = Field(
         default=640,
         validation_alias=AliasChoices("AUTO_LABEL_QUALITY_YOLO_IMGSZ"),
+    )
+    auto_label_reject_blurry: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AUTO_LABEL_REJECT_BLURRY"),
+        description="Skip blurry images during auto-label (same sharpness test as upload)",
+    )
+    auto_label_blur_threshold: float = Field(
+        default=100.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_THRESHOLD"),
+        description="Laplacian variance minimum for auto-label; raise to reject more soft images",
+    )
+    auto_label_blur_sobel_threshold: float = Field(
+        default=22.0,
+        validation_alias=AliasChoices("AUTO_LABEL_BLUR_SOBEL_THRESHOLD"),
+        description="Mean Sobel gradient minimum for auto-label blur gate",
     )
     hf_hub_disable_xet: bool = Field(
         default=True,
