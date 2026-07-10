@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { openColabLaunch } from "@/lib/actions/colab";
 import {
   cancelInferenceJob,
+  fetchActiveDatasetJob,
   fetchDatasetLabelStats,
   fetchModelsAvailability,
   resumeInferenceJob,
@@ -75,6 +76,8 @@ export function AutoLabelPanel({
   const [labelStats, setLabelStats] = useState<DatasetLabelStats | null>(null);
   const [labelStatsLoading, setLabelStatsLoading] = useState(false);
   const [colabLoading, setColabLoading] = useState(false);
+  const [colabWatching, setColabWatching] = useState(false);
+  const [colabWatchMessage, setColabWatchMessage] = useState<string | null>(null);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
@@ -177,6 +180,56 @@ export function AutoLabelPanel({
     setCompletedJob(null);
   }, [projectId, datasets]);
 
+  useEffect(() => {
+    if (!colabWatching || !datasetId || jobId) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 150;
+
+    setColabWatchMessage(
+      "Colab is installing packages (2–5 min). Progress appears here when labeling starts — keep this page open."
+    );
+
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      const result = await fetchActiveDatasetJob(projectId, datasetId);
+      if (cancelled) return;
+
+      if (!("error" in result)) {
+        setJobId(result.id);
+        setCompletedJob(null);
+        setColabWatching(false);
+        setColabWatchMessage(null);
+        writeActiveInferenceJob({
+          projectId,
+          datasetId,
+          jobId: result.id,
+          jobType: "auto_label",
+        });
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        setColabWatching(false);
+        setColabWatchMessage(null);
+        setError(
+          "Colab job not detected yet. In Colab check cell output for errors, or use Label on Railway."
+        );
+        return;
+      }
+
+      window.setTimeout(tick, 4000);
+    };
+
+    void tick();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [colabWatching, datasetId, jobId, projectId]);
+
   async function handleOpenColab() {
     if (!datasetId || selectedModelIds.length === 0) {
       setError("Select at least one model and a dataset");
@@ -198,6 +251,10 @@ export function AutoLabelPanel({
       return;
     }
     window.open(result.colabUrl, "_blank", "noopener,noreferrer");
+    setColabWatching(true);
+    setColabWatchMessage(
+      "Colab opened. Click Runtime → Run all, then return here — progress will appear automatically."
+    );
     setColabLoading(false);
   }
 
@@ -505,9 +562,13 @@ export function AutoLabelPanel({
         </div>
 
         <p className="text-xs text-slate-500">
-          <strong>Open in Colab</strong> — everything pre-filled; in Colab click{" "}
-          <strong>Runtime → Run all</strong>. Falls back to Railway if Colab fails.
+          <strong>Open in Colab</strong> — Runtime → <strong>Run all</strong> in Colab, then keep
+          this page open. Progress appears here when labeling starts (after install, ~2–5 min).
         </p>
+
+        {colabWatching && colabWatchMessage && (
+          <Alert variant="info">{colabWatchMessage}</Alert>
+        )}
 
         <div className="flex flex-wrap gap-2">
           {isRunning && (

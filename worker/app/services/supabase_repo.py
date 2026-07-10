@@ -1020,6 +1020,34 @@ def get_labelling_job(project_id: str, job_id: str) -> dict | None:
     return _job_row(rows[0]) if rows else None
 
 
+def find_active_labelling_job(
+    project_id: str,
+    dataset_id: str,
+    *,
+    job_type: str = "auto_label",
+    max_age_minutes: int = 180,
+) -> dict | None:
+    """Most recent queued/running job for a dataset (Colab + Railway)."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
+    res = (
+        _sb()
+        .table("labelling_jobs")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("dataset_id", dataset_id)
+        .eq("job_type", job_type)
+        .in_("status", ["queued", "running"])
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    return _job_row(rows[0]) if rows else None
+
+
 def create_labelling_job(
     project_id: str,
     *,

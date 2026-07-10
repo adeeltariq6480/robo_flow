@@ -131,14 +131,20 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
     ]
 
     install_source = [
+        "print('=' * 60)\n",
+        "print('STEP 1/2: Installing packages (2–5 minutes). Please wait…')\n",
+        "print('=' * 60)\n",
         f"!git clone {json.dumps(repo_url)} robo_flow 2>/dev/null || (cd robo_flow && git pull)\n",
         "%cd robo_flow/worker\n",
         "!pip install -q -r requirements.txt\n",
-        "print('Ready. GPU:', end=' ')\n",
-        "!nvidia-smi -L 2>/dev/null || print('CPU only — set Runtime → T4 GPU')\n",
+        "print('Install done. GPU:', end=' ')\n",
+        "!nvidia-smi -L 2>/dev/null || print('CPU only — set Runtime → Change runtime type → T4 GPU')\n",
     ]
 
     run_source = [
+        "print('=' * 60)\n",
+        "print('STEP 2/2: Starting auto-label. Watch your Vercel app for progress.')\n",
+        "print('=' * 60)\n",
         f'relabel_flag = "{relabel_flag}"\n',
         f'key_flag = "{key_flag}"\n',
         "!python scripts/colab_auto_label.py \\\n",

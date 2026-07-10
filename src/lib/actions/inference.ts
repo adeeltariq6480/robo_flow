@@ -8,6 +8,7 @@ import {
   cancelJob,
   resumeJob,
   getDatasetLabelStats,
+  getActiveDatasetJob,
   type JobConfig,
   type DatasetLabelStats,
 } from "@/lib/worker/client";
@@ -50,6 +51,14 @@ export async function fetchDatasetLabelStats(
 ): Promise<DatasetLabelStats | { error: string }> {
   try {
     return await getDatasetLabelStats(projectId, datasetId);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Worker unavailable" };
+  }
+}
+
+export async function fetchActiveDatasetJob(projectId: string, datasetId: string) {
+  try {
+    return await getActiveDatasetJob(projectId, datasetId);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Worker unavailable" };
   }

@@ -169,6 +169,12 @@ export async function getDatasetLabelStats(projectId: string, datasetId: string)
   );
 }
 
+export async function getActiveDatasetJob(projectId: string, datasetId: string) {
+  return workerFetch<JobResponse>(
+    `/api/datasets/${projectId}/${datasetId}/active-job?job_type=auto_label`
+  );
+}
+
 export async function createColabLaunch(body: {
   project_id: string;
   dataset_id: string;

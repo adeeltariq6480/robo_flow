@@ -1843,6 +1843,25 @@ async def dataset_label_stats(project_id: str, dataset_id: str, _: None = Depend
     return stats
 
 
+@api_router.get("/datasets/{project_id}/{dataset_id}/active-job", response_model=JobResponse)
+async def dataset_active_job(
+    project_id: str,
+    dataset_id: str,
+    job_type: str = "auto_label",
+    _: None = Depends(verify_api_key),
+):
+    """Return the current queued/running job for this dataset (Colab or Railway)."""
+    d = await db(
+        repo.find_active_labelling_job,
+        project_id,
+        dataset_id,
+        job_type=job_type,
+    )
+    if not d:
+        raise HTTPException(status_code=404, detail="No active job for this dataset")
+    return _job_to_response(project_id, str(d["id"]), d)
+
+
 @api_router.get("/datasets/{project_id}/{dataset_id}/sync-preview")
 async def dataset_sync_preview(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
     cache_key = f"{project_id}:{dataset_id}"
