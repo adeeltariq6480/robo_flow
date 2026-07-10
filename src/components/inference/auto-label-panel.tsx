@@ -192,7 +192,7 @@ export function AutoLabelPanel({
       iou,
       relabelAll,
     });
-    if ("error" in result && result.error) {
+    if ("error" in result) {
       setError(result.error);
       setColabLoading(false);
       return;
