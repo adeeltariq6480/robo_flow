@@ -84,7 +84,7 @@ export function ModelMultiSelect({
                 missing
                   ? missingReason
                   : legacy
-                    ? "Purana/custom YOLO — Railway par fail ho sakta hai. YOLOv8/v11 use karein."
+                    ? "Legacy/custom YOLO — may fail on Railway. Prefer YOLOv8/v11."
                     : compatible
                       ? "YOLOv8/v11 — recommended for auto-label"
                       : undefined
@@ -119,9 +119,9 @@ export function ModelMultiSelect({
 
       {unavailable.size > 0 && (
         <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-          {unavailable.size} model{unavailable.size !== 1 ? "s" : ""} ki weight file missing hai
-          (HF/disk par nahi mili). Models page se dubara upload karein — tab tak select nahi ho
-          sakte.
+          {unavailable.size} model{unavailable.size !== 1 ? "s" : ""} missing weight files
+          (not found on HF/disk). Re-upload from the Models page — they cannot be selected until
+          then.
         </p>
       )}
 
@@ -130,22 +130,21 @@ export function ModelMultiSelect({
         return m && isLikelyLegacyModelName(m.name);
       }) && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Kuch purane models (YOLOv5/v7) Railway par slow ya heavy ho sakte hain. Worker
-          universal loader se try karega — best results ke liye YOLOv8/v11 .pt ya ONNX prefer
-          karein.
+          Some legacy models (YOLOv5/v7) can be slow or heavy on Railway. The worker will try the
+          universal loader — for best results prefer YOLOv8/v11 .pt or ONNX.
         </p>
       )}
 
       {selectedIds.length === 1 && models.length > 1 && (
         <p className="rounded-md border border-brand-100 bg-brand-50/60 px-3 py-2 text-xs text-brand-800">
-          Tip: aur models bhi select kar sakte ho — har image par sab models chalenge aur
-          overlapping boxes merge ho jayengi.
+          Tip: you can select more models — every model runs on each image and overlapping boxes
+          are merged.
         </p>
       )}
 
       <p className="text-xs text-slate-500">
-        Har image par sab models merge ho kar <strong>ek label</strong> banegi — alag model
-        passes nahi ({`max ${maxSelected} models`}).
+        All models merge into <strong>one label</strong> per image — not separate passes (
+        {`max ${maxSelected} models`}).
       </p>
     </div>
   );

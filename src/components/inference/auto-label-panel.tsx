@@ -265,7 +265,7 @@ export function AutoLabelPanel({
         title={lockDataset ? "Label all images with model(s)" : "Auto-label dataset"}
         description={
           lockDataset
-            ? "Select models — har image par sab merge ho kar ek label save hogi."
+            ? "Select models — all models merge into one label per image."
             : "Run YOLO on every image; multiple models merge into one label per image."
         }
       />
@@ -312,27 +312,27 @@ export function AutoLabelPanel({
             {relabelAll ? (
               <>
                 <strong>{selectedDataset.file_count}</strong> image
-                {selectedDataset.file_count !== 1 ? "s" : ""} (sab, including pehle labeled /
+                {selectedDataset.file_count !== 1 ? "s" : ""} (all, including previously labeled /
                 empty detections)
               </>
             ) : (
               <>
-                unlabeled + empty detections only (pehle labeled skip) — dataset mein{" "}
-                <strong>{selectedDataset.file_count}</strong> total
+                unlabeled + empty detections only (already labeled skipped) —{" "}
+                <strong>{selectedDataset.file_count}</strong> total in dataset
               </>
             )}{" "}
             in &quot;{selectedDataset.name}&quot;
             {selectedModelIds.length > 1 && (
               <span className="block text-emerald-700">
-                Pehle saare {selectedModelIds.length} models load + merge honge, phir{" "}
-                {relabelAll ? selectedDataset.file_count : "unlabeled"} images par labeling
-                shuru hogi.
+                All {selectedModelIds.length} models are prepared and merged first, then labeling
+                starts on{" "}
+                {relabelAll ? selectedDataset.file_count : "unlabeled"} images.
               </span>
             )}
             {selectedModelIds.length > 2 && (
               <span className="block text-amber-700">
-                Agar Railway RAM kam ho to worker automatically ek model at a time mode use
-                karega.
+                If Railway runs low on RAM, the worker loads models per image while still merging
+                all results before saving.
               </span>
             )}
             {selectedModelIds.length === 1 &&
@@ -383,8 +383,8 @@ export function AutoLabelPanel({
         </label>
 
         <p className="text-xs text-amber-800">
-          Tilted ya angled shelf photos ke liye confidence 0.10–0.20 rakho. Worker EXIF +
-          portrait fix inference par bhi lagata hai.
+          For tilted or angled shelf photos, keep confidence around 0.10–0.20. The worker also
+          applies EXIF and portrait correction during inference.
         </p>
 
         <Button
@@ -432,7 +432,7 @@ export function AutoLabelPanel({
             model{selectedModelIds.length !== 1 ? "s" : ""}
             {relabelAll
               ? ` — relabel all ${selectedDataset?.file_count ?? ""} images`
-              : " — sirf unlabeled / empty detections"}
+              : " — unlabeled / empty detections only"}
             . You can switch pages and return — progress is saved.
           </Alert>
         )}

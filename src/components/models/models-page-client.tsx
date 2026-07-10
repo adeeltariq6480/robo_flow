@@ -156,15 +156,14 @@ export function ModelsPageClient({ projectId, models }: ModelsPageClientProps) {
       {missingOnHf > 0 && (
         <Alert variant="info">
           <p className="font-medium">
-            {missingOnHf} model{missingOnHf !== 1 ? "s" : ""} Hugging Face par nahi mile
+            {missingOnHf} model{missingOnHf !== 1 ? "s" : ""} not found on Hugging Face
           </p>
           <p className="mt-1 text-sm">
-            Models sirf database mein hain — HF repo empty ho sakta hai. Pehle{" "}
-            <strong>Push to Hugging Face</strong> try karein (agar Railway disk par files hain),
-            Models sirf database mein hain — HF repo empty ho sakta hai. Pehle{" "}
-            <strong>Push to Hugging Face</strong> try karein (dataset repo se model repo
-            migrate + Railway disk se push). Images dataset repo mein, models model repo mein
-            save hoti hain — same name ho sakta hai lekin URL alag (
+            Models exist only in the database — the HF repo may be empty. Try{" "}
+            <strong>Push to Hugging Face</strong> first (if files are on Railway disk), or
+            migrate from the dataset repo to the model repo and push from Railway disk. Images
+            live in the dataset repo; models live in the model repo — names may match but URLs
+            differ (
             <code className="text-xs">huggingface.co/datasets/…</code> vs{" "}
             <code className="text-xs">huggingface.co/…</code>).
           </p>

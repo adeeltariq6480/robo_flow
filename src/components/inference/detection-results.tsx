@@ -83,39 +83,39 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         </p>
         {modelsFailed > 0 && modelsUsed > 0 && (
           <p className="mt-2 text-xs text-amber-900">
-            {modelsUsed} model loaded OK, lekin {modelsFailed} selected model
-            {modelsFailed !== 1 ? "s" : ""} ki file missing thi — sirf loaded models
-            se label hua. Missing models dubara upload karein.
+            {modelsUsed} model(s) loaded OK, but {modelsFailed} selected model
+            {modelsFailed !== 1 ? "s" : ""} had missing files — only loaded models were used.
+            Re-upload the missing models.
           </p>
         )}
         {(skippedAlreadyLabeled > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0) && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
             {skippedAlreadyLabeled > 0 && (
               <li>
-                {skippedAlreadyLabeled} skipped — pehle se achi labels / reviewed (no
-                detections wali images dubara try hoti hain)
+                {skippedAlreadyLabeled} skipped — already labeled / reviewed (images with no
+                detections are retried)
               </li>
             )}
             {skippedNotRemoteReady > 0 && (
               <li>
-                {skippedNotRemoteReady} missing on HF — upload sync complete karo ya HF sync retry
+                {skippedNotRemoteReady} missing on HF — complete upload sync or retry HF sync
               </li>
             )}
             {skippedNotEligible > 0 && (
               <li>
-                {skippedNotEligible} missing — DB mein record hai lekin file HF/disk par nahi mili
+                {skippedNotEligible} missing — record in DB but file not found on HF/disk
               </li>
             )}
           </ul>
         )}
         {labeled > 0 && labeled < dbTotal && skippedAlreadyLabeled === 0 && (
           <p className="mt-2 text-amber-800">
-            Baqi images ke liye pehle HF sync check karo, phir &quot;Label remaining&quot; dabao.
+            For remaining images, check HF sync first, then click &quot;Label remaining&quot;.
           </p>
         )}
         {skippedAlreadyLabeled > 0 && labeled < dbTotal && !relabelAll && (
           <p className="mt-2 text-amber-800">
-            Sab dubara label karni hon to &quot;Relabel all images&quot; checkbox tick karo.
+            To relabel everything, tick &quot;Relabel all images&quot;.
           </p>
         )}
         {modelFailures.length > 0 && (

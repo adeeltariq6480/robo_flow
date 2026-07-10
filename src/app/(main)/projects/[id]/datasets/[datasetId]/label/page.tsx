@@ -47,22 +47,22 @@ export default async function DatasetLabelPage({
 
         {dataset.file_count === 0 ? (
           <Alert variant="error">
-            Is dataset mein koi image nahi. Pehle{" "}
+            This dataset has no images. Upload{" "}
             <Link
               href={`/projects/${projectId}/datasets/${datasetId}/upload`}
               className="underline"
             >
-              images upload
+              images
             </Link>{" "}
-            karein.
+            first.
           </Alert>
         ) : modelList.length === 0 ? (
           <Alert variant="error">
-            Koi model nahi. Pehle{" "}
+            No models yet. Upload a{" "}
             <Link href={`/projects/${projectId}/models/upload`} className="underline">
-              YOLO model (.pt) upload
+              YOLO model (.pt)
             </Link>{" "}
-            karein.
+            first.
           </Alert>
         ) : (
           <AutoLabelPanel
