@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import logging
 import time
@@ -31,6 +32,8 @@ from app.models.schemas import (
     AnnotationsSave,
     AutoLabelRequest,
     ClassesSave,
+    ColabLaunchRequest,
+    ColabLaunchResponse,
     DatasetCreate,
     ExportRequest,
     JobConfig,
@@ -1779,6 +1782,52 @@ async def finalize_labels(project_id: str, dataset_id: str, _: None = Depends(ve
 
     # update dataset label_status if DB has such field; for now update images hfSyncStatus if present
     return {"ok": True, "commit": res}
+
+
+@api_router.post("/colab/launch", response_model=ColabLaunchResponse)
+async def colab_launch(body: ColabLaunchRequest, _: None = Depends(verify_api_key)):
+    """Create a pre-filled Colab notebook URL (IDs + secrets embedded, 15 min link)."""
+    from app.services.colab_launch import build_colab_url, sign_launch_token
+
+    if not settings.supabase_configured or not settings.hf_configured:
+        raise HTTPException(
+            status_code=400,
+            detail="Worker missing Supabase or Hugging Face config for Colab launch",
+        )
+
+    token = sign_launch_token(
+        {
+            "project_id": body.project_id,
+            "dataset_id": body.dataset_id,
+            "model_ids": body.model_ids,
+            "confidence": body.confidence,
+            "iou": body.iou,
+            "relabel_all": body.relabel_all,
+        }
+    )
+    return ColabLaunchResponse(
+        colab_url=build_colab_url(token),
+        expires_in_minutes=15,
+        message="Colab will open with everything pre-filled — click Run all",
+    )
+
+
+@api_router.get("/colab/notebook/{token}")
+async def colab_notebook(token: str):
+    """Serve a one-time pre-filled .ipynb (no API key — short-lived signed token)."""
+    from app.services.colab_launch import build_prefilled_notebook, verify_launch_token
+
+    try:
+        payload = verify_launch_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+    notebook = build_prefilled_notebook(payload)
+    return Response(
+        content=json.dumps(notebook),
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": 'inline; filename="robo_flow_label.ipynb"'},
+    )
 
 
 @api_router.get("/datasets/{project_id}/{dataset_id}/label-stats")

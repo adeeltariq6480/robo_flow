@@ -1,0 +1,181 @@
+"""One-click Google Colab launch — pre-filled notebook from app settings."""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+import urllib.parse
+from typing import Any
+
+from app.config import settings
+
+TOKEN_TTL_SECONDS = 900  # 15 minutes
+
+
+def _signing_secret() -> bytes:
+    raw = (
+        os.getenv("COLAB_LAUNCH_SECRET", "").strip()
+        or settings.supabase_service_role_key.strip()
+        or os.getenv("WORKER_API_KEY", "").strip()
+        or "robo-flow-colab-launch"
+    )
+    return raw.encode("utf-8")
+
+
+def public_worker_url() -> str:
+    explicit = os.getenv("PUBLIC_WORKER_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    railway = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway:
+        return f"https://{railway}"
+    return "https://roboflow-production.up.railway.app"
+
+
+def github_repo_url() -> str:
+    return os.getenv("COLAB_GITHUB_REPO", "").strip() or "https://github.com/adeeltariq6480/robo_flow.git"
+
+
+def sign_launch_token(payload: dict[str, Any]) -> str:
+    body = dict(payload)
+    body["exp"] = int(time.time()) + TOKEN_TTL_SECONDS
+    data = base64.urlsafe_b64encode(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("utf-8").rstrip("=")
+    sig = hmac.new(_signing_secret(), data.encode("utf-8"), hashlib.sha256).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
+    return f"{data}.{sig_b64}"
+
+
+def verify_launch_token(token: str) -> dict[str, Any]:
+    try:
+        data, sig_b64 = token.split(".", 1)
+    except ValueError as exc:
+        raise ValueError("Invalid launch token") from exc
+
+    expected = hmac.new(
+        _signing_secret(), data.encode("utf-8"), hashlib.sha256
+    ).digest()
+    pad = "=" * (-len(sig_b64) % 4)
+    try:
+        provided = base64.urlsafe_b64decode(sig_b64 + pad)
+    except Exception as exc:
+        raise ValueError("Invalid launch token signature") from exc
+
+    if not hmac.compare_digest(expected, provided):
+        raise ValueError("Invalid launch token signature")
+
+    pad_data = "=" * (-len(data) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(data + pad_data).decode("utf-8"))
+    if int(payload.get("exp") or 0) < int(time.time()):
+        raise ValueError("Launch token expired — click Open in Colab again from the app")
+    return payload
+
+
+def build_colab_url(token: str) -> str:
+    notebook_url = f"{public_worker_url()}/api/colab/notebook/{token}"
+    return (
+        "https://colab.research.google.com/#create=true&fileUrl="
+        + urllib.parse.quote(notebook_url, safe="")
+    )
+
+
+def _notebook_cell(cell_type: str, source: list[str]) -> dict:
+    return {
+        "cell_type": cell_type,
+        "metadata": {},
+        "source": source,
+        **({"outputs": [], "execution_count": None} if cell_type == "code" else {}),
+    }
+
+
+def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
+    """Generate .ipynb with all secrets + IDs — user only Run All."""
+    project_id = str(payload["project_id"])
+    dataset_id = str(payload["dataset_id"])
+    model_ids = ",".join(str(m) for m in payload.get("model_ids") or [])
+    confidence = float(payload.get("confidence") or 0.15)
+    iou = float(payload.get("iou") or 0.45)
+    relabel = bool(payload.get("relabel_all"))
+    relabel_flag = "--relabel" if relabel else ""
+    repo_url = github_repo_url()
+    railway_url = public_worker_url()
+    worker_key = os.getenv("WORKER_API_KEY", "").strip()
+    key_flag = f'--worker-api-key "{worker_key}"' if worker_key else ""
+
+    setup_source = [
+        "import os, subprocess, sys\n",
+        "\n",
+        f'os.environ["SUPABASE_URL"] = {json.dumps(settings.supabase_url)}\n',
+        f'os.environ["SUPABASE_SERVICE_ROLE_KEY"] = {json.dumps(settings.supabase_service_role_key)}\n',
+        f'os.environ["HF_TOKEN"] = {json.dumps(settings.hf_token)}\n',
+        f'os.environ["HF_DATASET_REPO"] = {json.dumps(settings.dataset_repo_id)}\n',
+        f'os.environ["HF_MODEL_REPO"] = {json.dumps(settings.model_repo_id)}\n',
+        'os.environ["HF_DATASET_REPO_TYPE"] = "dataset"\n',
+        'os.environ["HF_MODEL_REPO_TYPE"] = "model"\n',
+        f'os.environ["RAILWAY_WORKER_URL"] = {json.dumps(railway_url)}\n',
+        f'os.environ["WORKER_API_KEY"] = {json.dumps(worker_key)}\n',
+        "\n",
+        f'PROJECT_ID = {json.dumps(project_id)}\n',
+        f'DATASET_ID = {json.dumps(dataset_id)}\n',
+        f'MODEL_IDS = {json.dumps(model_ids)}\n',
+        f"CONFIDENCE = {confidence}\n",
+        f"IOU = {iou}\n",
+        f"REPO_URL = {json.dumps(repo_url)}\n",
+        f"RAILWAY_URL = {json.dumps(railway_url)}\n",
+        'print("Config loaded for project:", PROJECT_ID)\n',
+        'print("Dataset:", DATASET_ID, "| Models:", MODEL_IDS)\n',
+    ]
+
+    install_source = [
+        f"!git clone {json.dumps(repo_url)} robo_flow 2>/dev/null || (cd robo_flow && git pull)\n",
+        "%cd robo_flow/worker\n",
+        "!pip install -q -r requirements.txt\n",
+        "print('Ready. GPU:', end=' ')\n",
+        "!nvidia-smi -L 2>/dev/null || print('CPU only — set Runtime → T4 GPU')\n",
+    ]
+
+    run_source = [
+        f'relabel_flag = "{relabel_flag}"\n',
+        f'key_flag = "{key_flag}"\n',
+        "!python scripts/colab_auto_label.py \\\n",
+        "  --project-id {PROJECT_ID} \\\n",
+        "  --dataset-id {DATASET_ID} \\\n",
+        "  --model-ids {MODEL_IDS} \\\n",
+        "  --confidence {CONFIDENCE} \\\n",
+        "  --iou {IOU} \\\n",
+        "  --railway-url {RAILWAY_URL} \\\n",
+        "  {key_flag} \\\n",
+        "  {relabel_flag}\n",
+    ]
+
+    cells = [
+        _notebook_cell(
+            "markdown",
+            [
+                "# Robo Flow — auto-label (pre-filled from your app)\n",
+                "\n",
+                "**Run → Run all** (or Runtime → Run all). Nothing to paste.\n",
+                "\n",
+                "- Tries Colab GPU first\n",
+                "- Auto-fallback to Railway if Colab fails\n",
+                "- Watch progress in your Vercel app\n",
+            ],
+        ),
+        _notebook_cell("code", setup_source),
+        _notebook_cell("code", install_source),
+        _notebook_cell("code", run_source),
+    ]
+
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.10.0"},
+        },
+        "cells": cells,
+    }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { openColabLaunch } from "@/lib/actions/colab";
 import {
   cancelInferenceJob,
   fetchDatasetLabelStats,
@@ -18,7 +19,7 @@ import { InferenceConfigFields } from "@/components/inference/inference-config";
 import { JobProgress } from "@/components/inference/job-progress";
 import { DetectionResults } from "@/components/inference/detection-results";
 import { ModelMultiSelect } from "@/components/inference/model-multi-select";
-import { Tags, ArrowRight, RotateCcw, Square, Play } from "lucide-react";
+import { Tags, ArrowRight, RotateCcw, Square, Play, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { defaultLabelModelIds } from "@/lib/model-compatibility";
 import {
@@ -73,6 +74,7 @@ export function AutoLabelPanel({
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [labelStats, setLabelStats] = useState<DatasetLabelStats | null>(null);
   const [labelStatsLoading, setLabelStatsLoading] = useState(false);
+  const [colabLoading, setColabLoading] = useState(false);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
@@ -174,6 +176,30 @@ export function AutoLabelPanel({
     setJobId(active.jobId);
     setCompletedJob(null);
   }, [projectId, datasets]);
+
+  async function handleOpenColab() {
+    if (!datasetId || selectedModelIds.length === 0) {
+      setError("Select at least one model and a dataset");
+      return;
+    }
+    setColabLoading(true);
+    setError(null);
+    const result = await openColabLaunch({
+      projectId,
+      datasetId,
+      modelIds: selectedModelIds,
+      confidence,
+      iou,
+      relabelAll,
+    });
+    if ("error" in result && result.error) {
+      setError(result.error);
+      setColabLoading(false);
+      return;
+    }
+    window.open(result.colabUrl, "_blank", "noopener,noreferrer");
+    setColabLoading(false);
+  }
 
   async function handleRun(skipLabeled = false) {
     if (selectedModelIds.length === 0 || !datasetId) {
@@ -449,18 +475,39 @@ export function AutoLabelPanel({
           applies EXIF and portrait correction during inference.
         </p>
 
-        <Button
-          onClick={() => handleRun(false)}
-          loading={loading}
-          disabled={isRunning || selectedModelIds.length === 0 || imagesToLabel === 0}
-        >
-          {!loading && <Tags className="h-4 w-4" />}
-          {loading
-            ? "Submitting…"
-            : lockDataset
-              ? "Label all images"
-              : "Start auto-label"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => handleRun(false)}
+            loading={loading}
+            disabled={isRunning || selectedModelIds.length === 0 || imagesToLabel === 0}
+          >
+            {!loading && <Tags className="h-4 w-4" />}
+            {loading
+              ? "Submitting…"
+              : lockDataset
+                ? "Label on Railway"
+                : "Start auto-label"}
+          </Button>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleOpenColab}
+            loading={colabLoading}
+            disabled={
+              isRunning || colabLoading || selectedModelIds.length === 0 || imagesToLabel === 0
+            }
+            title="Opens Google Colab with project, dataset, models and secrets pre-filled"
+          >
+            {!colabLoading && <ExternalLink className="h-4 w-4" />}
+            Open in Colab
+          </Button>
+        </div>
+
+        <p className="text-xs text-slate-500">
+          <strong>Open in Colab</strong> — everything pre-filled; in Colab click{" "}
+          <strong>Runtime → Run all</strong>. Falls back to Railway if Colab fails.
+        </p>
 
         <div className="flex flex-wrap gap-2">
           {isRunning && (

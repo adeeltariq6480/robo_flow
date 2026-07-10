@@ -87,6 +87,21 @@ class AutoLabelRequest(BaseModel):
         return ids
 
 
+class ColabLaunchRequest(BaseModel):
+    project_id: str
+    dataset_id: str
+    model_ids: list[str] = Field(min_length=1, max_length=10)
+    confidence: float = Field(default=0.15, ge=0.0, le=1.0)
+    iou: float = Field(default=0.45, ge=0.0, le=1.0)
+    relabel_all: bool = False
+
+
+class ColabLaunchResponse(BaseModel):
+    colab_url: str
+    expires_in_minutes: int = 15
+    message: str = "Notebook opened in Colab — use Run all"
+
+
 class ModelCompareRequest(BaseModel):
     project_id: str
     model_ids: list[str] = Field(min_length=2, max_length=5)

@@ -169,6 +169,20 @@ export async function getDatasetLabelStats(projectId: string, datasetId: string)
   );
 }
 
+export async function createColabLaunch(body: {
+  project_id: string;
+  dataset_id: string;
+  model_ids: string[];
+  confidence?: number;
+  iou?: number;
+  relabel_all?: boolean;
+}) {
+  return workerFetch<{ colab_url: string; message: string; expires_in_minutes: number }>(
+    "/api/colab/launch",
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
 /** Poll job status — prefers project-scoped route (more reliable than global registry). */
 export async function getJob(
   jobId: string,
