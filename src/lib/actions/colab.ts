@@ -9,7 +9,7 @@ export async function openColabLaunch(params: {
   confidence?: number;
   iou?: number;
   relabelAll?: boolean;
-}): Promise<{ colabUrl: string; jobId?: string; message?: string } | { error: string }> {
+}): Promise<{ colabUrl: string; prefillUrl?: string; jobId?: string; message?: string } | { error: string }> {
   if (params.modelIds.length === 0) {
     return { error: "Select at least one model" };
   }
@@ -24,6 +24,7 @@ export async function openColabLaunch(params: {
     });
     return {
       colabUrl: result.colab_url,
+      prefillUrl: result.prefill_url ?? undefined,
       jobId: result.job_id ?? undefined,
       message: result.message,
     };

@@ -78,6 +78,7 @@ export function AutoLabelPanel({
   const [colabLoading, setColabLoading] = useState(false);
   const [colabWatching, setColabWatching] = useState(false);
   const [colabWatchMessage, setColabWatchMessage] = useState<string | null>(null);
+  const [colabPrefillUrl, setColabPrefillUrl] = useState<string | null>(null);
 
   const selectedDataset = datasets.find((d) => d.id === datasetId);
   const selectedDatasetName = selectedDataset?.name ?? "dataset";
@@ -251,12 +252,20 @@ export function AutoLabelPanel({
       return;
     }
     window.open(result.colabUrl, "_blank", "noopener,noreferrer");
+    if (result.prefillUrl) {
+      setColabPrefillUrl(result.prefillUrl);
+      try {
+        await navigator.clipboard.writeText(result.prefillUrl);
+      } catch {
+        // Clipboard may be blocked — user can copy from the alert below
+      }
+    }
     if (result.jobId) {
       setJobId(result.jobId);
       setCompletedJob(null);
       setColabWatching(false);
       setColabWatchMessage(
-        "Job started — waiting for Colab (Run all). Progress updates below."
+        "Colab opened — in notebook run Cell 2 (Load config): Ctrl+V then Run. Then Runtime → Run all."
       );
       writeActiveInferenceJob({
         projectId,
@@ -581,8 +590,16 @@ export function AutoLabelPanel({
           button. Then in Colab: Runtime → <strong>Run all</strong>.
         </p>
 
-        {(colabWatching || (jobId && !completedJob)) && colabWatchMessage && (
-          <Alert variant="info">{colabWatchMessage}</Alert>
+        {(colabWatching || colabWatchMessage) && colabWatchMessage && (
+          <Alert variant="info">
+            <p>{colabWatchMessage}</p>
+            {colabPrefillUrl && (
+              <p className="mt-2 break-all text-xs">
+                Config URL (copied):{" "}
+                <code className="rounded bg-blue-100 px-1">{colabPrefillUrl}</code>
+              </p>
+            )}
+          </Alert>
         )}
 
         <div className="flex flex-wrap gap-2">

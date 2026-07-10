@@ -183,7 +183,7 @@ export async function createColabLaunch(body: {
   iou?: number;
   relabel_all?: boolean;
 }) {
-  return workerFetch<{ colab_url: string; job_id?: string | null; message: string; expires_in_minutes: number }>(
+  return workerFetch<{ colab_url: string; prefill_url?: string | null; job_id?: string | null; message: string; expires_in_minutes: number }>(
     "/api/colab/launch",
     { method: "POST", body: JSON.stringify(body) }
   );

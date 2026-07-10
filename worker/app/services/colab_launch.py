@@ -8,6 +8,7 @@ import json
 import os
 import time
 import urllib.parse
+import uuid
 from typing import Any
 
 from app.config import settings
@@ -75,20 +76,84 @@ def verify_launch_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def github_colab_notebook_url() -> str:
+    """Stable public notebook — cells always visible in Colab."""
+    repo = github_repo_url().rstrip("/")
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    # https://github.com/user/repo -> colab github opener
+    parts = repo.replace("https://github.com/", "").split("/")
+    if len(parts) >= 2:
+        owner, name = parts[0], parts[1]
+        return (
+            f"https://colab.research.google.com/github/{owner}/{name}/blob/main/"
+            "notebooks/colab_auto_label.ipynb"
+        )
+    return (
+        "https://colab.research.google.com/github/adeeltariq6480/robo_flow/blob/main/"
+        "notebooks/colab_auto_label.ipynb"
+    )
+
+
+def build_prefill_url(token: str) -> str:
+    encoded = urllib.parse.quote(token, safe="")
+    return f"{public_worker_url()}/api/colab/prefill/{encoded}"
+
+
 def build_colab_url(token: str) -> str:
-    notebook_url = f"{public_worker_url()}/api/colab/notebook/{token}"
+    """Open the GitHub notebook (reliable). App also returns prefill_url for auto-config."""
+    return github_colab_notebook_url()
+
+
+def build_dynamic_notebook_url(token: str) -> str:
+    """Fallback direct .ipynb URL (fixed format for Colab fileUrl import)."""
+    encoded = urllib.parse.quote(token, safe="")
+    notebook_url = f"{public_worker_url()}/api/colab/notebook/{encoded}.ipynb"
     return (
         "https://colab.research.google.com/#create=true&fileUrl="
         + urllib.parse.quote(notebook_url, safe="")
     )
 
 
+def decode_notebook_token(token_path: str) -> str:
+    raw = token_path.removesuffix(".ipynb") if token_path.endswith(".ipynb") else token_path
+    return urllib.parse.unquote(raw)
+
+
 def _notebook_cell(cell_type: str, source: list[str]) -> dict:
-    return {
+    cell: dict[str, Any] = {
         "cell_type": cell_type,
+        "id": uuid.uuid4().hex[:12],
         "metadata": {},
         "source": source,
-        **({"outputs": [], "execution_count": None} if cell_type == "code" else {}),
+    }
+    if cell_type == "code":
+        cell["outputs"] = []
+        cell["execution_count"] = None
+    return cell
+
+
+def build_prefill_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """JSON config Colab notebook fetches from the app (no secrets in GitHub notebook)."""
+    project_id = str(payload["project_id"])
+    dataset_id = str(payload["dataset_id"])
+    model_ids = ",".join(str(m) for m in payload.get("model_ids") or [])
+    return {
+        "project_id": project_id,
+        "dataset_id": dataset_id,
+        "model_ids": model_ids,
+        "job_id": str(payload.get("job_id") or ""),
+        "confidence": float(payload.get("confidence") or 0.15),
+        "iou": float(payload.get("iou") or 0.45),
+        "relabel": bool(payload.get("relabel_all")),
+        "repo_url": github_repo_url(),
+        "railway_url": public_worker_url(),
+        "supabase_url": settings.supabase_url,
+        "supabase_service_role_key": settings.supabase_service_role_key,
+        "hf_token": settings.hf_token,
+        "hf_dataset_repo": settings.dataset_repo_id,
+        "hf_model_repo": settings.model_repo_id,
+        "worker_api_key": os.getenv("WORKER_API_KEY", "").strip(),
     }
 
 
@@ -189,7 +254,7 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
 
     return {
         "nbformat": 4,
-        "nbformat_minor": 5,
+        "nbformat_minor": 4,
         "metadata": {
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python", "version": "3.10.0"},

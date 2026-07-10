@@ -1790,7 +1790,7 @@ async def colab_launch(body: ColabLaunchRequest, _: None = Depends(verify_api_ke
     from app.core.jobs import create_job_record, register_job_project, update_job
     from app.models.schemas import JobConfig, JobStatus, JobType
     from app.services.auto_label import get_dataset_label_stats
-    from app.services.colab_launch import build_colab_url, sign_launch_token
+    from app.services.colab_launch import build_colab_url, build_prefill_url, sign_launch_token
 
     if not settings.supabase_configured or not settings.hf_configured:
         raise HTTPException(
@@ -1851,27 +1851,48 @@ async def colab_launch(body: ColabLaunchRequest, _: None = Depends(verify_api_ke
     )
     return ColabLaunchResponse(
         colab_url=build_colab_url(token),
+        prefill_url=build_prefill_url(token),
         job_id=job_id,
         expires_in_minutes=15,
-        message="Colab opened — click Run all. Progress appears in the app immediately.",
+        message="Colab opened — run Cell 2 (Load config), then Run all.",
     )
 
 
-@api_router.get("/colab/notebook/{token}")
-async def colab_notebook(token: str):
-    """Serve a one-time pre-filled .ipynb (no API key — short-lived signed token)."""
-    from app.services.colab_launch import build_prefilled_notebook, verify_launch_token
+@api_router.get("/colab/prefill/{token_path:path}")
+async def colab_prefill(token_path: str):
+    """Signed JSON config for the GitHub Colab notebook (short-lived token)."""
+    from app.services.colab_launch import build_prefill_payload, decode_notebook_token, verify_launch_token
 
     try:
-        payload = verify_launch_token(token)
+        payload = verify_launch_token(decode_notebook_token(token_path))
+    except ValueError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+    return build_prefill_payload(payload)
+
+
+@api_router.get("/colab/notebook/{token_path:path}")
+async def colab_notebook(token_path: str):
+    """Serve a one-time pre-filled .ipynb (fallback — prefer GitHub notebook + prefill)."""
+    from app.services.colab_launch import (
+        build_prefilled_notebook,
+        decode_notebook_token,
+        verify_launch_token,
+    )
+
+    try:
+        payload = verify_launch_token(decode_notebook_token(token_path))
     except ValueError as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
 
     notebook = build_prefilled_notebook(payload)
     return Response(
         content=json.dumps(notebook),
-        media_type="application/x-ipynb+json",
-        headers={"Content-Disposition": 'inline; filename="robo_flow_label.ipynb"'},
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="robo_flow_label.ipynb"',
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
