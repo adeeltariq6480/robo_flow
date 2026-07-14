@@ -34,7 +34,8 @@ from app.models.schemas import (
     ClassesSave,
     ColabLaunchRequest,
     ColabLaunchResponse,
-    DirectStockCheckRequest,
+    StockColabStartRequest,
+    StockColabUpdateRequest,
     DatasetCreate,
     ExportRequest,
     JobConfig,
@@ -1896,7 +1897,7 @@ async def colab_notebook(token_path: str):
     except ValueError as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
 
-    notebook = build_prefilled_notebook(payload)
+    notebook = build_prefilled_notebook(payload, decode_notebook_token(token_path))
     return Response(
         content=json.dumps(notebook),
         media_type="application/json",
@@ -2329,17 +2330,60 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
 # Inference jobs (test-run, auto-label, model-compare)
 # ===========================================================================
 
-@api_router.post("/stock-url-check/direct")
-async def direct_stock_url_check(body: DirectStockCheckRequest, _: None = Depends(verify_api_key)):
-    """Ephemeral URL inference. Nothing is written to the database or dataset storage."""
-    from app.services.stock_url_direct import check_stock_url
+@api_router.post("/stock-colab/start")
+async def stock_colab_start(body: StockColabStartRequest, _: None = Depends(verify_api_key)):
+    from app.services.colab_launch import build_dynamic_notebook_url, sign_launch_token
+    from app.services.stock_colab_sessions import create
 
+    urls = list(dict.fromkeys(str(url).strip() for url in body.image_urls if str(url).strip()))
+    session_id = create(body.project_id, body.model_ids, urls, body.confidence, body.iou)
+    token = sign_launch_token({"mode": "stock_url_check", "session_id": session_id}, ttl_seconds=6 * 60 * 60)
+    return {"session_id": session_id, "token": token, "colab_url": build_dynamic_notebook_url(token), "total": len(urls)}
+
+
+def _stock_session_from_token(token_path: str):
+    from app.services.colab_launch import decode_notebook_token, verify_launch_token
+    from app.services.stock_colab_sessions import get
+    payload = verify_launch_token(decode_notebook_token(token_path))
+    if payload.get("mode") != "stock_url_check":
+        raise ValueError("Invalid stock session token")
+    session = get(str(payload.get("session_id") or ""))
+    if not session:
+        raise ValueError("Stock check session expired")
+    return session
+
+
+@api_router.get("/stock-colab/session/{token_path:path}")
+async def stock_colab_session(token_path: str):
+    from app.services.stock_colab_sessions import public
     try:
-        return await check_stock_url(
-            body.project_id, body.model_ids, body.image_url, body.confidence, body.iou
-        )
+        return public(_stock_session_from_token(token_path))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.get("/stock-colab/config/{token_path:path}")
+async def stock_colab_config(token_path: str):
+    from app.services.colab_launch import build_stock_prefill_payload
+    try:
+        session = _stock_session_from_token(token_path)
+        return build_stock_prefill_payload(session, token_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.post("/stock-colab/update/{token_path:path}")
+async def stock_colab_update(token_path: str, body: StockColabUpdateRequest):
+    from app.services.stock_colab_sessions import update
+    try:
+        session = _stock_session_from_token(token_path)
+        fields = body.model_dump(exclude_none=True)
+        result = fields.pop("result", None)
+        if result is not None:
+            session["results"].append(result)
+        return {"ok": True, "processed": update(session["id"], **fields)["processed"]}
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
 
 
 @jobs_router.post("/test-run", response_model=JobCreateResponse)

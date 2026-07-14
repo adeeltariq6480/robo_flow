@@ -13,6 +13,7 @@ from app.config import settings
 from app.models.schemas import DetectionBox, InferenceResult, JobConfig
 from app.services.detection_merge import merge_detections
 from app.services.label_classes import is_excluded_detection_class
+from app.services.model_errors import IncompatibleModelError
 from app.services.supabase_repo import resolve_project_class_id
 from app.services.universal_yolo_loader import UniversalYOLOModel, clear_legacy_runtime_state
 import os

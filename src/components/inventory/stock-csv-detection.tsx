@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { runDirectStockUrlCheck } from "@/lib/actions/inference";
+import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
 import { extractImageUrls } from "@/lib/stock-csv-download";
 import type { DirectStockResult } from "@/lib/worker/client";
 import { Play, X } from "lucide-react";
@@ -53,18 +53,25 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
-      const next: Row[] = [];
-      for (let index = 0; index < parsed.urls.length; index++) {
+      setProgress("Creating temporary Colab session…");
+      const launch = await openStockColabCheck(projectId, modelIds, parsed.urls);
+      if ("error" in launch) throw new Error(launch.error);
+      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
+      setProgress("Colab opened — click Runtime → Run all. Waiting for GPU…");
+
+      while (token === runRef.current) {
+        await new Promise((resolve) => window.setTimeout(resolve, 4000));
         if (token !== runRef.current) return;
-        setProgress(`Checking ${index + 1} / ${parsed.urls.length}…`);
-        const result = await runDirectStockUrlCheck(projectId, modelIds, parsed.urls[index]);
-        if (token !== runRef.current) return;
-        next.push("error" in result
-          ? { url: parsed.urls[index], counts: {}, detections: [], needs_review: {}, possible_wrong: 0, review_threshold: 0.3, error: result.error }
-          : result);
-        setRows([...next]);
+        const session = await fetchStockColabSession(launch.token);
+        if ("actionError" in session) throw new Error(session.actionError);
+        setRows(session.results as Row[]);
+        setProgress(`${session.message} · ${session.processed}/${session.total}`);
+        if (session.status === "completed") {
+          setProgress(`Done on Colab GPU — ${session.processed} Result Image(s). Nothing saved to DB.`);
+          break;
+        }
+        if (session.status === "failed") throw new Error(session.error || "Colab check failed");
       }
-      setProgress(`Done — ${next.length} Result Image(s) checked. Nothing saved to DB.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Stock check failed");
       setProgress("");
@@ -86,7 +93,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={() => void handleCheck()} loading={running}
           disabled={!csvFile || !modelIds.length || running || disabled}>
-          {!running && <Play className="h-4 w-4" />} Check Result Images
+          {!running && <Play className="h-4 w-4" />} Open Colab & Check
         </Button>
         {(running || rows.length > 0 || progress || error) && (
           <Button type="button" variant="secondary" onClick={clear}><X className="h-4 w-4" />Clear</Button>

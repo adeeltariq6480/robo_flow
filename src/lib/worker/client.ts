@@ -44,6 +44,16 @@ export interface DirectStockResult {
   review_threshold: number;
 }
 
+export interface StockColabSession {
+  id: string;
+  status: "waiting_for_colab" | "running" | "completed" | "failed";
+  processed: number;
+  total: number;
+  message: string;
+  results: DirectStockResult[];
+  error?: string | null;
+}
+
 function workerHeaders(extra?: HeadersInit): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -173,18 +183,21 @@ export async function submitModelCompare(body: {
   );
 }
 
-export async function checkStockImageUrl(body: {
+export async function startStockColabSession(body: {
   project_id: string;
   model_ids: string[];
-  image_url: string;
+  image_urls: string[];
   confidence?: number;
   iou?: number;
 }) {
-  return workerFetch<DirectStockResult>(
-    "/api/stock-url-check/direct",
-    { method: "POST", body: JSON.stringify(body) },
-    120_000
+  return workerFetch<{ session_id: string; token: string; colab_url: string; total: number }>(
+    "/api/stock-colab/start",
+    { method: "POST", body: JSON.stringify(body) }
   );
+}
+
+export async function getStockColabSession(token: string) {
+  return workerFetch<StockColabSession>(`/api/stock-colab/session/${encodeURIComponent(token)}`);
 }
 
 export interface DatasetLabelStats {

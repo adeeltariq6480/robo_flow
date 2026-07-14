@@ -40,9 +40,9 @@ def github_repo_url() -> str:
     return os.getenv("COLAB_GITHUB_REPO", "").strip() or "https://github.com/adeeltariq6480/robo_flow.git"
 
 
-def sign_launch_token(payload: dict[str, Any]) -> str:
+def sign_launch_token(payload: dict[str, Any], ttl_seconds: int = TOKEN_TTL_SECONDS) -> str:
     body = dict(payload)
-    body["exp"] = int(time.time()) + TOKEN_TTL_SECONDS
+    body["exp"] = int(time.time()) + ttl_seconds
     data = base64.urlsafe_b64encode(
         json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).decode("utf-8").rstrip("=")
@@ -157,8 +157,24 @@ def build_prefill_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
+def build_stock_prefill_payload(session: dict[str, Any], token: str) -> dict[str, Any]:
+    return {
+        "mode": "stock_url_check", "session_id": session["id"],
+        "project_id": session["project_id"], "model_ids": ",".join(session["model_ids"]),
+        "image_urls": session["urls"], "confidence": session["confidence"], "iou": session["iou"],
+        "repo_url": github_repo_url(), "railway_url": public_worker_url(), "stock_token": token,
+        "supabase_url": settings.supabase_url,
+        "supabase_service_role_key": settings.supabase_service_role_key,
+        "hf_token": settings.hf_token, "hf_dataset_repo": settings.dataset_repo_id,
+        "hf_model_repo": settings.model_repo_id,
+        "worker_api_key": os.getenv("WORKER_API_KEY", "").strip(),
+    }
+
+
+def build_prefilled_notebook(payload: dict[str, Any], token: str | None = None) -> dict:
     """Generate .ipynb with all secrets + IDs — user only Run All."""
+    if payload.get("mode") == "stock_url_check":
+        return build_stock_notebook(str(token or ""))
     project_id = str(payload["project_id"])
     dataset_id = str(payload["dataset_id"])
     model_ids = ",".join(str(m) for m in payload.get("model_ids") or [])
@@ -261,3 +277,25 @@ def build_prefilled_notebook(payload: dict[str, Any]) -> dict:
         },
         "cells": cells,
     }
+
+
+def build_stock_notebook(token: str) -> dict:
+    config_url = f"{public_worker_url()}/api/stock-colab/config/{urllib.parse.quote(token, safe='')}"
+    cells = [
+        _notebook_cell("markdown", ["# Robo Flow — temporary Stock Check\n", "Run **Runtime → Run all**. Nothing is saved to the database.\n"]),
+        _notebook_cell("code", [
+            "import json, os, subprocess, sys, urllib.request\n", f"CONFIG_URL = {json.dumps(config_url)}\n",
+            "with urllib.request.urlopen(CONFIG_URL, timeout=60) as r:\n", "    cfg = json.loads(r.read().decode('utf-8'))\n",
+            "for key, cfg_key in [('SUPABASE_URL','supabase_url'),('SUPABASE_SERVICE_ROLE_KEY','supabase_service_role_key'),('HF_TOKEN','hf_token'),('HF_DATASET_REPO','hf_dataset_repo'),('HF_MODEL_REPO','hf_model_repo'),('WORKER_API_KEY','worker_api_key')]:\n",
+            "    os.environ[key] = cfg.get(cfg_key) or ''\n", "print('Loaded', len(cfg['image_urls']), 'temporary URLs')\n",
+        ]),
+        _notebook_cell("code", [
+            f"!git clone {json.dumps(github_repo_url())} robo_flow 2>/dev/null || (cd robo_flow && git pull)\n",
+            "%cd robo_flow/worker\n", "!pip install -q -r requirements.txt\n", "!nvidia-smi -L\n",
+        ]),
+        _notebook_cell("code", [
+            "result = subprocess.run([sys.executable, 'scripts/colab_stock_url_check.py', '--config-url', CONFIG_URL], check=False)\n",
+            "if result.returncode: raise SystemExit(result.returncode)\n",
+        ]),
+    ]
+    return {"nbformat": 4, "nbformat_minor": 4, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}}, "cells": cells}

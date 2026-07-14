@@ -9,28 +9,32 @@ import {
   resumeJob,
   getDatasetLabelStats,
   getActiveDatasetJob,
-  checkStockImageUrl,
+  startStockColabSession,
+  getStockColabSession,
   type JobConfig,
   type DatasetLabelStats,
 } from "@/lib/worker/client";
 
-export async function runDirectStockUrlCheck(
+export async function openStockColabCheck(
   projectId: string,
   modelIds: string[],
-  imageUrl: string,
-  confidence = 0.15,
-  iou = 0.45
+  imageUrls: string[]
 ) {
   try {
-    return await checkStockImageUrl({
-      project_id: projectId,
-      model_ids: modelIds,
-      image_url: imageUrl,
-      confidence,
-      iou,
+    return await startStockColabSession({
+      project_id: projectId, model_ids: modelIds, image_urls: imageUrls,
+      confidence: 0.15, iou: 0.45,
     });
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Direct stock check failed" };
+    return { error: e instanceof Error ? e.message : "Could not open Colab" };
+  }
+}
+
+export async function fetchStockColabSession(token: string) {
+  try {
+    return await getStockColabSession(token);
+  } catch (e) {
+    return { actionError: e instanceof Error ? e.message : "Could not read Colab progress" };
   }
 }
 import {
