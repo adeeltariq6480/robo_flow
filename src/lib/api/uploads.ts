@@ -20,9 +20,10 @@ const MAX_BATCH_BYTES = 15 * 1024 * 1024;
 /** Cap files per request even when images are small. */
 const MAX_BATCH_FILES = 20;
 const UPLOAD_MAX_RETRIES = 2;
-const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
-/** YOLO .pt files can be large — allow longer worker upload time. */
-const MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+/** Image upload batch timeout (5 minutes). */
+const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+/** Model weight upload timeout (5 minutes). */
+const MODEL_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 function workerFetchHeaders(): HeadersInit {
   const headers: Record<string, string> = {};

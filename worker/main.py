@@ -16,14 +16,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Always start queue: test-run + model-compare need it.
+    # Auto-label is skipped locally when RUN_AUTO_LABEL_WORKER=false (Colab handles it).
+    queue_manager.set_processor(process_job)
+    await queue_manager.start()
     if settings.run_auto_label_worker:
-        queue_manager.set_processor(process_job)
-        await queue_manager.start()
-        logger.info("Local job queue started (RUN_AUTO_LABEL_WORKER=true)")
+        logger.info("Local job queue started (includes auto-label)")
     else:
         logger.info(
-            "Railway API-only mode (RUN_AUTO_LABEL_WORKER=false) — "
-            "no local YOLO queue; Colab worker processes auto-label jobs"
+            "Job queue started for test-run/compare only "
+            "(RUN_AUTO_LABEL_WORKER=false — auto-label via Colab)"
         )
     if not settings.supabase_configured:
         logger.warning("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — API will fail")
@@ -83,8 +85,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to log HF startup configuration")
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
-    if settings.run_auto_label_worker:
-        await queue_manager.stop()
+    await queue_manager.stop()
     logger.info("API stopped")
 
 
@@ -142,13 +143,15 @@ async def health():
     return {
         "status": "ok",
         "run_auto_label_worker": settings.run_auto_label_worker,
-        "queues": queue_manager.queue_stats() if settings.run_auto_label_worker else {},
+        "queues": queue_manager.queue_stats(),
         "config": {
             "supabase": settings.supabase_configured,
             "huggingface": settings.hf_configured,
             "storage_backend": "huggingface",
             "dataset_repo": settings.dataset_repo_id or None,
             "model_repo": settings.model_repo_id or None,
-            "api_only": not settings.run_auto_label_worker,
+            "auto_label_on_colab": not settings.run_auto_label_worker,
+            "test_run_on_railway": True,
+            "model_compare_on_railway": True,
         },
     }

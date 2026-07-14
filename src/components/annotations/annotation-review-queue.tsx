@@ -35,6 +35,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { ClassCountChips } from "@/components/annotations/class-count-chips";
 
 interface AnnotationReviewQueueProps {
   projectId: string;
@@ -375,6 +376,11 @@ export function AnnotationReviewQueue({
                         {file.annotations.length !== 1 ? "es" : ""}
                         {file.auto_labeled_at && " · auto-labeled"}
                       </p>
+                      {file.annotations.length > 0 && (
+                        <div className="mt-1.5">
+                          <ClassCountChips boxes={file.annotations} />
+                        </div>
+                      )}
                     </div>
 
                     {isSelected ? (

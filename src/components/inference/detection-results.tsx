@@ -12,6 +12,35 @@ interface Detection {
   project_class_id?: string | null;
 }
 
+function countDetectionsByClass(detections: Detection[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const d of detections) {
+    const name = (d.class_name || "unknown").trim() || "unknown";
+    counts[name] = (counts[name] || 0) + 1;
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]))
+  );
+}
+
+function ClassSummary({ detections }: { detections: Detection[] }) {
+  const counts = countDetectionsByClass(detections);
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return null;
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      {entries.map(([name, count]) => (
+        <span
+          key={name}
+          className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs text-indigo-900"
+        >
+          {name}: <strong>{count}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function DetectionResults({ job }: { job: JobResponse }) {
   if (!job.result) return null;
 
@@ -19,7 +48,13 @@ export function DetectionResults({ job }: { job: JobResponse }) {
 
   if (job.job_type === "test_run") {
     const inference = result.inference as { detections?: Detection[]; inference_ms?: number };
-    return <DetectionList detections={inference?.detections ?? []} ms={inference?.inference_ms} />;
+    const detections = inference?.detections ?? [];
+    return (
+      <div>
+        <ClassSummary detections={detections} />
+        <DetectionList detections={detections} ms={inference?.inference_ms} />
+      </div>
+    );
   }
 
   if (job.job_type === "auto_label") {
@@ -173,6 +208,7 @@ export function DetectionResults({ job }: { job: JobResponse }) {
                   <span className="ml-2 text-xs text-amber-600">★ winner</span>
                 )}
               </h4>
+              <ClassSummary detections={inf.detections ?? []} />
               <DetectionList detections={inf.detections ?? []} ms={inf.inference_ms} compact />
             </div>
           ))}

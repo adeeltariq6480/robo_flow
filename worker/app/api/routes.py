@@ -1919,6 +1919,16 @@ async def dataset_label_stats(project_id: str, dataset_id: str, _: None = Depend
     return stats
 
 
+@api_router.get("/datasets/{project_id}/{dataset_id}/inventory")
+async def dataset_inventory(project_id: str, dataset_id: str, _: None = Depends(verify_api_key)):
+    """Per-image product counts (Pepsi 250ml: N, 7up: M, …) for labeled/reviewed images."""
+    try:
+        return await asyncio.to_thread(repo.get_dataset_inventory, project_id, dataset_id)
+    except Exception as exc:
+        logger.exception("Inventory failed for %s/%s: %s", project_id, dataset_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @api_router.get("/datasets/{project_id}/{dataset_id}/active-job", response_model=JobResponse)
 async def dataset_active_job(
     project_id: str,
@@ -2321,14 +2331,6 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
 @jobs_router.post("/test-run", response_model=JobCreateResponse)
 @api_router.post("/test-run", response_model=JobCreateResponse)
 async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key)):
-    if not settings.run_auto_label_worker:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "RUN_AUTO_LABEL_WORKER=false: Railway does not run YOLO. "
-                "Use Google Colab for test-run / inference."
-            ),
-        )
     if not body.image_path and not body.dataset_file_id:
         raise HTTPException(status_code=400, detail="Provide image_path or dataset_file_id")
     job_id, queue, position = await submit_job(
@@ -2393,14 +2395,6 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
 @jobs_router.post("/model-compare", response_model=JobCreateResponse)
 @api_router.post("/model-compare", response_model=JobCreateResponse)
 async def create_model_compare(body: ModelCompareRequest, _: None = Depends(verify_api_key)):
-    if not settings.run_auto_label_worker:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "RUN_AUTO_LABEL_WORKER=false: Railway does not run YOLO. "
-                "Use Google Colab for model compare / inference."
-            ),
-        )
     if not body.image_path and not body.dataset_file_id:
         raise HTTPException(status_code=400, detail="Provide image_path or dataset_file_id")
     job_id, queue, position = await submit_job(

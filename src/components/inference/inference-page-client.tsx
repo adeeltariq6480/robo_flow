@@ -35,7 +35,8 @@ export function InferencePageClient({
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-slate-900">YOLO Inference</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Powered by Python worker — ensure it is running on port 8000
+          Test run &amp; model compare run on Railway. Full auto-label uses Google Colab
+          when RUN_AUTO_LABEL_WORKER=false.
         </p>
       </div>
 

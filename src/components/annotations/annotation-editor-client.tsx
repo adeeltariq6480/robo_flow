@@ -13,6 +13,7 @@ import type { Class } from "@/lib/types/database";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+import { ClassCountChips } from "@/components/annotations/class-count-chips";
 
 interface AnnotationEditorClientProps {
   projectId: string;
@@ -116,7 +117,15 @@ export function AnnotationEditorClient({
         </Link>
         <div>
           <h1 className="text-lg font-semibold text-slate-900">{datasetName}</h1>
-          <p className="text-sm text-slate-500">Annotation editor</p>
+          <p className="text-sm text-slate-500">
+            {fileName} · {initialBoxes.length} box
+            {initialBoxes.length !== 1 ? "es" : ""}
+          </p>
+          {initialBoxes.length > 0 && (
+            <div className="mt-2">
+              <ClassCountChips boxes={initialBoxes} />
+            </div>
+          )}
         </div>
       </div>
 

@@ -743,6 +743,92 @@ def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
     return [_image_row(r) for r in res.data or []]
 
 
+def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
+    """
+    Per-image class counts for labeled / reviewed images.
+    Example per image: {"Pepsi 250ml": 4, "7up": 2, ...}
+    """
+    images = list_dataset_images(project_id, dataset_id)
+    attach_annotation_fields_to_images(project_id, images)
+    if not images:
+        return {
+            "dataset_id": dataset_id,
+            "image_count": 0,
+            "labeled_count": 0,
+            "total_objects": 0,
+            "class_totals": {},
+            "images": [],
+        }
+
+    image_ids = [str(img["id"]) for img in images]
+    obj_res = (
+        _sb()
+        .table("annotation_objects")
+        .select("image_id, class_name")
+        .eq("project_id", project_id)
+        .in_("image_id", image_ids)
+        .execute()
+    )
+    counts_by_image: dict[str, dict[str, int]] = {}
+    class_totals: dict[str, int] = {}
+    for row in obj_res.data or []:
+        iid = str(row.get("image_id") or "")
+        name = str(row.get("class_name") or "unknown").strip() or "unknown"
+        if not iid:
+            continue
+        bucket = counts_by_image.setdefault(iid, {})
+        bucket[name] = bucket.get(name, 0) + 1
+        class_totals[name] = class_totals.get(name, 0) + 1
+
+    labeled_statuses = {
+        "labeled",
+        "reviewed",
+        "approved",
+        "rejected",
+        "auto_labeled",
+    }
+    out_images: list[dict] = []
+    for img in images:
+        iid = str(img["id"])
+        status = str(img.get("status") or "").strip().lower().replace("-", "_")
+        review = str(
+            img.get("reviewStatus") or img.get("review_status") or ""
+        ).strip().lower()
+        class_counts = counts_by_image.get(iid) or {}
+        total_objs = sum(class_counts.values())
+        is_labeled = (
+            total_objs > 0
+            or status in labeled_statuses
+            or review in {"approved", "rejected", "reviewed", "pending"}
+        )
+        if not is_labeled:
+            continue
+        # Sort counts by class name for stable UI
+        sorted_counts = dict(sorted(class_counts.items(), key=lambda x: x[0].lower()))
+        out_images.append(
+            {
+                "image_id": iid,
+                "file_name": img.get("fileName") or img.get("file_name") or iid,
+                "status": status or "labeled",
+                "review_status": review or None,
+                "width": img.get("width"),
+                "height": img.get("height"),
+                "total_objects": total_objs,
+                "class_counts": sorted_counts,
+            }
+        )
+
+    sorted_totals = dict(sorted(class_totals.items(), key=lambda x: (-x[1], x[0].lower())))
+    return {
+        "dataset_id": dataset_id,
+        "image_count": len(images),
+        "labeled_count": len(out_images),
+        "total_objects": sum(sorted_totals.values()),
+        "class_totals": sorted_totals,
+        "images": out_images,
+    }
+
+
 def attach_annotation_fields_to_images(project_id: str, images: list[dict]) -> None:
     """Merge annotation review/label state onto image rows for auto-label filtering."""
     if not images:

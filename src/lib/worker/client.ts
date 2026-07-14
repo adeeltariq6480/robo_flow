@@ -169,6 +169,32 @@ export async function getDatasetLabelStats(projectId: string, datasetId: string)
   );
 }
 
+export interface DatasetInventoryImage {
+  image_id: string;
+  file_name: string;
+  status: string;
+  review_status?: string | null;
+  width?: number | null;
+  height?: number | null;
+  total_objects: number;
+  class_counts: Record<string, number>;
+}
+
+export interface DatasetInventory {
+  dataset_id: string;
+  image_count: number;
+  labeled_count: number;
+  total_objects: number;
+  class_totals: Record<string, number>;
+  images: DatasetInventoryImage[];
+}
+
+export async function getDatasetInventory(projectId: string, datasetId: string) {
+  return workerFetch<DatasetInventory>(
+    `/api/datasets/${projectId}/${datasetId}/inventory`
+  );
+}
+
 export async function getActiveDatasetJob(projectId: string, datasetId: string) {
   return workerFetch<JobResponse>(
     `/api/datasets/${projectId}/${datasetId}/active-job?job_type=auto_label`
