@@ -279,7 +279,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
             </div>
           </section>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-5">
           {rows.map((row, index) => (
             <article key={`${row.url}-${index}`} className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg">
               <div className="flex items-center justify-between border-b border-slate-100 px-3.5 py-2.5">
@@ -292,7 +292,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
                   <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="max-h-[70vh] w-full rounded-lg object-contain transition duration-300 group-hover:scale-[1.01]" loading="lazy" />
                 </div>
                 <div className="min-w-0">
-                  {row.error ? <Alert variant="error">{row.error}</Alert> : <>
+                  {row.error ? <div className="max-h-48 overflow-y-auto break-words rounded-xl text-xs"><Alert variant="error">{row.error}</Alert></div> : <>
                     <div className="flex flex-wrap gap-1.5">
                       {Object.entries(row.counts).sort((a,b) => b[1]-a[1]).map(([name, count]) => <span key={name} title={name} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700"><span className="truncate">{name}</span><strong className="text-emerald-700">{count}</strong></span>)}
                       {!Object.keys(row.counts).length && <p className="text-xs text-slate-500">No product detected</p>}
