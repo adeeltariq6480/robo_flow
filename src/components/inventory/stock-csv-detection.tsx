@@ -30,7 +30,6 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [configUrl, setConfigUrl] = useState("");
   const [colabUrl, setColabUrl] = useState("");
   const [sessionToken, setSessionToken] = useState("");
-  const [prefilledColabUrl, setPrefilledColabUrl] = useState("");
   const runRef = useRef(0);
 
   const totals = useMemo(() => {
@@ -57,7 +56,6 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setConfigUrl("");
     setColabUrl("");
     setSessionToken("");
-    setPrefilledColabUrl("");
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
@@ -67,7 +65,6 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       setConfigUrl(launch.config_url);
       setColabUrl(launch.colab_url);
       setSessionToken(launch.token);
-      setPrefilledColabUrl(launch.prefilled_colab_url);
       try {
         await navigator.clipboard.writeText(launch.config_url);
       } catch {
@@ -83,12 +80,17 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   }
 
   async function handleOpenColab() {
-    if (!sessionToken || !prefilledColabUrl || running) return;
+    if (!sessionToken || !colabUrl || running) return;
     const token = runRef.current;
-    window.open(prefilledColabUrl, "_blank", "noopener,noreferrer");
+    try {
+      await navigator.clipboard.writeText(configUrl);
+    } catch {
+      // Config remains visible for manual copy.
+    }
+    window.open(colabUrl, "_blank", "noopener,noreferrer");
     setRunning(true);
     setError(null);
-    setProgress("Colab opened with config — connect karein aur Runtime → Run all. Waiting for GPU…");
+    setProgress("Colab opened — config URL paste karke wohi cell Run karein; install aur check khud start hoga.");
     try {
       while (token === runRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
@@ -119,7 +121,6 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setConfigUrl("");
     setColabUrl("");
     setSessionToken("");
-    setPrefilledColabUrl("");
   }
 
   return (
@@ -129,7 +130,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
           disabled={!csvFile || !modelIds.length || running || disabled}>
           {!running && <Play className="h-4 w-4" />} Generate Config
         </Button>
-        {prefilledColabUrl && !running && (
+        {sessionToken && colabUrl && !running && (
           <Button type="button" onClick={() => void handleOpenColab()}>
             <ExternalLink className="h-4 w-4" /> Open in Colab
           </Button>
