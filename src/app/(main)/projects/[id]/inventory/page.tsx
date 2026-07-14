@@ -16,7 +16,7 @@ export default async function InventoryPage({
       modelService.listModels(id),
     ]);
     return (
-      <div className="mx-auto max-w-5xl space-y-2 p-6">
+      <div className="w-full min-w-0 space-y-2">
         <InventoryPanel
           projectId={id}
           stockCheckDatasetId={stock.id}

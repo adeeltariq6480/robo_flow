@@ -583,7 +583,7 @@ export function InventoryPanel({
         />
       </section>
 
-      <div id="stock-check-results-root" />
+      <div id="stock-check-results-root" className="w-full min-w-0" />
 
       {error && <Alert variant="error">{error}</Alert>}
 
