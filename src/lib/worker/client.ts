@@ -26,6 +26,24 @@ export interface JobResponse {
   error_message?: string;
 }
 
+export interface DirectStockDetection {
+  class_name: string;
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DirectStockResult {
+  url: string;
+  counts: Record<string, number>;
+  detections: DirectStockDetection[];
+  needs_review: Record<string, number>;
+  possible_wrong: number;
+  review_threshold: number;
+}
+
 function workerHeaders(extra?: HeadersInit): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -64,12 +82,13 @@ async function parseWorkerError(res: Response): Promise<string> {
 
 async function workerFetchWithRetry(
   url: string,
-  options: RequestInit
+  options: RequestInit,
+  timeoutMs = 25_000
 ): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25_000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(url, { ...options, signal: controller.signal });
     } catch (err) {
@@ -86,13 +105,14 @@ async function workerFetchWithRetry(
 
 async function workerFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs = 25_000
 ): Promise<T> {
-  const res = await workerFetchWithRetry(`${API_BASE_URL}${path}`, {
-    ...options,
-    cache: "no-store",
-    headers: workerHeaders(options.headers),
-  });
+  const res = await workerFetchWithRetry(
+    `${API_BASE_URL}${path}`,
+    { ...options, cache: "no-store", headers: workerHeaders(options.headers) },
+    timeoutMs
+  );
 
   if (!res.ok) {
     const message = await parseWorkerError(res);
@@ -150,6 +170,20 @@ export async function submitModelCompare(body: {
   return workerFetch<{ job_id: string; queue_name: string; message: string }>(
     "/jobs/model-compare",
     { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export async function checkStockImageUrl(body: {
+  project_id: string;
+  model_ids: string[];
+  image_url: string;
+  confidence?: number;
+  iou?: number;
+}) {
+  return workerFetch<DirectStockResult>(
+    "/api/stock-url-check/direct",
+    { method: "POST", body: JSON.stringify(body) },
+    120_000
   );
 }
 

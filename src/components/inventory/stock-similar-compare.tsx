@@ -21,12 +21,12 @@ function proxySrc(url: string): string {
 
 interface Props {
   csvFile: File | null;
+  limit: number;
   disabled?: boolean;
 }
 
-export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
+export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
   const [minScore, setMinScore] = useState(80);
-  const [pairLimit, setPairLimit] = useState(50);
   const [items, setItems] = useState<SimilarCheckItem[]>([]);
   const [totalMatching, setTotalMatching] = useState(0);
   const [running, setRunning] = useState(false);
@@ -47,7 +47,7 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
       const { pairs, totalMatching: total } = extractSimilarPairs(
         text,
         minScore,
-        pairLimit
+        limit
       );
       setTotalMatching(total);
       if (pairs.length === 0) {
@@ -170,21 +170,7 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
             ))}
           </select>
         </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-slate-600">Compare limit</span>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            value={pairLimit}
-            disabled={running || disabled}
-            onChange={(e) => setPairLimit(Number(e.target.value))}
-          >
-            {[25, 50, 100, 200].map((n) => (
-              <option key={n} value={n}>
-                First {n}
-              </option>
-            ))}
-          </select>
-        </label>
+        <p className="pb-2 text-xs text-slate-500">Shared limit: first {limit} pairs</p>
         <Button
           type="button"
           loading={running}

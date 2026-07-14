@@ -34,6 +34,7 @@ from app.models.schemas import (
     ClassesSave,
     ColabLaunchRequest,
     ColabLaunchResponse,
+    DirectStockCheckRequest,
     DatasetCreate,
     ExportRequest,
     JobConfig,
@@ -2327,6 +2328,19 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
 # ===========================================================================
 # Inference jobs (test-run, auto-label, model-compare)
 # ===========================================================================
+
+@api_router.post("/stock-url-check/direct")
+async def direct_stock_url_check(body: DirectStockCheckRequest, _: None = Depends(verify_api_key)):
+    """Ephemeral URL inference. Nothing is written to the database or dataset storage."""
+    from app.services.stock_url_direct import check_stock_url
+
+    try:
+        return await check_stock_url(
+            body.project_id, body.model_ids, body.image_url, body.confidence, body.iou
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 @jobs_router.post("/test-run", response_model=JobCreateResponse)
 @api_router.post("/test-run", response_model=JobCreateResponse)

@@ -9,9 +9,30 @@ import {
   resumeJob,
   getDatasetLabelStats,
   getActiveDatasetJob,
+  checkStockImageUrl,
   type JobConfig,
   type DatasetLabelStats,
 } from "@/lib/worker/client";
+
+export async function runDirectStockUrlCheck(
+  projectId: string,
+  modelIds: string[],
+  imageUrl: string,
+  confidence = 0.15,
+  iou = 0.45
+) {
+  try {
+    return await checkStockImageUrl({
+      project_id: projectId,
+      model_ids: modelIds,
+      image_url: imageUrl,
+      confidence,
+      iou,
+    });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Direct stock check failed" };
+  }
+}
 import {
   getModelsAvailability,
   type ModelsAvailabilityResponse,

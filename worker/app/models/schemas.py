@@ -104,6 +104,14 @@ class ColabLaunchResponse(BaseModel):
     message: str = "Notebook opened in Colab — use Run all"
 
 
+class DirectStockCheckRequest(BaseModel):
+    project_id: str
+    model_ids: list[str] = Field(min_length=1, max_length=10)
+    image_url: str = Field(min_length=8, max_length=4096)
+    confidence: float = Field(default=0.15, ge=0.0, le=1.0)
+    iou: float = Field(default=0.45, ge=0.0, le=1.0)
+
+
 class ModelCompareRequest(BaseModel):
     project_id: str
     model_ids: list[str] = Field(min_length=2, max_length=5)

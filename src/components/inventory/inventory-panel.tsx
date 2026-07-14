@@ -25,6 +25,7 @@ import type { DatasetInventory } from "@/lib/worker/client";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { StockSimilarComparePanel } from "@/components/inventory/stock-similar-compare";
+import { StockCsvDetectionPanel } from "@/components/inventory/stock-csv-detection";
 import { Download, RefreshCw, Trash2, Upload, X } from "lucide-react";
 
 interface InventoryPanelProps {
@@ -418,57 +419,9 @@ export function InventoryPanel({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              loading={loading}
-              onClick={() => void load()}
-              disabled={loading || uploading || csvDownloading || checking}
-            >
-              {!loading && <RefreshCw className="h-4 w-4" />}
-              Refresh
-            </Button>
-            <Button
-              type="button"
-              loading={uploading}
-              disabled={uploading || deleting || csvDownloading || checking}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {!uploading && <Upload className="h-4 w-4" />}
-              Upload images
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              onClick={handleDeleteAll}
-              disabled={
-                deleting ||
-                uploading ||
-                csvDownloading ||
-                checking ||
-                deletableCount === 0
-              }
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete all
-            </Button>
-            {(checking || checkLabel ||
-              (showLabelResults && (labeled.length > 0 || totals.length > 0))) && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  checkAbortRef.current = true;
-                  setChecking(false);
-                  setShowLabelResults(false);
-                  setCheckLabel("");
-                }}
-                disabled={uploading || deleting}
-              >
-                <X className="h-4 w-4" />
-                Clear
-              </Button>
-            )}
+            <span className="rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-medium text-emerald-800">
+              CSV direct mode · nothing saved to DB
+            </span>
             <input
               ref={fileInputRef}
               type="file"
@@ -562,20 +515,17 @@ export function InventoryPanel({
           </fieldset>
 
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Download limit</span>
-            <select
+            <span className="mb-1 block text-slate-600">Shared image limit</span>
+            <input
+              type="number"
+              min={1}
+              max={500}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={downloadLimit}
               disabled={csvDownloading}
-              onChange={(e) => setDownloadLimit(Number(e.target.value))}
-            >
-              <option value={25}>25 images</option>
-              <option value={50}>50 images</option>
-              <option value={100}>100 images</option>
-              <option value={200}>200 images</option>
-              <option value={500}>500 images</option>
-              <option value={0}>All images</option>
-            </select>
+              onChange={(e) => setDownloadLimit(Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
+            />
+            <span className="mt-1 block text-xs text-slate-400">Same limit for detection, ZIP and Similar check</span>
           </label>
 
           <Button
@@ -618,8 +568,17 @@ export function InventoryPanel({
           </div>
         )}
 
+        <StockCsvDetectionPanel
+          projectId={projectId}
+          modelIds={modelIds}
+          csvFile={csvFile}
+          limit={downloadLimit}
+          disabled={csvDownloading || uploading}
+        />
+
         <StockSimilarComparePanel
           csvFile={csvFile}
+          limit={downloadLimit}
           disabled={csvDownloading || uploading}
         />
       </section>
@@ -633,14 +592,14 @@ export function InventoryPanel({
         </Alert>
       )}
 
-      {data && (data.pending_count ?? 0) > 0 && !checking && (
+      {false && (data?.pending_count ?? 0) > 0 && !checking && (
         <Alert variant="info">
-          {data.pending_count} photo(s) abhi counts ka wait kar rahi hain.
+          {data?.pending_count} photo(s) abhi counts ka wait kar rahi hain.
           Colab/worker complete hone ke baad Refresh dabao.
         </Alert>
       )}
 
-      {showLabelResults && totals.length > 0 && (
+      {false && showLabelResults && totals.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {totals.map(([name, count]) => (
             <span
@@ -656,11 +615,11 @@ export function InventoryPanel({
         </div>
       )}
 
-      {loading && !data && (
+      {false && loading && !data && (
         <p className="text-sm text-slate-500">Loading stock check…</p>
       )}
 
-      {!loading && data && labeled.length === 0 && (
+      {false && !loading && data && labeled.length === 0 && (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
           <p className="text-base font-medium text-slate-800">
             Abhi koi check nahi
@@ -673,7 +632,7 @@ export function InventoryPanel({
         </div>
       )}
 
-      {showLabelResults && labeled.length > 0 && (
+      {false && showLabelResults && labeled.length > 0 && (
         <div className="space-y-5">
           {labeled.map((img, idx) => {
             const thumbUrl = imageContentUrl(projectId, img.image_id);
