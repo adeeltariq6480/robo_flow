@@ -10,11 +10,12 @@ import {
 import { uploadImages } from "@/lib/api/uploads";
 import { imageContentUrl } from "@/lib/api/client";
 import { setDeleteStatus } from "@/lib/delete-status";
-import { downloadStockCsvImages } from "@/lib/download-stock-csv-zip";
+import { startStockCsvDownloadJob, subscribeCsvDownloadProgress } from "@/lib/csv-download-job";
 import type { StockCsvColumn } from "@/lib/stock-csv-download";
 import type { DatasetInventory } from "@/lib/worker/client";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { StockSimilarComparePanel } from "@/components/inventory/stock-similar-compare";
 import { Download, RefreshCw, Trash2, Upload } from "lucide-react";
 
 interface InventoryPanelProps {
@@ -42,6 +43,8 @@ export function InventoryPanel({
   const [csvDownloading, setCsvDownloading] = useState(false);
   const [csvProgress, setCsvProgress] = useState("");
   const [csvProgressPct, setCsvProgressPct] = useState(0);
+  /** 0 = all; otherwise max images in ZIP */
+  const [downloadLimit, setDownloadLimit] = useState(50);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,6 +69,20 @@ export function InventoryPanel({
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, datasetId]);
+
+  useEffect(() => {
+    return subscribeCsvDownloadProgress((p) => {
+      setCsvProgress(p.label);
+      setCsvProgressPct(
+        p.total > 0 ? Math.round((p.done / p.total) * 100) : 0
+      );
+      if (p.status === "running") setCsvDownloading(true);
+      if (p.status === "done" || p.status === "error") {
+        setCsvDownloading(false);
+        if (p.status === "error") setError(p.label);
+      }
+    });
+  }, []);
 
   const labeled = useMemo(() => data?.images ?? [], [data]);
 
@@ -211,28 +228,22 @@ export function InventoryPanel({
     if (!csvFile || csvDownloading) return;
     setCsvDownloading(true);
     setError(null);
-    setCsvProgress("Reading CSV…");
+    setCsvProgress("Starting background download…");
     setCsvProgressPct(0);
     try {
-      const result = await downloadStockCsvImages(
+      const { total, totalAvailable } = await startStockCsvDownloadJob(
         csvFile,
         csvColumn,
-        (p) => {
-          setCsvProgress(p.label);
-          setCsvProgressPct(
-            p.total > 0 ? Math.round((p.done / p.total) * 100) : 0
-          );
-        }
+        { limit: downloadLimit }
       );
       setCsvProgress(
-        `Done — ${result.downloaded} downloaded` +
-          (result.failed ? `, ${result.failed} failed` : "") +
-          `. ZIP saved to your Downloads.`
+        `Background download started — ${total}` +
+          (totalAvailable > total ? ` of ${totalAvailable}` : "") +
+          ` images. Aap page leave / reload kar sakte ho; ZIP ready hone pe apne aap download ho jayega.`
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "CSV download failed");
       setCsvProgress("");
-    } finally {
       setCsvDownloading(false);
     }
   }
@@ -321,10 +332,10 @@ export function InventoryPanel({
             </h3>
             <p className="mt-1 max-w-2xl text-sm text-slate-500">
               Pick your CSV, choose <strong>Pre Image</strong> or{" "}
-              <strong>Result Image</strong>, then download a ZIP. Nothing is
-              saved to the project — just files in your Downloads folder.
-              Result images (already labeled) upload later here to check product
-              counts.
+              <strong>Result Image</strong>, set a limit, then download. Job
+              chal raha rahega agar aap doosre page pe jao ya reload karo —
+              ZIP ready hone pe browser download khud start hoga. Project pe
+              kuch save nahi hota.
             </p>
           </div>
         </div>
@@ -372,6 +383,23 @@ export function InventoryPanel({
             </div>
           </fieldset>
 
+          <label className="block text-sm">
+            <span className="mb-1 block text-slate-600">Download limit</span>
+            <select
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              value={downloadLimit}
+              disabled={csvDownloading}
+              onChange={(e) => setDownloadLimit(Number(e.target.value))}
+            >
+              <option value={25}>25 images</option>
+              <option value={50}>50 images</option>
+              <option value={100}>100 images</option>
+              <option value={200}>200 images</option>
+              <option value={500}>500 images</option>
+              <option value={0}>All images</option>
+            </select>
+          </label>
+
           <Button
             type="button"
             loading={csvDownloading}
@@ -387,8 +415,11 @@ export function InventoryPanel({
           <p className="mt-2 text-xs text-slate-500">
             Selected: {csvFile.name}
             {csvColumn === "result"
-              ? " → Result Image column"
-              : " → Pre Image column"}
+              ? " → Result Image"
+              : " → Pre Image"}
+            {downloadLimit > 0
+              ? ` · max ${downloadLimit}`
+              : " · no limit"}
           </p>
         )}
 
@@ -408,6 +439,11 @@ export function InventoryPanel({
             )}
           </div>
         )}
+
+        <StockSimilarComparePanel
+          csvFile={csvFile}
+          disabled={csvDownloading || uploading}
+        />
       </section>
 
       {error && <Alert variant="error">{error}</Alert>}

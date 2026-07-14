@@ -50,10 +50,23 @@ function uniqueName(base: string, used: Set<string>): string {
 export async function downloadStockCsvImages(
   csvFile: File,
   column: StockCsvColumn,
-  onProgress?: (p: CsvDownloadProgress) => void
-): Promise<{ downloaded: number; failed: number; zipName: string }> {
+  options: {
+    limit?: number;
+    onProgress?: (p: CsvDownloadProgress) => void;
+  } = {}
+): Promise<{
+  downloaded: number;
+  failed: number;
+  zipName: string;
+  totalAvailable: number;
+}> {
+  const { limit = 0, onProgress } = options;
   const text = await csvFile.text();
-  const { urls, columnLabel } = extractImageUrls(text, column);
+  const { urls, columnLabel, totalAvailable } = extractImageUrls(
+    text,
+    column,
+    limit
+  );
   if (urls.length === 0) {
     throw new Error(`No image URLs found in "${columnLabel}".`);
   }
@@ -68,7 +81,7 @@ export async function downloadStockCsvImages(
     done: 0,
     total: urls.length,
     failed: 0,
-    label: `Downloading ${urls.length} ${columnLabel} image(s)…`,
+    label: `Downloading ${urls.length} of ${totalAvailable} ${columnLabel} image(s)…`,
   });
 
   for (let i = 0; i < urls.length; i += concurrency) {
@@ -123,5 +136,5 @@ export async function downloadStockCsvImages(
   a.remove();
   URL.revokeObjectURL(href);
 
-  return { downloaded: ok, failed, zipName };
+  return { downloaded: ok, failed, zipName, totalAvailable };
 }

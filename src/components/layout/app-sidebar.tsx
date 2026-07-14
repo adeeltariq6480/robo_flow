@@ -7,6 +7,8 @@ import { AxiomAILogo } from "@/components/layout/axiom-ai-logo";
 import { useNavigationPending } from "@/hooks/use-navigation-pending";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getDeleteStatus } from "@/lib/delete-status";
+import { getCsvDownloadStatus } from "@/lib/csv-download-status";
+import { resumeStockCsvDownloads } from "@/lib/csv-download-job";
 import {
   FolderKanban,
   Plus,
@@ -50,6 +52,7 @@ export function AppSidebar() {
   const [lastProjectId, setLastProjectId] = useState<string | undefined>();
   const [activeLabelHref, setActiveLabelHref] = useState<string | null>(null);
   const [deleteBanner, setDeleteBanner] = useState<string | null>(null);
+  const [downloadBanner, setDownloadBanner] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeProjectId) {
@@ -97,15 +100,23 @@ export function AppSidebar() {
     const sync = () => {
       const s = getDeleteStatus();
       setDeleteBanner(s?.active ? s.label : null);
+      const d = getCsvDownloadStatus();
+      setDownloadBanner(d?.active ? d.label : null);
     };
     sync();
+    resumeStockCsvDownloads();
     window.addEventListener("storage", sync);
     window.addEventListener("focus", sync);
     window.addEventListener("axiomai-delete-status", sync as EventListener);
+    window.addEventListener("axiomai-csv-download-status", sync as EventListener);
     return () => {
       window.removeEventListener("storage", sync);
       window.removeEventListener("focus", sync);
       window.removeEventListener("axiomai-delete-status", sync as EventListener);
+      window.removeEventListener(
+        "axiomai-csv-download-status",
+        sync as EventListener
+      );
     };
   }, []);
 
@@ -193,6 +204,11 @@ export function AppSidebar() {
           </>
         )}
 
+        {downloadBanner && (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+            {downloadBanner}
+          </div>
+        )}
         {deleteBanner && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {deleteBanner}

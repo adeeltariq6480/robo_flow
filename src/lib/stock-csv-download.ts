@@ -1,6 +1,6 @@
 /**
- * ShopData-style CSV helpers for Stock check image downloads.
- * Columns: "Pre Image", "Result Image" (URL values).
+ * ShopData-style CSV helpers for Stock check image downloads + similar pairs.
+ * Columns: "Pre Image", "Result Image", "Similar Image", "Similar Score%"
  */
 
 export type StockCsvColumn = "pre" | "result";
@@ -33,7 +33,6 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
     field = "";
   };
   const pushRow = () => {
-    // skip trailing empty line
     if (row.length === 1 && row[0] === "" && rows.length > 0) {
       row = [];
       return;
@@ -84,23 +83,25 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
   return { headers, rows: rows.slice(1) };
 }
 
-export function findStockColumnIndex(
-  headers: string[],
-  column: StockCsvColumn
-): number {
-  const aliases = COLUMN_ALIASES[column];
+function findHeaderIndex(headers: string[], aliases: string[]): number {
   const normalized = headers.map(normalizeHeader);
   for (const alias of aliases) {
     const idx = normalized.indexOf(alias);
     if (idx >= 0) return idx;
   }
-  // fuzzy: header includes alias
   for (let i = 0; i < normalized.length; i++) {
     for (const alias of aliases) {
       if (normalized[i].includes(alias)) return i;
     }
   }
   return -1;
+}
+
+export function findStockColumnIndex(
+  headers: string[],
+  column: StockCsvColumn
+): number {
+  return findHeaderIndex(headers, COLUMN_ALIASES[column]);
 }
 
 function isHttpUrl(value: string): boolean {
@@ -112,10 +113,30 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+export function normalizeImageUrl(raw: string): string {
+  return raw.trim().replace(/([^:]\/)\/+/g, "$1");
+}
+
+export function parsePercent(value: string): number {
+  const m = String(value ?? "")
+    .trim()
+    .replace(/,/g, ".")
+    .match(/-?\d+(\.\d+)?/);
+  if (!m) return 0;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function extractImageUrls(
   csvText: string,
-  column: StockCsvColumn
-): { urls: string[]; columnLabel: string; totalRows: number } {
+  column: StockCsvColumn,
+  limit = 0
+): {
+  urls: string[];
+  columnLabel: string;
+  totalRows: number;
+  totalAvailable: number;
+} {
   const { headers, rows } = parseCsv(csvText);
   const idx = findStockColumnIndex(headers, column);
   if (idx < 0) {
@@ -130,23 +151,102 @@ export function extractImageUrls(
   for (const row of rows) {
     const raw = (row[idx] ?? "").trim();
     if (!raw || !isHttpUrl(raw)) continue;
-    // normalize double-slash path typos: images//pre_images → images/pre_images
-    let url = raw.replace(/([^:]\/)\/+/g, "$1");
+    const url = normalizeImageUrl(raw);
     if (seen.has(url)) continue;
     seen.add(url);
     urls.push(url);
   }
+  const totalAvailable = urls.length;
+  const capped = limit > 0 ? urls.slice(0, limit) : urls;
   return {
-    urls,
+    urls: capped,
     columnLabel: headers[idx] || column,
     totalRows: rows.length,
+    totalAvailable,
+  };
+}
+
+export type SimilarPairRow = {
+  imageId: string;
+  outletName: string;
+  csvScore: number;
+  csvSimilarFlag: string;
+  resultUrl: string;
+  similarUrl: string;
+};
+
+/**
+ * Rows with Result Image + Similar Image where Similar Score% >= minScore
+ * (default 80 — pairs claimed similar at/above 80%).
+ */
+export function extractSimilarPairs(
+  csvText: string,
+  minScore = 80,
+  limit = 0
+): { pairs: SimilarPairRow[]; totalMatching: number } {
+  const { headers, rows } = parseCsv(csvText);
+  const resultIdx = findStockColumnIndex(headers, "result");
+  const similarIdx = findHeaderIndex(headers, [
+    "similar image",
+    "similar_image",
+    "similarimage",
+  ]);
+  const scoreIdx = findHeaderIndex(headers, [
+    "similar score%",
+    "similar score",
+    "similarscore%",
+    "similar score %",
+  ]);
+  const similarFlagIdx = findHeaderIndex(headers, ["similar"]);
+  const imageIdIdx = findHeaderIndex(headers, ["image id", "image_id"]);
+  const outletIdx = findHeaderIndex(headers, ["outlet name", "outlet_name"]);
+
+  if (resultIdx < 0 || similarIdx < 0) {
+    throw new Error(
+      'CSV mein "Result Image" aur "Similar Image" columns chahiye.'
+    );
+  }
+
+  const pairs: SimilarPairRow[] = [];
+  for (const row of rows) {
+    const resultRaw = (row[resultIdx] ?? "").trim();
+    const similarRaw = (row[similarIdx] ?? "").trim();
+    if (!resultRaw || !similarRaw) continue;
+    if (!isHttpUrl(resultRaw) || !isHttpUrl(similarRaw)) continue;
+
+    const csvScore = scoreIdx >= 0 ? parsePercent(row[scoreIdx] ?? "0") : 0;
+    if (csvScore < minScore) continue;
+
+    const resultUrl = normalizeImageUrl(resultRaw);
+    const similarUrl = normalizeImageUrl(similarRaw);
+    if (resultUrl === similarUrl) continue;
+
+    pairs.push({
+      imageId:
+        imageIdIdx >= 0
+          ? (row[imageIdIdx] ?? "").trim() || String(pairs.length + 1)
+          : String(pairs.length + 1),
+      outletName: outletIdx >= 0 ? (row[outletIdx] ?? "").trim() : "",
+      csvScore,
+      csvSimilarFlag:
+        similarFlagIdx >= 0 ? (row[similarFlagIdx] ?? "").trim() : "",
+      resultUrl,
+      similarUrl,
+    });
+  }
+
+  const totalMatching = pairs.length;
+  return {
+    pairs: limit > 0 ? pairs.slice(0, limit) : pairs,
+    totalMatching,
   };
 }
 
 export function fileNameFromUrl(url: string, index: number): string {
   try {
     const path = new URL(url).pathname;
-    const base = path.split("/").filter(Boolean).pop() || `image_${index + 1}.jpg`;
+    const base =
+      path.split("/").filter(Boolean).pop() || `image_${index + 1}.jpg`;
     const safe = base.replace(/[^\w.\-()+]+/g, "_");
     return safe || `image_${index + 1}.jpg`;
   } catch {
