@@ -289,6 +289,10 @@ def build_stock_notebook(token: str) -> dict:
             "for key, cfg_key in [('SUPABASE_URL','supabase_url'),('SUPABASE_SERVICE_ROLE_KEY','supabase_service_role_key'),('HF_TOKEN','hf_token'),('HF_DATASET_REPO','hf_dataset_repo'),('HF_MODEL_REPO','hf_model_repo'),('WORKER_API_KEY','worker_api_key')]:\n",
             "    os.environ[key] = cfg.get(cfg_key) or ''\n", "print('Loaded', len(cfg['image_urls']), 'temporary URLs')\n",
             "os.environ['HF_HUB_DISABLE_XET'] = '1'\n",
+            "os.environ['UNIVERSAL_MODEL_LOAD'] = 'true'\n",
+            "os.environ['ENABLE_YOLOV5_RUNTIME'] = 'true'\n",
+            "os.environ['ENABLE_YOLOV7_RUNTIME'] = 'true'\n",
+            "os.environ['YOLOV5_TRY_ALL_REFS'] = 'true'\n",
         ]),
         _notebook_cell("code", [
             f"!git clone {json.dumps(github_repo_url())} robo_flow 2>/dev/null || (cd robo_flow && git pull)\n",

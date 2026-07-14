@@ -11,6 +11,10 @@ import urllib.request
 from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("UNIVERSAL_MODEL_LOAD", "true")
+os.environ.setdefault("ENABLE_YOLOV5_RUNTIME", "true")
+os.environ.setdefault("ENABLE_YOLOV7_RUNTIME", "true")
+os.environ.setdefault("YOLOV5_TRY_ALL_REFS", "true")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

@@ -45,6 +45,9 @@ def _apply_colab_defaults() -> None:
         "AUTO_COMMIT_AFTER_LABELS": "true",
         "AUTO_LABEL_SYNC_HF_BEFORE_START": "false",
         "UNIVERSAL_MODEL_LOAD": "true",
+        "ENABLE_YOLOV5_RUNTIME": "true",
+        "ENABLE_YOLOV7_RUNTIME": "true",
+        "YOLOV5_TRY_ALL_REFS": "true",
         "RUN_AUTO_LABEL_WORKER": "true",
         "HF_HUB_DISABLE_XET": "1",
     }

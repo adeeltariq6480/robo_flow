@@ -306,8 +306,15 @@ class UniversalYOLOModel:
                     self.model_path,
                 )
                 return
-            except IncompatibleModelError:
-                raise
+            except IncompatibleModelError as exc:
+                msg = str(exc).strip() or type(exc).__name__
+                logger.warning(
+                    "Runtime %s marked checkpoint incompatible; trying remaining runtimes: %s",
+                    loader_type,
+                    msg,
+                )
+                errors.append(f"{loader_type}: {msg}")
+                continue
             except Exception as exc:
                 msg = str(exc).strip() or type(exc).__name__
                 if "disabled" in msg.lower():
@@ -325,8 +332,9 @@ class UniversalYOLOModel:
     def _load_ultralytics(self) -> None:
         """Load YOLOv8/v11 model using ultralytics."""
         try:
+            import torch
+            self._patch_legacy_runtime_compat(torch)
             from ultralytics import YOLO
-            import os
 
             logger.info("Ultralytics runtime loading for model: %s", self.model_path)
             # Do not prewarm heavy internals here; loading is deferred to predict
@@ -537,7 +545,9 @@ class UniversalYOLOModel:
             return
 
         def patched_load(*args, **kwargs):
-            kwargs.setdefault("weights_only", False)
+            # Project model files are user-uploaded/trusted; full checkpoint loading is
+            # required for older Ultralytics/YOLO modules on PyTorch 2.6+.
+            kwargs["weights_only"] = False
             return original_load(*args, **kwargs)
 
         patched_load._robo_flow_legacy_patch = True
