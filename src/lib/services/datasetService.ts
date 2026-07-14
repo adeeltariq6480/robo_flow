@@ -4,19 +4,57 @@ import { toDataset } from "@/lib/firebase/adapters";
 import type { FirestoreDataset, FirestoreImage } from "@/lib/types/firestore";
 import type { Dataset } from "@/lib/types/database";
 
+/** Hidden scratch dataset for Stock check uploads (not shown in Datasets UI). */
+export const STOCK_CHECK_DATASET_NAME = "__stock_check__";
+
+export function isStockCheckDataset(name: string): boolean {
+  return name === STOCK_CHECK_DATASET_NAME;
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value : [];
 }
 
-export const listDatasets = cache(async (projectId: string): Promise<Dataset[]> => {
+async function fetchAllDatasets(projectId: string): Promise<Dataset[]> {
   const rows = await api.get<FirestoreDataset[]>(`/api/datasets/${projectId}`);
   return asArray<FirestoreDataset>(rows).map((r) => toDataset(projectId, r));
+}
+
+/** All datasets including the hidden Stock check scratch bucket. */
+export async function listAllDatasets(projectId: string): Promise<Dataset[]> {
+  return fetchAllDatasets(projectId);
+}
+
+/** Visible datasets only — excludes the Stock check scratch bucket. */
+export const listDatasets = cache(async (projectId: string): Promise<Dataset[]> => {
+  const all = await fetchAllDatasets(projectId);
+  return all.filter((d) => !isStockCheckDataset(d.name));
 });
 
 export const listDatasetsBrief = cache(async (projectId: string) => {
-  const rows = await api.get<FirestoreDataset[]>(`/api/datasets/${projectId}`);
-  return asArray<FirestoreDataset>(rows).map((d) => ({ id: d.id, name: d.name }));
+  const all = await fetchAllDatasets(projectId);
+  return all
+    .filter((d) => !isStockCheckDataset(d.name))
+    .map((d) => ({ id: d.id, name: d.name }));
 });
+
+/** Create or return the project Stock check scratch dataset. */
+export async function ensureStockCheckDataset(
+  projectId: string
+): Promise<Dataset> {
+  const all = await fetchAllDatasets(projectId);
+  const existing = all.find((d) => isStockCheckDataset(d.name));
+  if (existing) return existing;
+  const id = await createDataset(projectId, {
+    name: STOCK_CHECK_DATASET_NAME,
+    description: "Temporary Stock check images (not a training dataset)",
+  });
+  const created = await getDataset(projectId, id);
+  if (!created) {
+    throw new Error("Failed to create Stock check dataset");
+  }
+  return created;
+}
 
 export const getDataset = cache(async (
   projectId: string,

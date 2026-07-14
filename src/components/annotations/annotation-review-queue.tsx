@@ -307,7 +307,7 @@ export function AnnotationReviewQueue({
           />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
           {visibleFiles.length === 0 ? (
             <p className="text-sm text-slate-500">
               No images match this filter. Upload images or run auto-label from
@@ -315,114 +315,123 @@ export function AnnotationReviewQueue({
               files.
             </p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {visibleFiles.map((file) => {
-              const isSelected = selected.has(file.id);
-              const thumbUrl = imageContentUrl(projectId, file.id);
-              const reviewHref = `${base}/${file.id}${filterQuery}`;
+            <div className="space-y-4">
+              {visibleFiles.map((file) => {
+                const isSelected = selected.has(file.id);
+                const thumbUrl = imageContentUrl(projectId, file.id);
+                const reviewHref = `${base}/${file.id}${filterQuery}`;
+                const hasLabels = file.annotations.length > 0;
 
-              return (
-                <article
-                  key={file.id}
-                  className={`overflow-hidden rounded-xl border bg-white shadow-sm transition-shadow ${
-                    isSelected
-                      ? "border-brand-500 ring-2 ring-brand-200"
-                      : "border-slate-200 hover:shadow-md"
-                  }`}
-                >
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => openReview(file.id)}
-                      className="group block w-full text-left"
-                      title="Open image to review"
-                    >
-                      <div className="relative aspect-[4/3] bg-slate-100">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={thumbUrl}
-                          alt={file.file_name}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
-                        <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/30 group-hover:opacity-100">
-                          <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 shadow">
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            Open & review
+                return (
+                  <article
+                    key={file.id}
+                    className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
+                      isSelected
+                        ? "border-emerald-400 ring-2 ring-emerald-100"
+                        : "border-slate-200/90 hover:border-emerald-200 hover:shadow-md"
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row">
+                      <div className="relative h-44 w-full shrink-0 overflow-hidden bg-slate-100 sm:h-auto sm:min-h-[168px] sm:w-[36%] md:w-[32%]">
+                        <button
+                          type="button"
+                          onClick={() => openReview(file.id)}
+                          className="group block h-full w-full text-left"
+                          title="Open image to review"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={thumbUrl}
+                            alt=""
+                            className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02] sm:absolute sm:inset-0 sm:h-full"
+                            loading="lazy"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/25 group-hover:opacity-100">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 shadow">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Open
+                            </span>
                           </span>
-                        </span>
-                      </div>
-                    </button>
-                    <label className="absolute left-2 top-2 flex cursor-pointer items-center rounded-md bg-white/90 p-1.5 shadow">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelect(file.id)}
-                        disabled={loading}
-                        className="rounded border-slate-300"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </label>
-                    <div className="absolute right-2 top-2">{statusBadge(file)}</div>
-                  </div>
-
-                  <div className="space-y-2 p-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900">
-                        {file.file_name}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {file.annotations.length} box
-                        {file.annotations.length !== 1 ? "es" : ""}
-                        {file.auto_labeled_at && " · auto-labeled"}
-                      </p>
-                      {file.annotations.length > 0 && (
-                        <div className="mt-1.5">
-                          <ClassCountChips boxes={file.annotations} />
+                        </button>
+                        <label className="absolute left-2.5 top-2.5 flex cursor-pointer items-center rounded-lg bg-white/95 p-1.5 shadow-sm">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(file.id)}
+                            disabled={loading}
+                            className="rounded border-slate-300"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </label>
+                        <div className="absolute right-2.5 top-2.5">
+                          {statusBadge(file)}
                         </div>
-                      )}
-                    </div>
-
-                    {isSelected ? (
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="flex-1 !border-green-300 !py-1.5 !text-xs !text-green-700 hover:!bg-green-50"
-                          onClick={() => handleReviewAction(file.id, "approved")}
-                          disabled={loading}
-                          loading={loading}
-                        >
-                          {!loading && <Check className="h-3.5 w-3.5" />}
-                          Approve
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="flex-1 !border-red-300 !py-1.5 !text-xs !text-red-700 hover:!bg-red-50"
-                          onClick={() => handleReviewAction(file.id, "rejected")}
-                          disabled={loading}
-                          loading={loading}
-                        >
-                          {!loading && <X className="h-3.5 w-3.5" />}
-                          Reject
-                        </Button>
                       </div>
-                    ) : (
-                      <Link href={reviewHref} className="block">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="w-full !py-1.5 !text-xs"
-                        >
-                          Review image
-                        </Button>
-                      </Link>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+
+                      <div className="flex min-w-0 flex-1 flex-col justify-between gap-3 p-4 sm:p-5">
+                        <div>
+                          {hasLabels ? (
+                            <>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {file.annotations.length}{" "}
+                                <span className="font-normal text-slate-500">
+                                  label{file.annotations.length === 1 ? "" : "s"}
+                                </span>
+                              </p>
+                              <div className="mt-3">
+                                <ClassCountChips boxes={file.annotations} />
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-sm text-slate-400">No labels yet</p>
+                          )}
+                        </div>
+
+                        {isSelected ? (
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="flex-1 !border-green-300 !py-1.5 !text-xs !text-green-700 hover:!bg-green-50"
+                              onClick={() =>
+                                handleReviewAction(file.id, "approved")
+                              }
+                              disabled={loading}
+                              loading={loading}
+                            >
+                              {!loading && <Check className="h-3.5 w-3.5" />}
+                              Approve
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="flex-1 !border-red-300 !py-1.5 !text-xs !text-red-700 hover:!bg-red-50"
+                              onClick={() =>
+                                handleReviewAction(file.id, "rejected")
+                              }
+                              disabled={loading}
+                              loading={loading}
+                            >
+                              {!loading && <X className="h-3.5 w-3.5" />}
+                              Reject
+                            </Button>
+                          </div>
+                        ) : (
+                          <Link href={reviewHref} className="block sm:self-start">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="w-full !py-1.5 !text-xs sm:w-auto"
+                            >
+                              Review image
+                            </Button>
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>

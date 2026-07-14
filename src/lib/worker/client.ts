@@ -184,10 +184,13 @@ export interface DatasetInventory {
   dataset_id: string;
   image_count: number;
   labeled_count: number;
+  pending_count?: number;
   total_objects: number;
   class_totals: Record<string, number>;
   /** Stable class column order for stock-check table/grid */
   class_names?: string[];
+  /** Every image id in the dataset (for Delete all, including unlabeled uploads) */
+  deletable_image_ids?: string[];
   images: DatasetInventoryImage[];
 }
 

@@ -745,24 +745,27 @@ def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
 
 def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
     """
-    All dataset images with per-image class counts.
+    Stock check: only images that have real label objects.
     Example per image: {"Pepsi 250ml": 4, "7up": 2, ...}
-    Unlabeled images are included with empty class_counts.
+    Also returns deletable_image_ids for every image in the dataset (incl. unlabeled).
     """
     images = list_dataset_images(project_id, dataset_id)
     attach_annotation_fields_to_images(project_id, images)
+    deletable_ids = [str(img["id"]) for img in images if img.get("id")]
     if not images:
         return {
             "dataset_id": dataset_id,
             "image_count": 0,
             "labeled_count": 0,
+            "pending_count": 0,
             "total_objects": 0,
             "class_totals": {},
             "class_names": [],
+            "deletable_image_ids": [],
             "images": [],
         }
 
-    image_ids = [str(img["id"]) for img in images]
+    image_ids = deletable_ids
     obj_res = (
         _sb()
         .table("annotation_objects")
@@ -782,15 +785,7 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
         bucket[name] = bucket.get(name, 0) + 1
         class_totals[name] = class_totals.get(name, 0) + 1
 
-    labeled_statuses = {
-        "labeled",
-        "reviewed",
-        "approved",
-        "rejected",
-        "auto_labeled",
-    }
     out_images: list[dict] = []
-    labeled_count = 0
     for img in images:
         iid = str(img["id"])
         status = str(img.get("status") or "").strip().lower().replace("-", "_")
@@ -798,20 +793,17 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
             img.get("reviewStatus") or img.get("review_status") or ""
         ).strip().lower()
         class_counts = counts_by_image.get(iid) or {}
+        # Drop zero / empty — only real labels
+        class_counts = {k: v for k, v in class_counts.items() if v > 0}
         total_objs = sum(class_counts.values())
-        is_labeled = (
-            total_objs > 0
-            or status in labeled_statuses
-            or review in {"approved", "rejected", "reviewed", "pending"}
-        )
-        if is_labeled:
-            labeled_count += 1
+        if total_objs <= 0:
+            continue
         sorted_counts = dict(sorted(class_counts.items(), key=lambda x: x[0].lower()))
         out_images.append(
             {
                 "image_id": iid,
                 "file_name": img.get("fileName") or img.get("file_name") or iid,
-                "status": status or ("labeled" if is_labeled else "uploaded"),
+                "status": status or "labeled",
                 "review_status": review or None,
                 "width": img.get("width"),
                 "height": img.get("height"),
@@ -822,13 +814,16 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
 
     sorted_totals = dict(sorted(class_totals.items(), key=lambda x: (-x[1], x[0].lower())))
     class_names = list(sorted_totals.keys())
+    labeled_count = len(out_images)
     return {
         "dataset_id": dataset_id,
-        "image_count": len(out_images),
+        "image_count": len(deletable_ids),
         "labeled_count": labeled_count,
+        "pending_count": max(0, len(deletable_ids) - labeled_count),
         "total_objects": sum(sorted_totals.values()),
         "class_totals": sorted_totals,
         "class_names": class_names,
+        "deletable_image_ids": deletable_ids,
         "images": out_images,
     }
 
@@ -921,45 +916,184 @@ def _delete_image_annotations(project_id: str, image_id: str) -> None:
         _sb().table("annotations").delete().in_("id", ann_ids).execute()
 
 
+def _delete_annotations_for_images(project_id: str, image_ids: list[str]) -> None:
+    if not image_ids:
+        return
+    # Chunk to avoid huge IN clauses
+    chunk = 200
+    for i in range(0, len(image_ids), chunk):
+        batch = image_ids[i : i + chunk]
+        _sb().table("annotation_objects").delete().eq(
+            "project_id", project_id
+        ).in_("image_id", batch).execute()
+        _sb().table("annotations").delete().eq("project_id", project_id).in_(
+            "image_id", batch
+        ).execute()
+
+
+def _label_hf_path_for_image(project_id: str, dataset_id: str, img: dict) -> str | None:
+    """YOLO label path next to images: datasets/{p}/{d}/labels/{stem}.txt"""
+    file_name = img.get("fileName") or img.get("file_name") or ""
+    if not file_name:
+        hf_path = (img.get("hfPath") or img.get("hf_path") or "").replace("\\", "/")
+        if "/images/" in hf_path:
+            file_name = hf_path.rsplit("/", 1)[-1]
+    if not file_name:
+        return None
+    stem = file_name.rsplit(".", 1)[0]
+    if not stem:
+        return None
+    return f"datasets/{project_id}/{dataset_id}/labels/{stem}.txt"
+
+
+def _hf_paths_for_images(
+    project_id: str, dataset_id: str, images: list[dict]
+) -> tuple[str | None, list[str]]:
+    """Collect HF repo id + all paths (images + labels) for a batch delete."""
+    repo_id: str | None = None
+    paths: list[str] = []
+    seen: set[str] = set()
+    for img in images:
+        rid = img.get("hfRepo") or img.get("hf_repo")
+        if rid and not repo_id:
+            repo_id = str(rid)
+        path = (img.get("hfPath") or img.get("hf_path") or "").strip()
+        if path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+        label_path = _label_hf_path_for_image(project_id, dataset_id, img)
+        if label_path and label_path not in seen:
+            seen.add(label_path)
+            paths.append(label_path)
+    if not repo_id:
+        repo_id = settings.dataset_repo_id or None
+    return repo_id, paths
+
+
 def delete_images(project_id: str, dataset_id: str, image_ids: list[str]) -> None:
+    if not image_ids:
+        return
+    images: list[dict] = []
     for image_id in image_ids:
         img = get_image(project_id, image_id)
         if not img or img.get("datasetId") != dataset_id:
             continue
-        _delete_image_annotations(project_id, image_id)
-        repo_id = img.get("hfRepo")
-        path_in_repo = img.get("hfPath")
-        if repo_id and path_in_repo:
-            try:
-                file_storage.delete_from_repo(
-                    repo_id,
-                    path_in_repo,
-                    repo_type=file_storage.REPO_TYPE_DATASET,
-                )
-            except Exception as exc:
-                logger.warning("HF image delete failed %s: %s", image_id, exc)
-        _sb().table("images").delete().eq("id", image_id).execute()
+        images.append(img)
+
+    if not images:
+        return
+
+    repo_id, paths = _hf_paths_for_images(project_id, dataset_id, images)
+    if repo_id and paths:
+        try:
+            file_storage.delete_many_from_repo(
+                repo_id,
+                paths,
+                repo_type=settings.dataset_repo_type,
+                commit_message=(
+                    f"Delete {len(images)} image(s) from dataset {dataset_id}"
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "HF batch image delete failed dataset=%s count=%d: %s",
+                dataset_id,
+                len(images),
+                exc,
+            )
+
+    ids = [str(img["id"]) for img in images]
+    _delete_annotations_for_images(project_id, ids)
+    chunk = 200
+    for i in range(0, len(ids), chunk):
+        _sb().table("images").delete().in_("id", ids[i : i + chunk]).execute()
     recount_dataset_images(project_id, dataset_id)
 
 
 def delete_dataset(project_id: str, dataset_id: str) -> None:
+    """Delete dataset + all images from Supabase and Hugging Face (one HF commit)."""
     imgs = list_dataset_images(project_id, dataset_id)
+    ids = [str(img["id"]) for img in imgs if img.get("id")]
+
+    # Prefer wiping the whole dataset folder on HF in one commit (images + labels + zips)
+    repo_id = settings.dataset_repo_id
     for img in imgs:
-        _delete_image_annotations(project_id, img["id"])
-        repo_id = img.get("hfRepo")
-        path_in_repo = img.get("hfPath")
-        if repo_id and path_in_repo:
+        rid = img.get("hfRepo") or img.get("hf_repo")
+        if rid:
+            repo_id = str(rid)
+            break
+
+    hf_paths: list[str] = []
+    if repo_id:
+        prefix = file_storage.dataset_folder_prefix(project_id, dataset_id)
+        listed = file_storage.list_repo_paths_with_prefix(
+            repo_id,
+            repo_type=settings.dataset_repo_type,
+            prefix=prefix,
+        )
+        hf_paths.extend(listed)
+        # Also include DB paths in case layout differs
+        _, from_db = _hf_paths_for_images(project_id, dataset_id, imgs)
+        for p in from_db:
+            if p not in hf_paths:
+                hf_paths.append(p)
+
+        if hf_paths:
             try:
-                file_storage.delete_from_repo(
+                file_storage.delete_many_from_repo(
                     repo_id,
-                    path_in_repo,
-                    repo_type=file_storage.REPO_TYPE_DATASET,
+                    hf_paths,
+                    repo_type=settings.dataset_repo_type,
+                    commit_message=(
+                        f"Delete dataset {dataset_id} "
+                        f"({len(hf_paths)} file(s) under {prefix})"
+                    ),
                 )
             except Exception as exc:
-                logger.warning("HF dataset image delete failed %s: %s", img["id"], exc)
-    _sb().table("images").delete().eq("dataset_id", dataset_id).execute()
-    _sb().table("datasets").delete().eq("id", dataset_id).eq("project_id", project_id).execute()
+                logger.warning(
+                    "HF dataset folder delete failed project=%s dataset=%s files=%d: %s",
+                    project_id,
+                    dataset_id,
+                    len(hf_paths),
+                    exc,
+                )
 
+    # Local disk cleanup (best-effort)
+    try:
+        local_dir = (
+            settings.dataset_files_dir / str(project_id) / str(dataset_id)
+        )
+        if local_dir.is_dir():
+            import shutil
+
+            shutil.rmtree(local_dir, ignore_errors=True)
+    except Exception as exc:
+        logger.warning(
+            "Local dataset folder cleanup failed %s/%s: %s",
+            project_id,
+            dataset_id,
+            exc,
+        )
+
+    _delete_annotations_for_images(project_id, ids)
+    _sb().table("images").delete().eq("dataset_id", dataset_id).execute()
+    # Drop leftover labelling jobs for this dataset (best-effort)
+    try:
+        _sb().table("labelling_jobs").delete().eq(
+            "project_id", project_id
+        ).eq("dataset_id", dataset_id).execute()
+    except Exception:
+        pass
+    _sb().table("datasets").delete().eq("id", dataset_id).eq(
+        "project_id", project_id
+    ).execute()
+    logger.info(
+        "Deleted dataset %s project=%s images=%d hf_files=%d",
+        dataset_id,
+        project_id,
+        len(ids),
+        len(hf_paths),
+    )
 
 def dataset_review_files(project_id: str, dataset_id: str) -> list[dict]:
     images = list_dataset_images(project_id, dataset_id)

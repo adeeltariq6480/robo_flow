@@ -29,9 +29,9 @@ export function ClassCountChips({
       {entries.map(([name, count]) => (
         <span
           key={name}
-          className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-1.5 py-0.5 text-[11px] text-indigo-900"
+          className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-900"
         >
-          {name}: <strong>{count}</strong>
+          {name}: <strong className="tabular-nums">{count}</strong>
         </span>
       ))}
     </div>

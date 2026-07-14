@@ -20,7 +20,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
 from app.config import settings
@@ -829,16 +829,123 @@ def download_bytes(repo_id: str, path_in_repo: str, *, repo_type: str) -> bytes:
 
 
 def delete_from_repo(repo_id: str, path_in_repo: str, *, repo_type: str) -> None:
-    logger.debug("HF delete %s (%s) %s", repo_id, repo_type, path_in_repo)
+    """Delete a single path (one commit). Prefer delete_many_from_repo for bulk deletes."""
+    delete_many_from_repo(
+        repo_id,
+        [path_in_repo],
+        repo_type=repo_type,
+        commit_message=f"Delete {path_in_repo}",
+    )
+
+
+def delete_many_from_repo(
+    repo_id: str,
+    paths_in_repo: list[str],
+    *,
+    repo_type: str,
+    commit_message: str = "Delete files",
+) -> int:
+    """Delete many HF paths in a single commit. Returns number of paths requested."""
+    paths = []
+    seen: set[str] = set()
+    for raw in paths_in_repo:
+        path = (raw or "").strip().replace("\\", "/")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+    if not paths:
+        return 0
+
+    logger.info(
+        "HF batch delete start repo=%s type=%s files=%d msg=%s",
+        repo_id,
+        repo_type,
+        len(paths),
+        commit_message,
+    )
+    with _hf_commit_lock:
+        try:
+            _api().create_commit(
+                repo_id=repo_id,
+                repo_type=repo_type,
+                operations=[
+                    CommitOperationDelete(path_in_repo=path) for path in paths
+                ],
+                commit_message=commit_message,
+            )
+        except HfHubHTTPError as exc:
+            detail = str(exc).lower()
+            # All files already gone / empty commit — treat as success
+            if (
+                "no files have been modified" in detail
+                or "empty commit" in detail
+                or (exc.response is not None and exc.response.status_code == 404)
+            ):
+                logger.info(
+                    "HF batch delete skipped (nothing to remove) repo=%s count=%d",
+                    repo_id,
+                    len(paths),
+                )
+                return len(paths)
+            # Some paths missing: try only paths that still exist
+            if "does not exist" in detail or "cannot find" in detail or "404" in detail:
+                existing = [
+                    p
+                    for p in paths
+                    if _repo_file_exists(repo_id, repo_type, p)
+                ]
+                if not existing:
+                    logger.info(
+                        "HF batch delete: none of %d paths exist on %s",
+                        len(paths),
+                        repo_id,
+                    )
+                    return len(paths)
+                _api().create_commit(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    operations=[
+                        CommitOperationDelete(path_in_repo=path)
+                        for path in existing
+                    ],
+                    commit_message=commit_message,
+                )
+                logger.info(
+                    "HF batch delete committed existing=%d of %d repo=%s",
+                    len(existing),
+                    len(paths),
+                    repo_id,
+                )
+                return len(existing)
+            raise
+    logger.info(
+        "HF batch delete committed files=%d repo=%s",
+        len(paths),
+        repo_id,
+    )
+    return len(paths)
+
+
+def list_repo_paths_with_prefix(
+    repo_id: str, *, repo_type: str, prefix: str
+) -> list[str]:
+    """List all file paths in the repo that start with prefix."""
+    prefix = (prefix or "").replace("\\", "/")
+    if prefix and not prefix.endswith("/"):
+        prefix = f"{prefix}/"
     try:
-        _api().delete_file(
-            repo_id=repo_id,
-            path_in_repo=path_in_repo,
-            repo_type=repo_type,
-            commit_message=f"Delete {path_in_repo}",
+        files = _api().list_repo_files(repo_id=repo_id, repo_type=repo_type)
+    except Exception as exc:
+        logger.warning(
+            "HF list_repo_files failed repo=%s type=%s: %s",
+            repo_id,
+            repo_type,
+            exc,
         )
-    except HfHubHTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            logger.info("HF file already missing at %s — skipping delete", path_in_repo)
-            return
-        raise
+        return []
+    return [f for f in files if f.startswith(prefix)]
+
+
+def dataset_folder_prefix(project_id: str, dataset_id: str) -> str:
+    return f"datasets/{project_id}/{dataset_id}/"

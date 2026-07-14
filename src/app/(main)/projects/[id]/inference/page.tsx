@@ -13,10 +13,16 @@ export default async function InferencePage({
   const { id } = await params;
 
   return runBackendPage(async () => {
-    const [models, datasets] = await Promise.all([
+    const [models, allDatasets] = await Promise.all([
       modelService.listModels(id),
-      datasetService.listDatasets(id),
+      datasetService.listAllDatasets(id),
     ]);
+
+    const datasets = allDatasets.map((d) =>
+      datasetService.isStockCheckDataset(d.name)
+        ? { ...d, name: "Stock check" }
+        : d
+    );
 
     const imageLists = await Promise.all(
       datasets.map((dataset) =>

@@ -58,7 +58,7 @@ export async function deleteDatasets(
 
 export async function deleteAllDatasets(projectId: string): Promise<ActionResult> {
   try {
-    const datasets = await datasetService.listDatasets(projectId);
+    const datasets = await datasetService.listAllDatasets(projectId);
     if (!datasets.length) return { success: true, count: 0 };
     return deleteDatasets(
       projectId,
