@@ -163,7 +163,7 @@ def build_prefill_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "railway_url": public_worker_url(),
         "supabase_url": settings.supabase_url,
         "supabase_service_role_key": settings.supabase_service_role_key,
-        "hf_token": settings.hf_token,
+        "hf_token": settings.hf_token.strip().strip('"').strip("'"),
         "hf_dataset_repo": settings.dataset_repo_id,
         "hf_model_repo": settings.model_repo_id,
         "worker_api_key": os.getenv("WORKER_API_KEY", "").strip(),
@@ -178,7 +178,7 @@ def build_stock_prefill_payload(session: dict[str, Any], token: str) -> dict[str
         "repo_url": github_repo_url(), "railway_url": public_worker_url(), "stock_token": token,
         "supabase_url": settings.supabase_url,
         "supabase_service_role_key": settings.supabase_service_role_key,
-        "hf_token": settings.hf_token, "hf_dataset_repo": settings.dataset_repo_id,
+        "hf_token": settings.hf_token.strip().strip('"').strip("'"), "hf_dataset_repo": settings.dataset_repo_id,
         "hf_model_repo": settings.model_repo_id,
         "worker_api_key": os.getenv("WORKER_API_KEY", "").strip(),
     }

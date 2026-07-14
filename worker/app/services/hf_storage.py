@@ -36,11 +36,20 @@ REPO_TYPE_MODEL = "model"
 _hf_commit_lock = threading.Lock()
 
 
+def normalized_hf_token() -> str:
+    """Remove accidental Railway/env whitespace or wrapping quotes."""
+    value = (settings.hf_token or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1].strip()
+    return value
+
+
 @lru_cache(maxsize=1)
 def _api() -> HfApi:
-    if not settings.hf_token:
+    token = normalized_hf_token()
+    if not token:
         raise RuntimeError("HF_TOKEN is not configured for the backend.")
-    return HfApi(token=settings.hf_token)
+    return HfApi(token=token)
 
 
 def _ensure_repo(repo_id: str, repo_type: str) -> None:
@@ -791,7 +800,7 @@ def download_to_local(
         "repo_id": repo_id,
         "filename": path_in_repo,
         "repo_type": repo_type,
-        "token": settings.hf_token or None,
+        "token": normalized_hf_token() or None,
         "cache_dir": str(settings.hf_cache_dir),
     }
     try:

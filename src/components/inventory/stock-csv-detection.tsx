@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
@@ -33,6 +33,36 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [processed, setProcessed] = useState(0);
   const [total, setTotal] = useState(0);
   const runRef = useRef(0);
+  const watchingRef = useRef(false);
+  const storageKey = `robo-flow:stock-colab:${projectId}`;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        token: string;
+        configUrl: string;
+        colabUrl: string;
+        total: number;
+      };
+      if (!saved.token) return;
+      setSessionToken(saved.token);
+      setConfigUrl(saved.configUrl || "");
+      setColabUrl(saved.colabUrl || "");
+      setTotal(saved.total || 0);
+      setProgress("Previous Colab session restored — checking progress…");
+      const runToken = ++runRef.current;
+      void watchSession(saved.token, runToken);
+    } catch {
+      window.localStorage.removeItem(storageKey);
+    }
+    return () => {
+      runRef.current += 1;
+      watchingRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
 
   const totals = useMemo(() => {
     const result: Record<string, number> = {};
@@ -70,6 +100,15 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       setColabUrl(launch.colab_url);
       setSessionToken(launch.token);
       setTotal(launch.total);
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          token: launch.token,
+          configUrl: launch.config_url,
+          colabUrl: launch.colab_url,
+          total: launch.total,
+        })
+      );
       try {
         await navigator.clipboard.writeText(launch.config_url);
       } catch {
@@ -96,13 +135,20 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setRunning(true);
     setError(null);
     setProgress("Colab opened — config URL paste karke wohi cell Run karein; install aur check khud start hoga.");
+    await watchSession(sessionToken, token);
+  }
+
+  async function watchSession(tokenValue: string, token: number) {
+    if (watchingRef.current) return;
+    watchingRef.current = true;
     try {
       while (token === runRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
         if (token !== runRef.current) return;
-        const session = await fetchStockColabSession(sessionToken);
+        const session = await fetchStockColabSession(tokenValue);
         if ("actionError" in session) throw new Error(session.actionError);
         setRows(session.results as Row[]);
+        setRunning(session.status === "running");
         setProcessed(session.processed);
         setTotal(session.total);
         setProgress(`${session.message} · ${session.processed}/${session.total}`);
@@ -115,6 +161,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     } catch (e) {
       setError(e instanceof Error ? e.message : "Colab progress failed");
     } finally {
+      watchingRef.current = false;
       if (token === runRef.current) setRunning(false);
     }
   }
@@ -130,6 +177,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setSessionToken("");
     setProcessed(0);
     setTotal(0);
+    watchingRef.current = false;
+    window.localStorage.removeItem(storageKey);
   }
 
   return (
@@ -199,15 +248,16 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
             </p>
           </section>
 
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((row, index) => (
-            <article key={`${row.url}-${index}`} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <article key={`${row.url}-${index}`} className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-4 py-3 text-sm font-medium">Result Image {index + 1}</div>
-              <div className="grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_280px]">
-                <div className="relative flex justify-center rounded-lg bg-slate-100 p-2">
+              <div className="flex flex-1 flex-col gap-4 p-4">
+                <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg bg-slate-100 p-2">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="max-h-[70vh] w-full object-contain" loading="lazy" />
+                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="h-full w-full object-contain" loading="lazy" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   {row.error ? <Alert variant="error">{row.error}</Alert> : <>
                     <h5 className="text-sm font-semibold">Counts</h5>
                     <div className="mt-2 space-y-1 text-sm">
@@ -222,6 +272,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
               </div>
             </article>
           ))}
+          </div>
         </div>
       )}
     </div>
