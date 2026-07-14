@@ -203,30 +203,34 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
                 </div>
                 <VerdictBadge item={item} />
               </div>
-              <div className="grid gap-3 p-3 sm:grid-cols-2">
-                <figure>
-                  <figcaption className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+              <div className="grid gap-4 p-4 sm:grid-cols-2">
+                <figure className="min-w-0">
+                  <figcaption className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                     Result Image
                   </figcaption>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={proxySrc(item.resultUrl)}
-                    alt=""
-                    className="h-48 w-full rounded-lg object-cover bg-slate-200"
-                    loading="lazy"
-                  />
+                  <div className="flex items-center justify-center rounded-lg bg-slate-100 p-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={proxySrc(item.resultUrl)}
+                      alt="Result"
+                      className="max-h-[70vh] w-full object-contain"
+                      loading="lazy"
+                    />
+                  </div>
                 </figure>
-                <figure>
-                  <figcaption className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                <figure className="min-w-0">
+                  <figcaption className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                     Similar Image
                   </figcaption>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={proxySrc(item.similarUrl)}
-                    alt=""
-                    className="h-48 w-full rounded-lg object-cover bg-slate-200"
-                    loading="lazy"
-                  />
+                  <div className="flex items-center justify-center rounded-lg bg-slate-100 p-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={proxySrc(item.similarUrl)}
+                      alt="Similar"
+                      className="max-h-[70vh] w-full object-contain"
+                      loading="lazy"
+                    />
+                  </div>
                 </figure>
               </div>
             </article>
