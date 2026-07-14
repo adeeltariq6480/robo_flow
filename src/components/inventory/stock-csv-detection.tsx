@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
 import { extractImageUrls } from "@/lib/stock-csv-download";
 import type { DirectStockResult } from "@/lib/worker/client";
-import { Copy, ExternalLink, Play, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, ExternalLink, Package, Play, X } from "lucide-react";
 
 interface Props {
   projectId: string;
@@ -244,39 +244,63 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
 
       {rows.length > 0 && (
         <ResultsPortal>
-        <div className="mt-5 space-y-5">
-          <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <h4 className="font-semibold text-emerald-950">Product summary</h4>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {Object.entries(totals).map(([name, count]) => <span key={name} className="rounded-full bg-white px-3 py-1 text-sm">{name}: <strong>{count}</strong></span>)}
-              {!Object.keys(totals).length && <span className="text-sm">No products detected yet.</span>}
+        <div className="space-y-6">
+          <section className="overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-cyan-50 shadow-sm">
+            <div className="flex flex-col gap-3 border-b border-emerald-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <span className="rounded-xl bg-emerald-600 p-2 text-white shadow-sm">
+                  <Package className="h-5 w-5" />
+                </span>
+                <div>
+                  <h4 className="font-semibold text-slate-950">Product summary</h4>
+                  <p className="text-xs text-slate-500">{rows.length} images checked · {Object.values(totals).reduce((sum, count) => sum + count, 0)} products found</p>
+                </div>
+              </div>
+              <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-semibold text-emerald-700 shadow-sm ring-1 ring-emerald-100">
+                Colab analysis
+              </span>
             </div>
-            <p className="mt-3 text-sm text-amber-900">
-              Needs model work: {Object.entries(reviewTotals).length
-                ? Object.entries(reviewTotals).sort((a,b) => b[1]-a[1]).map(([n,c]) => `${n} (${c} low-confidence)`).join(", ")
-                : "No low-confidence product detections found."}
-            </p>
+            <div className="p-5">
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(totals).sort((a,b) => b[1]-a[1]).map(([name, count]) => (
+                  <span key={name} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
+                    <span className="max-w-[180px] truncate">{name}</span>
+                    <strong className="rounded-lg bg-emerald-600 px-2 py-0.5 text-xs text-white">{count}</strong>
+                  </span>
+                ))}
+                {!Object.keys(totals).length && <span className="text-sm text-slate-500">No products detected yet.</span>}
+              </div>
+              <div className={`mt-4 flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm ${Object.keys(reviewTotals).length ? "bg-amber-50 text-amber-900 ring-1 ring-amber-200" : "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100"}`}>
+                {Object.keys(reviewTotals).length ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+                <p><strong>Needs model work:</strong> {Object.entries(reviewTotals).length
+                  ? Object.entries(reviewTotals).sort((a,b) => b[1]-a[1]).map(([n,c]) => `${n} (${c} low-confidence)`).join(", ")
+                  : "No low-confidence product detections found."}</p>
+              </div>
+            </div>
           </section>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {rows.map((row, index) => (
-            <article key={`${row.url}-${index}`} className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <div className="border-b border-slate-100 px-4 py-3 text-sm font-medium">Result Image {index + 1}</div>
-              <div className="flex flex-1 flex-col gap-4 p-4">
-                <div className="relative flex items-center justify-center overflow-hidden rounded-lg bg-slate-100 p-2">
+            <article key={`${row.url}-${index}`} className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg">
+              <div className="flex items-center justify-between border-b border-slate-100 px-3.5 py-2.5">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Image {index + 1}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">{Object.values(row.counts || {}).reduce((sum, count) => sum + count, 0)} found</span>
+              </div>
+              <div className="flex flex-1 flex-col gap-3 p-3">
+                <div className="relative flex items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-50 p-1.5 ring-1 ring-slate-100">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="max-h-[70vh] w-full object-contain" loading="lazy" />
+                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="max-h-[70vh] w-full rounded-lg object-contain transition duration-300 group-hover:scale-[1.01]" loading="lazy" />
                 </div>
                 <div className="min-w-0">
                   {row.error ? <Alert variant="error">{row.error}</Alert> : <>
-                    <h5 className="text-sm font-semibold">Counts</h5>
-                    <div className="mt-2 space-y-1 text-sm">
-                      {Object.entries(row.counts).map(([name, count]) => <p key={name}>{name}: <strong>{count}</strong></p>)}
-                      {!Object.keys(row.counts).length && <p>No product detected</p>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(row.counts).sort((a,b) => b[1]-a[1]).map(([name, count]) => <span key={name} title={name} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700"><span className="truncate">{name}</span><strong className="text-emerald-700">{count}</strong></span>)}
+                      {!Object.keys(row.counts).length && <p className="text-xs text-slate-500">No product detected</p>}
                     </div>
-                    <p className={`mt-4 text-sm ${row.possible_wrong ? "text-amber-800" : "text-emerald-700"}`}>
-                      {row.possible_wrong ? `${row.possible_wrong} possible wrong/low-confidence detection(s): ${Object.entries(row.needs_review).map(([n,c]) => `${n} ${c}`).join(", ")}` : "No suspicious low-confidence detection"}
-                    </p>
+                    <div className={`mt-3 flex items-start gap-1.5 rounded-lg px-2 py-1.5 text-xs ${row.possible_wrong ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-700"}`}>
+                      {row.possible_wrong ? <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                      <span>{row.possible_wrong ? `${row.possible_wrong} possible wrong: ${Object.entries(row.needs_review).map(([n,c]) => `${n} ${c}`).join(", ")}` : "Detection looks good"}</span>
+                    </div>
                   </>}
                 </div>
               </div>
