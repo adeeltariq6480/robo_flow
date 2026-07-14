@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
 import { extractImageUrls } from "@/lib/stock-csv-download";
 import type { DirectStockResult } from "@/lib/worker/client";
-import { Play, X } from "lucide-react";
+import { Copy, ExternalLink, Play, X } from "lucide-react";
 
 interface Props {
   projectId: string;
@@ -27,6 +27,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [configUrl, setConfigUrl] = useState("");
+  const [colabUrl, setColabUrl] = useState("");
   const runRef = useRef(0);
 
   const totals = useMemo(() => {
@@ -54,12 +56,16 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setRunning(true);
     setRows([]);
     setError(null);
+    setConfigUrl("");
+    setColabUrl("");
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
       setProgress("Creating temporary Colab session…");
       const launch = await openStockColabCheck(projectId, modelIds, parsed.urls);
       if ("error" in launch) throw new Error(launch.error);
+      setConfigUrl(launch.config_url);
+      setColabUrl(launch.colab_url);
       try {
         await navigator.clipboard.writeText(launch.config_url);
       } catch {
@@ -70,7 +76,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       } else {
         window.open(launch.colab_url, "_blank", "noopener,noreferrer");
       }
-      setProgress(`Colab opened — config URL copied. Cell 2 mein paste karein, phir Runtime → Run all. URL: ${launch.config_url}`);
+      setProgress("Colab opened — Cell 2 mein config URL paste karein, phir Runtime → Run all.");
 
       while (token === runRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
@@ -100,6 +106,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setRows([]);
     setProgress("");
     setError(null);
+    setConfigUrl("");
+    setColabUrl("");
   }
 
   return (
@@ -115,6 +123,24 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
         <span className="text-xs text-slate-500">Direct temporary check · no image/job/result saved</span>
       </div>
       {progress && <p className="mt-3 text-sm text-slate-600">{progress}</p>}
+      {configUrl && (
+        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+          <p className="text-sm font-semibold text-blue-950">Stock Check Config URL</p>
+          <code className="mt-2 block max-h-24 overflow-auto break-all rounded border border-blue-200 bg-white p-2 text-xs text-blue-900">
+            {configUrl}
+          </code>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={() => void navigator.clipboard.writeText(configUrl)}>
+              <Copy className="h-4 w-4" /> Copy config URL
+            </Button>
+            {colabUrl && (
+              <Button type="button" variant="secondary" onClick={() => window.open(colabUrl, "_blank", "noopener,noreferrer")}>
+                <ExternalLink className="h-4 w-4" /> Open Colab again
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       {error && <div className="mt-3"><Alert variant="error">{error}</Alert></div>}
 
       {rows.length > 0 && (

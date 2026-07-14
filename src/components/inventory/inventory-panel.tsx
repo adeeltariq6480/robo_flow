@@ -514,13 +514,13 @@ export function InventoryPanel({
             </div>
           </fieldset>
 
-          <label className="block text-sm">
+          <label className="block min-w-[180px] text-sm">
             <span className="mb-1 block text-slate-600">Shared image limit</span>
             <input
               type="number"
               min={1}
               max={500}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm mt-3"
+              className="h-10 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={downloadLimit}
               disabled={csvDownloading}
               onChange={(e) => setDownloadLimit(Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
