@@ -1,7 +1,8 @@
 "use client";
 
 const KEY = "axiomai:deleteStatus";
-const TTL_MS = 90_000;
+/** Keep banner visible long enough for large delete-all jobs while user navigates away. */
+const TTL_MS = 10 * 60_000;
 
 export function setDeleteStatus(active: boolean, label = "Deleting items...") {
   try {

@@ -186,6 +186,8 @@ export interface DatasetInventory {
   labeled_count: number;
   total_objects: number;
   class_totals: Record<string, number>;
+  /** Stable class column order for stock-check table/grid */
+  class_names?: string[];
   images: DatasetInventoryImage[];
 }
 

@@ -745,8 +745,9 @@ def list_dataset_images(project_id: str, dataset_id: str) -> list[dict]:
 
 def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
     """
-    Per-image class counts for labeled / reviewed images.
+    All dataset images with per-image class counts.
     Example per image: {"Pepsi 250ml": 4, "7up": 2, ...}
+    Unlabeled images are included with empty class_counts.
     """
     images = list_dataset_images(project_id, dataset_id)
     attach_annotation_fields_to_images(project_id, images)
@@ -757,6 +758,7 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
             "labeled_count": 0,
             "total_objects": 0,
             "class_totals": {},
+            "class_names": [],
             "images": [],
         }
 
@@ -788,6 +790,7 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
         "auto_labeled",
     }
     out_images: list[dict] = []
+    labeled_count = 0
     for img in images:
         iid = str(img["id"])
         status = str(img.get("status") or "").strip().lower().replace("-", "_")
@@ -801,15 +804,14 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
             or status in labeled_statuses
             or review in {"approved", "rejected", "reviewed", "pending"}
         )
-        if not is_labeled:
-            continue
-        # Sort counts by class name for stable UI
+        if is_labeled:
+            labeled_count += 1
         sorted_counts = dict(sorted(class_counts.items(), key=lambda x: x[0].lower()))
         out_images.append(
             {
                 "image_id": iid,
                 "file_name": img.get("fileName") or img.get("file_name") or iid,
-                "status": status or "labeled",
+                "status": status or ("labeled" if is_labeled else "uploaded"),
                 "review_status": review or None,
                 "width": img.get("width"),
                 "height": img.get("height"),
@@ -819,12 +821,14 @@ def get_dataset_inventory(project_id: str, dataset_id: str) -> dict:
         )
 
     sorted_totals = dict(sorted(class_totals.items(), key=lambda x: (-x[1], x[0].lower())))
+    class_names = list(sorted_totals.keys())
     return {
         "dataset_id": dataset_id,
-        "image_count": len(images),
-        "labeled_count": len(out_images),
+        "image_count": len(out_images),
+        "labeled_count": labeled_count,
         "total_objects": sum(sorted_totals.values()),
         "class_totals": sorted_totals,
+        "class_names": class_names,
         "images": out_images,
     }
 
