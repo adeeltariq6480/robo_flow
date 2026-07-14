@@ -37,6 +37,16 @@ def _clear_runtime_memory() -> None:
         logger.debug("Torch memory cleanup skipped", exc_info=True)
 
 
+def _class_name(names: Any, class_id: int) -> str:
+    """Read a class name from Ultralytics/legacy dict, list, or tuple metadata."""
+    if isinstance(names, dict):
+        value = names.get(class_id, names.get(str(class_id), class_id))
+        return str(value)
+    if isinstance(names, (list, tuple)) and 0 <= class_id < len(names):
+        return str(names[class_id])
+    return str(class_id)
+
+
 def clear_legacy_runtime_state() -> None:
     """Drop torch.hub imports and cached hub modules after a failed legacy load."""
     import sys
@@ -667,7 +677,7 @@ class UniversalYOLOModel:
             if boxes is not None:
                 for box in boxes:
                     cls_idx = int(box.cls[0])
-                    class_name = names.get(cls_idx, str(cls_idx))
+                    class_name = _class_name(names, cls_idx)
                     xywhn = box.xywhn[0].tolist()
 
                     detections.append(
@@ -702,7 +712,7 @@ class UniversalYOLOModel:
             for pred in predictions:
                 x_min, y_min, x_max, y_max, conf, class_id = pred.tolist()
                 class_id = int(class_id)
-                class_name = results.names.get(class_id, str(class_id))
+                class_name = _class_name(getattr(results, "names", {}), class_id)
 
                 # Normalize coordinates
                 detections.append(
