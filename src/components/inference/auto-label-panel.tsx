@@ -559,7 +559,7 @@ export function AutoLabelPanel({
         </p>
 
         <div className="flex flex-wrap gap-2">
-          <Button
+          {/* <Button
             onClick={() => handleRun(false)}
             loading={loading}
             disabled={isRunning || selectedModelIds.length === 0 || imagesToLabel === 0}
@@ -570,7 +570,7 @@ export function AutoLabelPanel({
               : lockDataset
                 ? "Label on Railway"
                 : "Start auto-label"}
-          </Button>
+          </Button> */}
 
           <Button
             type="button"
