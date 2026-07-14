@@ -46,6 +46,10 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
 
   async function handleCheck() {
     if (!csvFile || running || modelIds.length === 0) return;
+    // Open synchronously from the click so popup blockers do not swallow Colab
+    // while CSV parsing/session creation is still awaiting.
+    const colabWindow = window.open("about:blank", "_blank");
+    if (colabWindow) colabWindow.opener = null;
     const token = ++runRef.current;
     setRunning(true);
     setRows([]);
@@ -56,8 +60,17 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       setProgress("Creating temporary Colab session…");
       const launch = await openStockColabCheck(projectId, modelIds, parsed.urls);
       if ("error" in launch) throw new Error(launch.error);
-      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
-      setProgress("Colab opened — click Runtime → Run all. Waiting for GPU…");
+      try {
+        await navigator.clipboard.writeText(launch.config_url);
+      } catch {
+        // The URL is also shown below if browser clipboard permission is blocked.
+      }
+      if (colabWindow) {
+        colabWindow.location.href = launch.colab_url;
+      } else {
+        window.open(launch.colab_url, "_blank", "noopener,noreferrer");
+      }
+      setProgress(`Colab opened — config URL copied. Cell 2 mein paste karein, phir Runtime → Run all. URL: ${launch.config_url}`);
 
       while (token === runRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
@@ -73,6 +86,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
         if (session.status === "failed") throw new Error(session.error || "Colab check failed");
       }
     } catch (e) {
+      colabWindow?.close();
       setError(e instanceof Error ? e.message : "Stock check failed");
       setProgress("");
     } finally {

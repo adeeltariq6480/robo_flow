@@ -190,7 +190,7 @@ export async function startStockColabSession(body: {
   confidence?: number;
   iou?: number;
 }) {
-  return workerFetch<{ session_id: string; token: string; colab_url: string; total: number }>(
+  return workerFetch<{ session_id: string; token: string; colab_url: string; config_url: string; total: number }>(
     "/api/stock-colab/start",
     { method: "POST", body: JSON.stringify(body) }
   );

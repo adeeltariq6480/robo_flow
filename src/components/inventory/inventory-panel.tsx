@@ -520,13 +520,14 @@ export function InventoryPanel({
               type="number"
               min={1}
               max={500}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm mt-3"
               value={downloadLimit}
               disabled={csvDownloading}
               onChange={(e) => setDownloadLimit(Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
             />
+              <span className="mt-1 block text-xs text-slate-400">Same limit for detection, ZIP and Similar check</span>
           </label>
-          <span className="mt-1 block text-xs text-slate-400">Same limit for detection, ZIP and Similar check</span>
+        
           <Button
             type="button"
             loading={csvDownloading}

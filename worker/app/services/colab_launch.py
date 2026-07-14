@@ -95,6 +95,19 @@ def github_colab_notebook_url() -> str:
     )
 
 
+def github_stock_notebook_url() -> str:
+    repo = github_repo_url().rstrip("/")
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    parts = repo.replace("https://github.com/", "").split("/")
+    if len(parts) >= 2:
+        return (
+            f"https://colab.research.google.com/github/{parts[0]}/{parts[1]}/blob/main/"
+            "notebooks/colab_stock_check.ipynb"
+        )
+    return "https://colab.research.google.com/github/adeeltariq6480/robo_flow/blob/main/notebooks/colab_stock_check.ipynb"
+
+
 def build_prefill_url(token: str) -> str:
     encoded = urllib.parse.quote(token, safe="")
     return f"{public_worker_url()}/api/colab/prefill/{encoded}"
