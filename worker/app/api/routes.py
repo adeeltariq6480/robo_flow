@@ -54,10 +54,20 @@ from app.services import supabase_repo as repo
 from app.services import model_batch_upload
 from app.services import model_chunk_upload
 from app.services.storage import persist_model_bytes_locally, resolve_model_local_path
-from app.services.yolo_inference import describe_model_status
 from app.services.model_validator import detect_model_type, validate_model_file
 
 logger = logging.getLogger(__name__)
+
+
+def describe_model_status(model_path: Path) -> dict:
+    """File existence only — does not import torch/YOLO (Railway API-safe)."""
+    exists = model_path.exists()
+    return {
+        "model_loaded": False,
+        "model_file_exists": exists,
+        "model_path": str(model_path),
+        "note": "Railway API-only: model load status is not tracked without YOLO runtime",
+    }
 
 jobs_router = APIRouter(prefix="/jobs", tags=["jobs"])
 api_router = APIRouter(prefix="/api", tags=["api"])
@@ -2311,6 +2321,14 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
 @jobs_router.post("/test-run", response_model=JobCreateResponse)
 @api_router.post("/test-run", response_model=JobCreateResponse)
 async def create_test_run(body: TestRunRequest, _: None = Depends(verify_api_key)):
+    if not settings.run_auto_label_worker:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "RUN_AUTO_LABEL_WORKER=false: Railway does not run YOLO. "
+                "Use Google Colab for test-run / inference."
+            ),
+        )
     if not body.image_path and not body.dataset_file_id:
         raise HTTPException(status_code=400, detail="Provide image_path or dataset_file_id")
     job_id, queue, position = await submit_job(
@@ -2353,6 +2371,16 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         if relabel_all
         else f"{scope_count} unlabeled / empty-detection image(s)"
     )
+    if not settings.run_auto_label_worker:
+        return JobCreateResponse(
+            job_id=job_id,
+            queue_name=queue,
+            status=JobStatus.QUEUED,
+            message=(
+                f"Auto-label queued for Google Colab worker: {scope} with "
+                f"{len(model_ids)} model(s). Start Colab worker to process."
+            ),
+        )
     return JobCreateResponse(
         job_id=job_id, queue_name=queue, status=JobStatus.QUEUED,
         message=(
@@ -2365,6 +2393,14 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
 @jobs_router.post("/model-compare", response_model=JobCreateResponse)
 @api_router.post("/model-compare", response_model=JobCreateResponse)
 async def create_model_compare(body: ModelCompareRequest, _: None = Depends(verify_api_key)):
+    if not settings.run_auto_label_worker:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "RUN_AUTO_LABEL_WORKER=false: Railway does not run YOLO. "
+                "Use Google Colab for model compare / inference."
+            ),
+        )
     if not body.image_path and not body.dataset_file_id:
         raise HTTPException(status_code=400, detail="Provide image_path or dataset_file_id")
     job_id, queue, position = await submit_job(

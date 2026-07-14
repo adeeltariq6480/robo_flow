@@ -85,10 +85,26 @@ export function DetectionResults({ job }: { job: JobResponse }) {
         </p>
         {modelsFailed > 0 && modelsUsed > 0 && (
           <p className="mt-2 text-xs text-amber-900">
-            {modelsUsed} model(s) loaded OK, but {modelsFailed} selected model
-            {modelsFailed !== 1 ? "s" : ""} had missing files — only loaded models were used.
-            Re-upload the missing models.
+            You selected {modelsSelected} model{modelsSelected !== 1 ? "s" : ""}, but only{" "}
+            {modelsUsed} merged into labels. The {modelsFailed} failed model
+            {modelsFailed !== 1 ? "s" : ""} below were skipped (download / load / incompatible /
+            OOM). Fix and re-run, or deselect them.
           </p>
+        )}
+        {modelFailures.length > 0 && (
+          <div className="mt-2 rounded border border-amber-300 bg-amber-100/60 px-3 py-2">
+            <p className="text-xs font-semibold text-amber-950">
+              Why these models did not merge:
+            </p>
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-950">
+              {modelFailures.slice(0, 8).map((m) => (
+                <li key={m.model_id}>
+                  <span className="font-medium">{m.model_name ?? m.model_id.slice(0, 8)}</span>
+                  : {m.error}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {(skippedAlreadyLabeled > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0) && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
@@ -125,16 +141,6 @@ export function DetectionResults({ job }: { job: JobResponse }) {
           <p className="mt-2 text-amber-800">
             To relabel images that already have labels, tick &quot;Relabel already labeled images&quot;.
           </p>
-        )}
-        {modelFailures.length > 0 && (
-          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
-            {modelFailures.slice(0, 5).map((m) => (
-              <li key={m.model_id}>
-                <span className="font-medium">{m.model_name ?? m.model_id.slice(0, 8)}</span>
-                : {m.error}
-              </li>
-            ))}
-          </ul>
         )}
       </div>
     );

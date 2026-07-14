@@ -286,6 +286,10 @@ def _compact_job_result(
         "models_loaded": loaded_count,
         "models_failed": failed_count,
         "models_used": loaded_count,
+        "models_merge_summary": (
+            f"{loaded_count} of {selected_count} models merged"
+            + (f"; {failed_count} failed" if failed_count else "")
+        ),
         "total_files": total,
         "labeled": labeled,
         "failed": failed,
@@ -1183,9 +1187,25 @@ async def run_auto_label(
         except FileNotFoundError as exc:
             logger.warning("model skipped %s: %s", model_id, exc)
             model_failures[model_id] = _model_failure_message(exc)
+            await update_job(
+                job_id,
+                progress_message=(
+                    f"Model download failed ({mi + 1}/{num_models}): "
+                    f"{_model_display_name(project_id, model_id)} — {model_failures[model_id]}"
+                )[:900],
+                project_id=project_id,
+            )
         except Exception as exc:
             logger.exception("Model download failed %s", model_id)
             model_failures[model_id] = _model_failure_message(exc)
+            await update_job(
+                job_id,
+                progress_message=(
+                    f"Model download failed ({mi + 1}/{num_models}): "
+                    f"{_model_display_name(project_id, model_id)} — {model_failures[model_id]}"
+                )[:900],
+                project_id=project_id,
+            )
 
     if prep_failures:
         logger.info(
@@ -1320,10 +1340,33 @@ async def run_auto_label(
             except IncompatibleModelError as exc:
                 await _safe_update_model_status(project_id, model_id, "incompatible_runtime")
                 model_failures[model_id] = _model_failure_message(exc)
+                await update_job(
+                    job_id,
+                    progress_message=(
+                        f"Skipped model {_model_display_name(project_id, model_id)}: "
+                        f"{model_failures[model_id]}"
+                    )[:900],
+                    project_id=project_id,
+                )
             except asyncio.TimeoutError:
                 model_failures[model_id] = "Model load timed out"
+                await update_job(
+                    job_id,
+                    progress_message=(
+                        f"Skipped model {_model_display_name(project_id, model_id)}: load timed out"
+                    ),
+                    project_id=project_id,
+                )
             except MemoryLimitExceeded as exc:
                 model_failures[model_id] = str(exc)
+                await update_job(
+                    job_id,
+                    progress_message=(
+                        f"Skipped model {_model_display_name(project_id, model_id)}: "
+                        f"out of memory ({exc})"
+                    )[:900],
+                    project_id=project_id,
+                )
                 if models_pinned:
                     for prev_id in ready_model_ids:
                         await asyncio.to_thread(unload_model, model_paths[prev_id])
@@ -1331,6 +1374,14 @@ async def run_auto_label(
             except Exception as exc:
                 model_failures[model_id] = _model_failure_message(exc)
                 logger.warning("model prep failed %s: %s", model_id, exc)
+                await update_job(
+                    job_id,
+                    progress_message=(
+                        f"Skipped model {_model_display_name(project_id, model_id)}: "
+                        f"{model_failures[model_id]}"
+                    )[:900],
+                    project_id=project_id,
+                )
 
         if models_pinned and len(ready_model_ids) != model_count:
             await asyncio.to_thread(release_all_models)
@@ -1338,35 +1389,64 @@ async def run_auto_label(
             models_pinned = False
 
         if not ready_model_ids:
+            hint = _format_model_failures(project_id, model_failures)
             raise ValueError(
                 "No models could be prepared for merge. "
-                + "; ".join(
-                    f"{k}: {v}" for k, v in list(model_failures.items())[:3]
-                )
+                + (hint or "Unknown load errors.")
             )
 
         n_ready = len(ready_model_ids)
-        merge_msg = (
-            f"All {n_ready} model(s) merged — starting labels on {total} image(s)…"
-        )
-        if models_pinned:
+        n_selected = len(selected_model_ids)
+        n_failed = len(model_failures)
+        if n_failed > 0:
+            fail_hint = _format_model_failures(project_id, model_failures)
             merge_msg = (
-                f"All {n_ready} models merged in memory — "
+                f"{n_ready} of {n_selected} model(s) ready for merge "
+                f"({n_failed} failed — {fail_hint}). "
+                f"Starting labels on {total} image(s)…"
+            )
+            print(
+                f"\n⚠️ MODEL MERGE WARNING: {n_ready}/{n_selected} models will be used.\n"
+                f"Failed models ({n_failed}):\n"
+                + "\n".join(
+                    f"  • {_model_display_name(project_id, mid)}: {err}"
+                    for mid, err in model_failures.items()
+                )
+                + "\n",
+                flush=True,
+            )
+            logger.warning(
+                "Job %s: partial merge %d/%d ready; failures: %s",
+                job_id,
+                n_ready,
+                n_selected,
+                fail_hint,
+            )
+        elif models_pinned:
+            merge_msg = (
+                f"All {n_ready} of {n_selected} models merged in memory — "
+                f"starting labels on {total} image(s)…"
+            )
+        else:
+            merge_msg = (
+                f"All {n_ready} of {n_selected} model(s) ready — "
                 f"starting labels on {total} image(s)…"
             )
 
         await update_job(
             job_id,
             progress=24,
-            progress_message=merge_msg,
+            progress_message=merge_msg[:900],
             processed_items=0,
             project_id=project_id,
         )
         logger.info(
-            "Job %s: phase 2 — %d model(s) merged, pinned=%s",
+            "Job %s: phase 2 — %d/%d model(s) merged, pinned=%s, failures=%d",
             job_id,
             n_ready,
+            n_selected,
             models_pinned,
+            n_failed,
         )
 
         for idx, file_row in enumerate(file_list):

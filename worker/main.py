@@ -16,8 +16,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    queue_manager.set_processor(process_job)
-    await queue_manager.start()
+    if settings.run_auto_label_worker:
+        queue_manager.set_processor(process_job)
+        await queue_manager.start()
+        logger.info("Local job queue started (RUN_AUTO_LABEL_WORKER=true)")
+    else:
+        logger.info(
+            "Railway API-only mode (RUN_AUTO_LABEL_WORKER=false) — "
+            "no local YOLO queue; Colab worker processes auto-label jobs"
+        )
     if not settings.supabase_configured:
         logger.warning("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — API will fail")
     if not settings.hf_configured:
@@ -26,6 +33,8 @@ async def lifespan(app: FastAPI):
         )
     # Log Hugging Face upload configuration
     try:
+        logger.info("RUN_AUTO_LABEL_WORKER=%s", settings.run_auto_label_worker)
+        logger.info("DISABLE_MODEL_PREWARM=%s", settings.disable_model_prewarm)
         logger.info("HF_UPLOAD_ENABLED=%s", settings.hf_upload_enabled)
         logger.info("HF_TOKEN present=%s", bool(settings.hf_token and settings.hf_token.strip()))
         logger.info("HF_DATASET_REPO=%s", settings.dataset_repo_id or None)
@@ -66,7 +75,7 @@ async def lifespan(app: FastAPI):
                     settings.model_repo_id,
                     settings.model_repo_type,
                 )
-        # YOLO runtime settings
+        # YOLO runtime settings (informational — not loaded when API-only)
         import os
         logger.info("ENABLE_YOLOV5_RUNTIME=%s", os.getenv("ENABLE_YOLOV5_RUNTIME", "false"))
         logger.info("YOLOV5_REPO_REF=%s", os.getenv("YOLOV5_REPO_REF", "v6.2"))
@@ -74,7 +83,8 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to log HF startup configuration")
     logger.info("Axiom AI API started on %s:%s", settings.worker_host, settings.worker_port)
     yield
-    await queue_manager.stop()
+    if settings.run_auto_label_worker:
+        await queue_manager.stop()
     logger.info("API stopped")
 
 
@@ -131,12 +141,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def health():
     return {
         "status": "ok",
-        "queues": queue_manager.queue_stats(),
+        "run_auto_label_worker": settings.run_auto_label_worker,
+        "queues": queue_manager.queue_stats() if settings.run_auto_label_worker else {},
         "config": {
             "supabase": settings.supabase_configured,
             "huggingface": settings.hf_configured,
             "storage_backend": "huggingface",
             "dataset_repo": settings.dataset_repo_id or None,
             "model_repo": settings.model_repo_id or None,
+            "api_only": not settings.run_auto_label_worker,
         },
     }

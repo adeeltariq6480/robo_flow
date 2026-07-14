@@ -113,15 +113,16 @@ function parseAutoLabelProgress(message: string | undefined) {
   }
 
   const modelsReady = message.match(
-    /All\s+(\d+)\s+models?\s+merged(?:\s+in memory)?\s*—\s*starting labels on\s+(\d+)\s+image/i
+    /(?:All\s+)?(\d+)(?:\s+of\s+(\d+))?\s+models?\s+(?:merged|ready)(?:\s+in memory)?(?:\s*\((\d+)\s+failed[^)]*\))?\s*—\s*starting labels on\s+(\d+)\s+image/i
   );
   if (modelsReady) {
     return {
       image: 0,
-      images: Number(modelsReady[2]),
+      images: Number(modelsReady[4]),
       model: Number(modelsReady[1]),
-      models: Number(modelsReady[1]),
+      models: Number(modelsReady[2] || modelsReady[1]),
       phase: "models_ready" as const,
+      failedModels: modelsReady[3] ? Number(modelsReady[3]) : 0,
     };
   }
 
@@ -306,7 +307,9 @@ export function JobProgress({ jobId, projectId, onComplete }: JobProgressProps) 
             ? `Preparing ${parsed.models} models for merge (${parsed.model} of ${parsed.models})…`
             : `Preparing model for merge…`
           : "phase" in parsed && parsed.phase === "models_ready"
-            ? `${parsed.models} model${parsed.models !== 1 ? "s" : ""} merged — starting ${parsed.images} image(s)…`
+            ? "failedModels" in parsed && (parsed as { failedModels?: number }).failedModels
+              ? `${parsed.model} of ${parsed.models} models ready (${(parsed as { failedModels: number }).failedModels} failed) — starting ${parsed.images} image(s)…`
+              : `${parsed.models} model${parsed.models !== 1 ? "s" : ""} ready — starting ${parsed.images} image(s)…`
         : "phase" in parsed && parsed.phase === "refreshing"
           ? `Refreshing after image ${parsed.image}/${parsed.images}…`
         : "phase" in parsed && parsed.phase === "labeling" && parsed.models > 1 && parsed.image > 0

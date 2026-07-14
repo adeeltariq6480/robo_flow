@@ -588,8 +588,8 @@ export function AutoLabelPanel({
         </div>
 
         <p className="text-xs text-slate-500">
-          <strong>Open in Colab</strong> — progress appears on this page as soon as you click the
-          button. Then in Colab: Runtime → <strong>Run all</strong>.
+          <strong>Label on Railway</strong> creates a queued job only (no YOLO on Railway).{" "}
+          <strong>Open in Colab</strong> / Colab worker runs YOLO and updates progress here.
         </p>
 
         {(colabWatching || colabWatchMessage) && colabWatchMessage && (

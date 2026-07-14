@@ -205,8 +205,12 @@ def get_model(model_path: Path) -> UniversalYOLOModel:
 def prewarm_yolo(model_path: Path) -> None:
     """Load model into memory so the UI can show progress before the first image."""
     # Allow disabling prewarm (useful on memory-constrained hosts)
-    if os.getenv("DISABLE_MODEL_PREWARM", "true").lower() == "true":
-        logger.info("Model prewarm is disabled by DISABLE_MODEL_PREWARM")
+    if (
+        settings.disable_model_prewarm
+        or os.getenv("DISABLE_MODEL_PREWARM", "true").lower() == "true"
+        or not settings.run_auto_label_worker
+    ):
+        logger.info("Model prewarm is disabled (API-only or DISABLE_MODEL_PREWARM)")
         return
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")

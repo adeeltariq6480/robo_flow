@@ -104,6 +104,21 @@ class Settings(BaseSettings):
     batch_queue_workers: int = 1
     compare_queue_workers: int = 1
 
+    # --- Railway API vs Colab worker ---
+    run_auto_label_worker: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("RUN_AUTO_LABEL_WORKER"),
+        description=(
+            "When false (Railway API mode): create auto-label jobs as queued in Supabase "
+            "but do NOT run YOLO/torch locally. Google Colab worker processes them."
+        ),
+    )
+    disable_model_prewarm: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("DISABLE_MODEL_PREWARM"),
+        description="Skip YOLO prewarm on startup / model select",
+    )
+
     # --- Inference defaults ---
     default_confidence: float = 0.25
     default_iou: float = 0.45

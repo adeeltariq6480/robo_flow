@@ -116,7 +116,16 @@ async def create_job_record(
     return job_id
 
 
+def _railway_api_only() -> bool:
+    """True when this process must not run YOLO / torch inference."""
+    from app.config import settings
+
+    return not settings.run_auto_label_worker
+
+
 async def process_job(job_id: str) -> None:
+    from app.config import settings
+
     project_id = get_job_project(job_id)
     if not project_id:
         logger.error("Job %s missing project mapping (jobRegistry lookup failed)", job_id)
@@ -132,6 +141,26 @@ async def process_job(job_id: str) -> None:
 
     if job.get("status") == JobStatus.CANCELLED.value:
         logger.info("Job %s was cancelled before start", job_id)
+        return
+
+    # Railway API-only: never execute heavy YOLO jobs here
+    if _railway_api_only() and job_type in (
+        JobType.AUTO_LABEL,
+        JobType.TEST_RUN,
+        JobType.MODEL_COMPARE,
+    ):
+        logger.warning(
+            "Skipping local execution of %s job %s (RUN_AUTO_LABEL_WORKER=false). "
+            "Job stays queued for Google Colab worker.",
+            job_type.value,
+            job_id,
+        )
+        await update_job(
+            job_id,
+            status=JobStatus.QUEUED,
+            progress_message="Queued for Google Colab worker (Railway API-only mode)",
+            project_id=project_id,
+        )
         return
 
     await update_job(
@@ -200,20 +229,24 @@ async def process_job(job_id: str) -> None:
             project_id,
             exc,
         )
-        # Special-case memory pause so we don't mark as a hard failure
-        from app.services.yolo_inference import MemoryLimitExceeded
+        # Avoid importing torch/yolo_inference on Railway API-only hosts
+        if settings.run_auto_label_worker:
+            try:
+                from app.services.yolo_inference import MemoryLimitExceeded
 
-        if isinstance(exc, MemoryLimitExceeded):
-            logger.warning("Job %s paused due to memory limit: %s", job_id, exc)
-            await update_job(
-                job_id,
-                status=JobStatus.PAUSED_MEMORY_LIMIT,
-                progress_message="Paused (memory limit)",
-                error_message=str(exc),
-                mark_completed=True,
-                project_id=project_id,
-            )
-            return
+                if isinstance(exc, MemoryLimitExceeded):
+                    logger.warning("Job %s paused due to memory limit: %s", job_id, exc)
+                    await update_job(
+                        job_id,
+                        status=JobStatus.PAUSED_MEMORY_LIMIT,
+                        progress_message="Paused (memory limit)",
+                        error_message=str(exc),
+                        mark_completed=True,
+                        project_id=project_id,
+                    )
+                    return
+            except Exception:
+                pass
 
         await update_job(
             job_id,
@@ -230,8 +263,38 @@ async def submit_job(
     job_type: JobType,
     **kwargs,
 ) -> tuple[str, JobQueue, int]:
+    """Create a job row. Enqueue for local workers only when RUN_AUTO_LABEL_WORKER=true."""
     job_id = await create_job_record(project_id, job_type, **kwargs)
     register_job_project(job_id, project_id)
     queue = QUEUE_FOR_JOB_TYPE[job_type]
+
+    if _railway_api_only() and job_type == JobType.AUTO_LABEL:
+        await update_job(
+            job_id,
+            status=JobStatus.QUEUED,
+            progress_message="Queued for Google Colab worker",
+            project_id=project_id,
+        )
+        logger.info(
+            "Auto-label job %s created as queued (Colab will process; no Railway YOLO)",
+            job_id,
+        )
+        return job_id, queue, 0
+
+    if _railway_api_only() and job_type in (JobType.TEST_RUN, JobType.MODEL_COMPARE):
+        await update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            progress_message="Rejected — YOLO disabled on Railway",
+            error_message=(
+                "RUN_AUTO_LABEL_WORKER=false: Railway does not run YOLO. "
+                "Use Open in Colab / Colab worker for inference jobs."
+            ),
+            mark_completed=True,
+            project_id=project_id,
+        )
+        logger.warning("Rejected %s job %s — Railway API-only mode", job_type.value, job_id)
+        return job_id, queue, 0
+
     position = await queue_manager.enqueue(job_id, queue)
     return job_id, queue, position

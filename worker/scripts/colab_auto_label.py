@@ -45,6 +45,7 @@ def _apply_colab_defaults() -> None:
         "AUTO_COMMIT_AFTER_LABELS": "true",
         "AUTO_LABEL_SYNC_HF_BEFORE_START": "false",
         "UNIVERSAL_MODEL_LOAD": "true",
+        "RUN_AUTO_LABEL_WORKER": "true",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
@@ -125,7 +126,7 @@ def _model_id_list(args: argparse.Namespace) -> list[str]:
 
 
 def _submit_railway_job(args: argparse.Namespace) -> dict:
-    """Queue auto-label on Railway worker (used for fallback or railway-only)."""
+    """Queue auto-label via Railway API (creates Supabase job; Colab worker runs YOLO)."""
     model_ids = _model_id_list(args)
     base = (args.railway_url or DEFAULT_RAILWAY_URL).rstrip("/")
     url = f"{base}/jobs/auto-label"
@@ -238,18 +239,19 @@ async def _run_colab_session(args: argparse.Namespace) -> str:
 
 async def _run_with_fallback(args: argparse.Namespace) -> int:
     if args.railway_only:
-        print("Railway-only mode — skipping Colab.")
+        print("Queue-only — creating Supabase job via Railway API (no local YOLO).")
         result = await asyncio.to_thread(_submit_railway_job, args)
-        print(f"Queued on Railway: job_id={result.get('job_id')}")
+        print(f"Queued: job_id={result.get('job_id')}")
         print(f"Message: {result.get('message', '')}")
-        print(f"Watch progress in your Vercel app.")
+        print("Process with: python scripts/colab_auto_label_worker.py")
         return 0
 
     if not _is_colab():
-        print("Not running inside Google Colab — using Railway directly.")
+        print("Not inside Colab — queueing on Railway API for Colab worker.")
         result = await asyncio.to_thread(_submit_railway_job, args)
-        print(f"Queued on Railway: job_id={result.get('job_id')}")
+        print(f"Queued: job_id={result.get('job_id')}")
         print(f"Message: {result.get('message', '')}")
+        print("Run scripts/colab_auto_label_worker.py on Colab to process.")
         return 0
 
     try:
@@ -275,27 +277,28 @@ async def _run_with_fallback(args: argparse.Namespace) -> int:
             except Exception:
                 pass
         if args.no_railway_fallback:
-            print("Railway fallback disabled (--no-railway-fallback).")
+            print("Fallback disabled (--no-railway-fallback).")
             raise
 
         print()
         print("=" * 60)
-        print("Auto-fallback → Railway worker")
+        print("Fallback: re-queue on Railway API (YOLO not run on Railway)")
+        print("Then run: python scripts/colab_auto_label_worker.py")
         print(f"URL: {args.railway_url}")
         print("=" * 60)
         try:
             result = await asyncio.to_thread(_submit_railway_job, args)
-            print(f"Queued on Railway: job_id={result.get('job_id')}")
+            print(f"Queued: job_id={result.get('job_id')}")
             print(f"Message: {result.get('message', '')}")
-            print("Open your Vercel app to watch progress.")
             return 0
         except Exception as railway_exc:
-            print(f"Railway fallback also failed: {railway_exc}")
+            print(f"Queue also failed: {railway_exc}")
             raise
 
 
 def main() -> None:
     _apply_colab_defaults()
+    os.environ["RUN_AUTO_LABEL_WORKER"] = "true"
     args = _parse_args()
     _apply_secrets(args)
     raise SystemExit(asyncio.run(_run_with_fallback(args)))

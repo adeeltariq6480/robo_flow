@@ -1048,6 +1048,47 @@ def find_active_labelling_job(
     return _job_row(rows[0]) if rows else None
 
 
+def claim_next_queued_auto_label_job() -> dict | None:
+    """
+    Atomically claim the oldest queued auto_label job (queued → running).
+    Returns camelCase job row or None if nothing to claim.
+    """
+    res = (
+        _sb()
+        .table("labelling_jobs")
+        .select("*")
+        .eq("job_type", "auto_label")
+        .eq("status", "queued")
+        .order("created_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        return None
+    row = rows[0]
+    job_id = str(row["id"])
+    project_id = str(row["project_id"])
+    claimed = (
+        _sb()
+        .table("labelling_jobs")
+        .update(
+            {
+                "status": "running",
+                "progress_message": "Claimed by Colab worker",
+                "started_at": now_iso(),
+            }
+        )
+        .eq("id", job_id)
+        .eq("project_id", project_id)
+        .eq("status", "queued")
+        .execute()
+    )
+    if not claimed.data:
+        return None
+    return _job_row(claimed.data[0])
+
+
 def create_labelling_job(
     project_id: str,
     *,
