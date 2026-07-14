@@ -10,10 +10,12 @@ import {
 import { uploadImages } from "@/lib/api/uploads";
 import { imageContentUrl } from "@/lib/api/client";
 import { setDeleteStatus } from "@/lib/delete-status";
+import { downloadStockCsvImages } from "@/lib/download-stock-csv-zip";
+import type { StockCsvColumn } from "@/lib/stock-csv-download";
 import type { DatasetInventory } from "@/lib/worker/client";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { RefreshCw, Trash2, Upload } from "lucide-react";
+import { Download, RefreshCw, Trash2, Upload } from "lucide-react";
 
 interface InventoryPanelProps {
   projectId: string;
@@ -35,7 +37,13 @@ export function InventoryPanel({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadLabel, setUploadLabel] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [csvColumn, setCsvColumn] = useState<StockCsvColumn>("result");
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvDownloading, setCsvDownloading] = useState(false);
+  const [csvProgress, setCsvProgress] = useState("");
+  const [csvProgressPct, setCsvProgressPct] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     if (!datasetId) {
@@ -199,6 +207,36 @@ export function InventoryPanel({
   const totals = data ? Object.entries(data.class_totals) : [];
   const deletableCount = data?.deletable_image_ids?.length ?? data?.image_count ?? 0;
 
+  async function handleCsvDownload() {
+    if (!csvFile || csvDownloading) return;
+    setCsvDownloading(true);
+    setError(null);
+    setCsvProgress("Reading CSV…");
+    setCsvProgressPct(0);
+    try {
+      const result = await downloadStockCsvImages(
+        csvFile,
+        csvColumn,
+        (p) => {
+          setCsvProgress(p.label);
+          setCsvProgressPct(
+            p.total > 0 ? Math.round((p.done / p.total) * 100) : 0
+          );
+        }
+      );
+      setCsvProgress(
+        `Done — ${result.downloaded} downloaded` +
+          (result.failed ? `, ${result.failed} failed` : "") +
+          `. ZIP saved to your Downloads.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "CSV download failed");
+      setCsvProgress("");
+    } finally {
+      setCsvDownloading(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Hero controls */}
@@ -222,7 +260,7 @@ export function InventoryPanel({
               variant="secondary"
               loading={loading}
               onClick={() => void load()}
-              disabled={loading || uploading}
+              disabled={loading || uploading || csvDownloading}
             >
               {!loading && <RefreshCw className="h-4 w-4" />}
               Refresh
@@ -230,7 +268,7 @@ export function InventoryPanel({
             <Button
               type="button"
               loading={uploading}
-              disabled={uploading || deleting}
+              disabled={uploading || deleting || csvDownloading}
               onClick={() => fileInputRef.current?.click()}
             >
               {!uploading && <Upload className="h-4 w-4" />}
@@ -240,7 +278,9 @@ export function InventoryPanel({
               type="button"
               variant="danger"
               onClick={handleDeleteAll}
-              disabled={deleting || uploading || deletableCount === 0}
+              disabled={
+                deleting || uploading || csvDownloading || deletableCount === 0
+              }
             >
               <Trash2 className="h-4 w-4" />
               Delete all
@@ -268,6 +308,104 @@ export function InventoryPanel({
                 style={{ width: `${uploadProgress}%` }}
               />
             </div>
+          </div>
+        )}
+      </section>
+
+      {/* ShopData CSV → download Pre / Result images only (no save to project) */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900">
+              Download from ShopData CSV
+            </h3>
+            <p className="mt-1 max-w-2xl text-sm text-slate-500">
+              Pick your CSV, choose <strong>Pre Image</strong> or{" "}
+              <strong>Result Image</strong>, then download a ZIP. Nothing is
+              saved to the project — just files in your Downloads folder.
+              Result images (already labeled) upload later here to check product
+              counts.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="block min-w-[180px] flex-1 text-sm">
+            <span className="mb-1 block text-slate-600">CSV file</span>
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-sm"
+              disabled={csvDownloading}
+              onChange={(e) => setCsvFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+
+          <fieldset className="min-w-[220px]">
+            <legend className="mb-1 text-sm text-slate-600">Column</legend>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={csvDownloading}
+                onClick={() => setCsvColumn("pre")}
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                  csvColumn === "pre"
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Pre Image
+              </button>
+              <button
+                type="button"
+                disabled={csvDownloading}
+                onClick={() => setCsvColumn("result")}
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                  csvColumn === "result"
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-900"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Result Image
+              </button>
+            </div>
+          </fieldset>
+
+          <Button
+            type="button"
+            loading={csvDownloading}
+            disabled={!csvFile || csvDownloading || uploading}
+            onClick={() => void handleCsvDownload()}
+          >
+            {!csvDownloading && <Download className="h-4 w-4" />}
+            Download ZIP
+          </Button>
+        </div>
+
+        {csvFile && (
+          <p className="mt-2 text-xs text-slate-500">
+            Selected: {csvFile.name}
+            {csvColumn === "result"
+              ? " → Result Image column"
+              : " → Pre Image column"}
+          </p>
+        )}
+
+        {(csvDownloading || csvProgress) && (
+          <div className="mt-4">
+            <div className="mb-1.5 flex justify-between text-xs text-slate-600">
+              <span>{csvProgress}</span>
+              {csvDownloading && <span>{csvProgressPct}%</span>}
+            </div>
+            {csvDownloading && (
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-emerald-600 transition-all duration-300"
+                  style={{ width: `${csvProgressPct}%` }}
+                />
+              </div>
+            )}
           </div>
         )}
       </section>
