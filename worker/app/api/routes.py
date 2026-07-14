@@ -2332,7 +2332,7 @@ async def image_content(project_id: str, image_id: str, _: None = Depends(verify
 
 @api_router.post("/stock-colab/start")
 async def stock_colab_start(body: StockColabStartRequest, _: None = Depends(verify_api_key)):
-    from app.services.colab_launch import github_stock_notebook_url, public_worker_url, sign_launch_token
+    from app.services.colab_launch import build_dynamic_notebook_url, github_stock_notebook_url, public_worker_url, sign_launch_token
     from app.services.stock_colab_sessions import create
 
     urls = list(dict.fromkeys(str(url).strip() for url in body.image_urls if str(url).strip()))
@@ -2343,6 +2343,7 @@ async def stock_colab_start(body: StockColabStartRequest, _: None = Depends(veri
         "session_id": session_id,
         "token": token,
         "colab_url": github_stock_notebook_url(),
+        "prefilled_colab_url": build_dynamic_notebook_url(token),
         "config_url": config_url,
         "total": len(urls),
     }

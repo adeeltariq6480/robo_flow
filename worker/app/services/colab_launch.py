@@ -306,6 +306,13 @@ def build_stock_notebook(token: str) -> dict:
             "os.environ['ENABLE_YOLOV5_RUNTIME'] = 'true'\n",
             "os.environ['ENABLE_YOLOV7_RUNTIME'] = 'true'\n",
             "os.environ['YOLOV5_TRY_ALL_REFS'] = 'true'\n",
+            "os.environ['DEPLOY_TARGET'] = 'colab'\n",
+            "os.environ['LOW_MEMORY_MODE'] = 'false'\n",
+            "os.environ['MEMORY_SOFT_LIMIT_MB'] = '10000'\n",
+            "os.environ['MEMORY_HARD_LIMIT_MB'] = '12000'\n",
+            "os.environ['INFERENCE_MAX_IMAGE_SIZE'] = '640'\n",
+            "os.environ['INFERENCE_MIN_IMAGE_SIZE'] = '416'\n",
+            "os.environ['YOLO_IMGSZ'] = '640'\n",
         ]),
         _notebook_cell("code", [
             f"!git clone {json.dumps(github_repo_url())} robo_flow 2>/dev/null || (cd robo_flow && git pull)\n",

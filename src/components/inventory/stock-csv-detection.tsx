@@ -29,6 +29,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [error, setError] = useState<string | null>(null);
   const [configUrl, setConfigUrl] = useState("");
   const [colabUrl, setColabUrl] = useState("");
+  const [sessionToken, setSessionToken] = useState("");
+  const [prefilledColabUrl, setPrefilledColabUrl] = useState("");
   const runRef = useRef(0);
 
   const totals = useMemo(() => {
@@ -48,16 +50,14 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
 
   async function handleCheck() {
     if (!csvFile || running || modelIds.length === 0) return;
-    // Open synchronously from the click so popup blockers do not swallow Colab
-    // while CSV parsing/session creation is still awaiting.
-    const colabWindow = window.open("about:blank", "_blank");
-    if (colabWindow) colabWindow.opener = null;
     const token = ++runRef.current;
     setRunning(true);
     setRows([]);
     setError(null);
     setConfigUrl("");
     setColabUrl("");
+    setSessionToken("");
+    setPrefilledColabUrl("");
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
@@ -66,22 +66,34 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       if ("error" in launch) throw new Error(launch.error);
       setConfigUrl(launch.config_url);
       setColabUrl(launch.colab_url);
+      setSessionToken(launch.token);
+      setPrefilledColabUrl(launch.prefilled_colab_url);
       try {
         await navigator.clipboard.writeText(launch.config_url);
       } catch {
         // The URL is also shown below if browser clipboard permission is blocked.
       }
-      if (colabWindow) {
-        colabWindow.location.href = launch.colab_url;
-      } else {
-        window.open(launch.colab_url, "_blank", "noopener,noreferrer");
-      }
-      setProgress("Colab opened — Cell 2 mein config URL paste karein, phir Runtime → Run all.");
+      setProgress("Config ready — ab Open in Colab click karein. Config notebook mein pehle se added hai.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Stock check failed");
+      setProgress("");
+    } finally {
+      if (token === runRef.current) setRunning(false);
+    }
+  }
 
+  async function handleOpenColab() {
+    if (!sessionToken || !prefilledColabUrl || running) return;
+    const token = runRef.current;
+    window.open(prefilledColabUrl, "_blank", "noopener,noreferrer");
+    setRunning(true);
+    setError(null);
+    setProgress("Colab opened with config — connect karein aur Runtime → Run all. Waiting for GPU…");
+    try {
       while (token === runRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 4000));
         if (token !== runRef.current) return;
-        const session = await fetchStockColabSession(launch.token);
+        const session = await fetchStockColabSession(sessionToken);
         if ("actionError" in session) throw new Error(session.actionError);
         setRows(session.results as Row[]);
         setProgress(`${session.message} · ${session.processed}/${session.total}`);
@@ -92,9 +104,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
         if (session.status === "failed") throw new Error(session.error || "Colab check failed");
       }
     } catch (e) {
-      colabWindow?.close();
-      setError(e instanceof Error ? e.message : "Stock check failed");
-      setProgress("");
+      setError(e instanceof Error ? e.message : "Colab progress failed");
     } finally {
       if (token === runRef.current) setRunning(false);
     }
@@ -108,6 +118,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setError(null);
     setConfigUrl("");
     setColabUrl("");
+    setSessionToken("");
+    setPrefilledColabUrl("");
   }
 
   return (
@@ -115,8 +127,13 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={() => void handleCheck()} loading={running}
           disabled={!csvFile || !modelIds.length || running || disabled}>
-          {!running && <Play className="h-4 w-4" />} Open Colab & Check
+          {!running && <Play className="h-4 w-4" />} Generate Config
         </Button>
+        {prefilledColabUrl && !running && (
+          <Button type="button" onClick={() => void handleOpenColab()}>
+            <ExternalLink className="h-4 w-4" /> Open in Colab
+          </Button>
+        )}
         {(running || rows.length > 0 || progress || error) && (
           <Button type="button" variant="secondary" onClick={clear}><X className="h-4 w-4" />Clear</Button>
         )}
@@ -135,7 +152,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
             </Button>
             {colabUrl && (
               <Button type="button" variant="secondary" onClick={() => window.open(colabUrl, "_blank", "noopener,noreferrer")}>
-                <ExternalLink className="h-4 w-4" /> Open Colab again
+                <ExternalLink className="h-4 w-4" /> Open manual Colab
               </Button>
             )}
           </div>

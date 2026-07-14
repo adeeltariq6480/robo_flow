@@ -15,6 +15,13 @@ os.environ.setdefault("UNIVERSAL_MODEL_LOAD", "true")
 os.environ.setdefault("ENABLE_YOLOV5_RUNTIME", "true")
 os.environ.setdefault("ENABLE_YOLOV7_RUNTIME", "true")
 os.environ.setdefault("YOLOV5_TRY_ALL_REFS", "true")
+os.environ["DEPLOY_TARGET"] = "colab"
+os.environ["LOW_MEMORY_MODE"] = "false"
+os.environ["MEMORY_SOFT_LIMIT_MB"] = "10000"
+os.environ["MEMORY_HARD_LIMIT_MB"] = "12000"
+os.environ.setdefault("INFERENCE_MAX_IMAGE_SIZE", "640")
+os.environ.setdefault("INFERENCE_MIN_IMAGE_SIZE", "416")
+os.environ.setdefault("YOLO_IMGSZ", "640")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

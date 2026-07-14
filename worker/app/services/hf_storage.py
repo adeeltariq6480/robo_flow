@@ -808,10 +808,27 @@ def download_to_local(
             try:
                 cached = Path(hf_hub_download(**download_kwargs, force_download=True))
             except Exception as retry_exc:
-                raise RuntimeError(
-                    "Hugging Face model download was rejected after a fresh non-Xet retry. "
-                    "Verify HF_TOKEN has read access to the configured model repository."
-                ) from retry_exc
+                logger.warning(
+                    "Authenticated HF retry failed; trying anonymous download for a public repo: %s/%s",
+                    repo_id,
+                    path_in_repo,
+                )
+                try:
+                    anonymous_kwargs = dict(download_kwargs)
+                    anonymous_kwargs["token"] = False
+                    cached = Path(
+                        hf_hub_download(
+                            **anonymous_kwargs,
+                            force_download=True,
+                        )
+                    )
+                except Exception as anonymous_exc:
+                    raise RuntimeError(
+                        f"Hugging Face denied model '{Path(path_in_repo).name}' from repo "
+                        f"'{repo_id}' with both authenticated and public download. For a private "
+                        "repo, set Railway HF_TOKEN to a current token with Read access to this "
+                        "model repo, then redeploy and open a fresh Colab runtime."
+                    ) from anonymous_exc
         else:
             logger.exception("File download failed with full error: %s/%s", repo_id, path_in_repo)
             raise
