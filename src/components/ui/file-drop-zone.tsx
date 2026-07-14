@@ -92,7 +92,7 @@ export function FileDropZone({
 
   return (
     <div
-      className={`relative rounded-xl border-2 border-dashed transition-colors ${
+      className={`relative overflow-hidden rounded-2xl border-2 border-dashed shadow-sm transition-all duration-300 ${
         dragging
           ? "border-brand-500 bg-brand-50/80"
           : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-brand-50/50"
@@ -103,7 +103,7 @@ export function FileDropZone({
       onDrop={onDrop}
     >
       {children ?? (
-        <label className="flex cursor-pointer flex-col items-center justify-center px-6 py-12">
+        <label className="flex cursor-pointer flex-col items-center justify-center bg-gradient-to-br from-white via-emerald-50/30 to-cyan-50/40 px-6 py-12 transition hover:from-emerald-50/60 hover:to-cyan-50/70">
           <Upload
             className={`h-10 w-10 ${dragging ? "text-brand-600" : "text-slate-400"}`}
           />

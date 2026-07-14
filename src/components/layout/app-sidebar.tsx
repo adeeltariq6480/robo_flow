@@ -136,12 +136,12 @@ export function AppSidebar() {
         prefetch
         onClick={() => startNavigation(href)}
         aria-busy={loading}
-        className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+        className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 ${
           active
-            ? "bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-500/20"
+            ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white shadow-lg shadow-emerald-500/20"
             : loading
-              ? "bg-slate-100 text-slate-800"
-              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+              ? "bg-emerald-50 text-emerald-800"
+              : "text-slate-600 hover:translate-x-0.5 hover:bg-white/80 hover:text-emerald-800 hover:shadow-sm"
         }`}
       >
         {loading ? (
@@ -155,16 +155,16 @@ export function AppSidebar() {
   }
 
   return (
-    <aside className="flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200/80 bg-white shadow-sm">
+    <aside className="m-3 mr-0 flex h-[calc(100dvh-1.5rem)] w-64 shrink-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/75 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] ring-1 ring-slate-200/60 backdrop-blur-xl">
       <Link
         href="/"
         onClick={() => startNavigation("/")}
-        className="flex h-16 shrink-0 items-center border-b border-slate-200/80 px-4 transition-colors hover:bg-slate-50"
+        className="flex h-16 shrink-0 items-center border-b border-slate-200/60 bg-gradient-to-r from-emerald-50/70 via-white to-cyan-50/60 px-4 transition-colors hover:from-emerald-100/60 hover:to-cyan-100/50"
       >
         <AxiomAILogo />
       </Link>
 
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3.5">
         <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
           Main
         </p>

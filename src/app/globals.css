@@ -1,15 +1,50 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand-50: #eff6ff;
-  --color-brand-100: #dbeafe;
-  --color-brand-500: #3b82f6;
-  --color-brand-600: #2563eb;
-  --color-brand-700: #1d4ed8;
+  --color-brand-50: #ecfdf5;
+  --color-brand-100: #d1fae5;
+  --color-brand-500: #10b981;
+  --color-brand-600: #059669;
+  --color-brand-700: #047857;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply text-slate-900 antialiased;
+  background-color: #f7faf9;
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(16, 185, 129, 0.10), transparent 25rem),
+    radial-gradient(circle at 88% 12%, rgba(14, 165, 233, 0.09), transparent 28rem),
+    radial-gradient(circle at 72% 88%, rgba(168, 85, 247, 0.07), transparent 24rem);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(16, 185, 129, 0.2);
+  color: #064e3b;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #a7f3d0 transparent;
+}
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: linear-gradient(#a7f3d0, #bae6fd); border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
+
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus, select:focus, textarea:focus {
+  border-color: #10b981 !important;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12) !important;
+  outline: none;
+}
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 @keyframes shimmer {
@@ -37,7 +72,7 @@ body {
 }
 
 .animate-in {
-  animation: fade-in 0.35s ease-out both;
+  animation: fade-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .fade-in {

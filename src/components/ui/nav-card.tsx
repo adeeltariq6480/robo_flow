@@ -24,7 +24,7 @@ export function NavCard({ href, children, className = "" }: NavCardProps) {
       aria-busy={loading}
     >
       <Card
-        className={`relative overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-lg hover:shadow-brand-500/10 ${
+        className={`relative overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:border-emerald-200 hover:shadow-xl hover:shadow-emerald-500/10 ${
           loading ? "pointer-events-none ring-2 ring-brand-400/40" : ""
         }`}
       >

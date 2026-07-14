@@ -6,9 +6,9 @@ import { AlertCircle, CheckCircle, Info } from "lucide-react";
 type AlertVariant = "error" | "success" | "info";
 
 const styles: Record<AlertVariant, string> = {
-  error: "border-red-200 bg-red-50 text-red-800",
-  success: "border-green-200 bg-green-50 text-green-800",
-  info: "border-blue-200 bg-blue-50 text-blue-800",
+  error: "border-rose-200 bg-gradient-to-r from-rose-50 to-red-50 text-rose-900 shadow-sm",
+  success: "border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-900 shadow-sm",
+  info: "border-sky-200 bg-gradient-to-r from-sky-50 to-cyan-50 text-sky-900 shadow-sm",
 };
 
 const icons: Record<AlertVariant, ReactNode> = {
@@ -26,7 +26,7 @@ export function Alert({
 }) {
   return (
     <div
-      className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${styles[variant]}`}
+      className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm leading-relaxed ${styles[variant]}`}
     >
       {icons[variant]}
       <span>{children}</span>

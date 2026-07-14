@@ -47,7 +47,7 @@ export function SkeletonText({
 export function SkeletonCard({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`rounded-xl border border-slate-200 bg-white p-6 shadow-sm ${className}`}
+      className={`rounded-2xl border border-white/80 bg-white/80 p-6 shadow-lg shadow-slate-200/40 ring-1 ring-slate-200/60 ${className}`}
     >
       <div className="flex items-start gap-3">
         <Skeleton className="h-10 w-10 shrink-0 rounded-lg" />

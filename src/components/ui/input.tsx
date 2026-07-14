@@ -11,15 +11,15 @@ export function Input({ label, error, id, className = "", ...props }: InputProps
   const inputId = id ?? label?.toLowerCase().replace(/\s+/g, "-");
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       {label && (
-        <label htmlFor={inputId} className="block text-sm font-medium text-slate-700">
+        <label htmlFor={inputId} className="block text-sm font-semibold text-slate-700">
           {label}
         </label>
       )}
       <input
         id={inputId}
-        className={`block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 ${error ? "border-red-500" : ""} ${className}`}
+        className={`block min-h-10 w-full rounded-xl border border-slate-200 bg-white/90 px-3.5 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 disabled:bg-slate-50 ${error ? "border-red-500" : ""} ${className}`}
         {...props}
       />
       {error && <p className="text-sm text-red-600">{error}</p>}

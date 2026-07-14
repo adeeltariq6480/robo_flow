@@ -9,12 +9,12 @@ import { MainContent } from "@/components/layout/main-content";
 
 function ShellInner({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-dvh overflow-hidden bg-gradient-to-br from-slate-50 via-white to-slate-100">
+    <div className="relative flex h-dvh overflow-hidden bg-[radial-gradient(circle_at_top_left,_#ecfdf5_0,_#f8fafc_38%,_#eff6ff_72%,_#faf5ff_100%)]">
       <Suspense fallback={null}>
         <NavigationProvider>
           <NavigationProgress />
           <AppSidebar />
-          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-6 lg:p-8">
+          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-6 lg:p-8">
             <PageTransition />
             <MainContent>{children}</MainContent>
           </main>

@@ -34,7 +34,7 @@ export function BulkDeleteToolbar({
 
   return (
     <div
-      className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 ${className}`}
+      className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-gradient-to-r from-slate-50 to-white px-4 py-3 shadow-sm ${className}`}
     >
       <div className="flex items-center gap-3 text-sm text-slate-600">
         {showSelectAll && onToggleSelectAll && (

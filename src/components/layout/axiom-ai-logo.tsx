@@ -35,7 +35,7 @@ export function AxiomAILogo({ compact = false, className = "" }: AxiomAILogoProp
   return (
     <div className={`flex items-center gap-2.5 ${className}`}>
       <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-900 via-indigo-950 to-violet-800 shadow-md ring-1 ring-indigo-500/20"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 via-teal-600 to-violet-600 shadow-lg shadow-emerald-500/20 ring-1 ring-white/70"
         aria-hidden
       >
         <AxiomMark className="h-5 w-5 text-white" />
@@ -43,7 +43,7 @@ export function AxiomAILogo({ compact = false, className = "" }: AxiomAILogoProp
       {!compact && (
         <span className="text-lg font-bold tracking-tight text-slate-900">
           Axiom{" "}
-          <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-emerald-600 via-cyan-600 to-violet-600 bg-clip-text text-transparent">
             AI
           </span>
         </span>
