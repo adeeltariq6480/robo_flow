@@ -583,6 +583,8 @@ export function InventoryPanel({
         />
       </section>
 
+      <div id="stock-check-results-root" />
+
       {error && <Alert variant="error">{error}</Alert>}
 
       {modelIds.length === 0 && (

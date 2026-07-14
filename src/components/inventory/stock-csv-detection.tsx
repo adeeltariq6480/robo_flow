@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
@@ -20,6 +21,14 @@ type Row = DirectStockResult & { error?: string };
 
 function proxySrc(url: string) {
   return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+}
+
+function ResultsPortal({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTarget(document.getElementById("stock-check-results-root"));
+  }, []);
+  return target ? createPortal(children, target) : children;
 }
 
 export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, disabled }: Props) {
@@ -234,6 +243,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       {error && <div className="mt-3"><Alert variant="error">{error}</Alert></div>}
 
       {rows.length > 0 && (
+        <ResultsPortal>
         <div className="mt-5 space-y-5">
           <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <h4 className="font-semibold text-emerald-950">Product summary</h4>
@@ -253,9 +263,9 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
             <article key={`${row.url}-${index}`} className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-4 py-3 text-sm font-medium">Result Image {index + 1}</div>
               <div className="flex flex-1 flex-col gap-4 p-4">
-                <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg bg-slate-100 p-2">
+                <div className="relative flex items-center justify-center overflow-hidden rounded-lg bg-slate-100 p-2">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="h-full w-full object-contain" loading="lazy" />
+                  <img src={proxySrc(row.url)} alt={`Result ${index + 1}`} className="max-h-[70vh] w-full object-contain" loading="lazy" />
                 </div>
                 <div className="min-w-0">
                   {row.error ? <Alert variant="error">{row.error}</Alert> : <>
@@ -274,6 +284,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
           ))}
           </div>
         </div>
+        </ResultsPortal>
       )}
     </div>
   );
