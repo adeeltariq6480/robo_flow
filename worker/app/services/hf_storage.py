@@ -12,8 +12,10 @@ Model repo (HF model):
     models/{projectId}/{fileName}
 """
 
-import logging
 import os
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
+import logging
 import tempfile
 import threading
 import time
@@ -785,19 +787,34 @@ def download_to_local(
         logger.info("File already exists locally: %s", dest)
         return dest
 
+    download_kwargs = {
+        "repo_id": repo_id,
+        "filename": path_in_repo,
+        "repo_type": repo_type,
+        "token": settings.hf_token or None,
+        "cache_dir": str(settings.hf_cache_dir),
+    }
     try:
-        cached = Path(
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=path_in_repo,
-                repo_type=repo_type,
-                token=settings.hf_token or None,
-                cache_dir=str(settings.hf_cache_dir),
+        cached = Path(hf_hub_download(**download_kwargs))
+    except Exception as exc:
+        detail = str(exc).lower()
+        if "signatureerror" in detail or "invalid key pair" in detail or "403 forbidden" in detail:
+            logger.warning(
+                "HF signed CDN URL failed; retrying fresh with Xet disabled: %s/%s",
+                repo_id,
+                path_in_repo,
             )
-        )
-    except Exception:
-        logger.exception("File download failed with full error: %s/%s", repo_id, path_in_repo)
-        raise
+            os.environ["HF_HUB_DISABLE_XET"] = "1"
+            try:
+                cached = Path(hf_hub_download(**download_kwargs, force_download=True))
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    "Hugging Face model download was rejected after a fresh non-Xet retry. "
+                    "Verify HF_TOKEN has read access to the configured model repository."
+                ) from retry_exc
+        else:
+            logger.exception("File download failed with full error: %s/%s", repo_id, path_in_repo)
+            raise
 
     if cached.exists():
         if cached.resolve() != dest.resolve():

@@ -46,6 +46,7 @@ def _apply_colab_defaults() -> None:
         "AUTO_LABEL_SYNC_HF_BEFORE_START": "false",
         "UNIVERSAL_MODEL_LOAD": "true",
         "RUN_AUTO_LABEL_WORKER": "true",
+        "HF_HUB_DISABLE_XET": "1",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
