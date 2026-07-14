@@ -628,6 +628,38 @@ class UniversalYOLOModel:
             else:
                 raise RuntimeError(f"Unknown loader type: {self.loader_type}")
         except Exception as exc:
+            if self.loader_type == "ultralytics" and any(
+                marker in str(exc).lower()
+                for marker in (
+                    "unexpected keyword argument 'visualize'",
+                    'unexpected keyword argument "visualize"',
+                    "forward() got an unexpected keyword argument",
+                )
+            ):
+                logger.warning(
+                    "Ultralytics loaded a legacy checkpoint but predict is incompatible; "
+                    "switching to native YOLOv5/YOLOv7 runtime: %s",
+                    exc,
+                )
+                legacy_errors: list[str] = []
+                for loader_type, loader_fn in (
+                    ("yolov5", self._load_yolov5),
+                    ("yolov7", self._load_yolov7),
+                ):
+                    try:
+                        self.model = None
+                        _clear_runtime_memory()
+                        loader_fn()
+                        self.loader_type = loader_type
+                        self.model_type = f"{loader_type}_predict_fallback"
+                        return self._predict_yolov5(image)
+                    except Exception as legacy_exc:
+                        legacy_errors.append(f"{loader_type}: {legacy_exc}")
+                        logger.warning("Predict fallback %s failed: %s", loader_type, legacy_exc)
+                raise RuntimeError(
+                    "Legacy checkpoint predict failed in Ultralytics and native fallbacks: "
+                    + "; ".join(legacy_errors)
+                ) from exc
             logger.exception("Inference failed: %s", exc)
             raise RuntimeError(f"Inference failed: {exc}") from exc
 
