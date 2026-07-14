@@ -141,7 +141,10 @@ export function DetectionResults({ job }: { job: JobResponse }) {
             </ul>
           </div>
         )}
-        {(skippedAlreadyLabeled > 0 || skippedNotEligible > 0 || skippedNotRemoteReady > 0) && (
+        {(skippedAlreadyLabeled > 0 ||
+          skippedNotEligible > 0 ||
+          skippedNotRemoteReady > 0 ||
+          skippedBlurry > 0) && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-900">
             {skippedAlreadyLabeled > 0 && (
               <li>
