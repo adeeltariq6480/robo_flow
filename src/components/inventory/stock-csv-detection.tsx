@@ -30,6 +30,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [configUrl, setConfigUrl] = useState("");
   const [colabUrl, setColabUrl] = useState("");
   const [sessionToken, setSessionToken] = useState("");
+  const [processed, setProcessed] = useState(0);
+  const [total, setTotal] = useState(0);
   const runRef = useRef(0);
 
   const totals = useMemo(() => {
@@ -56,6 +58,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setConfigUrl("");
     setColabUrl("");
     setSessionToken("");
+    setProcessed(0);
+    setTotal(0);
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
@@ -65,6 +69,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       setConfigUrl(launch.config_url);
       setColabUrl(launch.colab_url);
       setSessionToken(launch.token);
+      setTotal(launch.total);
       try {
         await navigator.clipboard.writeText(launch.config_url);
       } catch {
@@ -98,6 +103,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
         const session = await fetchStockColabSession(sessionToken);
         if ("actionError" in session) throw new Error(session.actionError);
         setRows(session.results as Row[]);
+        setProcessed(session.processed);
+        setTotal(session.total);
         setProgress(`${session.message} · ${session.processed}/${session.total}`);
         if (session.status === "completed") {
           setProgress(`Done on Colab GPU — ${session.processed} Result Image(s). Nothing saved to DB.`);
@@ -121,6 +128,8 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setConfigUrl("");
     setColabUrl("");
     setSessionToken("");
+    setProcessed(0);
+    setTotal(0);
   }
 
   return (
@@ -141,6 +150,20 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
         <span className="text-xs text-slate-500">Direct temporary check · no image/job/result saved</span>
       </div>
       {progress && <p className="mt-3 text-sm text-slate-600">{progress}</p>}
+      {total > 0 && (
+        <div className="mt-3">
+          <div className="mb-1.5 flex items-center justify-between text-xs text-slate-600">
+            <span>Colab progress: {processed} / {total}</span>
+            <span>{Math.round((processed / total) * 100)}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full rounded-full bg-emerald-600 transition-all duration-500"
+              style={{ width: `${Math.min(100, Math.round((processed / total) * 100))}%` }}
+            />
+          </div>
+        </div>
+      )}
       {configUrl && (
         <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
           <p className="text-sm font-semibold text-blue-950">Stock Check Config URL</p>
