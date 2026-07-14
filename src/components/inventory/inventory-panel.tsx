@@ -507,15 +507,14 @@ export function InventoryPanel({
                 }}
               >
                 <div className="flex flex-col sm:flex-row">
-                  <div className="relative h-52 w-full shrink-0 overflow-hidden bg-slate-100 sm:h-auto sm:min-h-[200px] sm:w-[42%] md:w-[38%]">
+                  <div className="flex w-full shrink-0 items-center justify-center bg-slate-100 p-2 sm:w-[42%] md:w-[40%]">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={thumbUrl}
                       alt=""
-                      className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02] sm:absolute sm:inset-0"
+                      className="max-h-[70vh] w-full object-contain"
                       loading="lazy"
                     />
-                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-900/25 to-transparent sm:bg-gradient-to-r sm:from-transparent sm:to-transparent" />
                   </div>
 
                   <div className="flex min-w-0 flex-1 flex-col justify-between gap-4 p-5 sm:p-6">
