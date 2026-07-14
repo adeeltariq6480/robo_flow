@@ -123,6 +123,20 @@ def _railway_api_only() -> bool:
     return not settings.run_auto_label_worker
 
 
+def _is_stock_check_dataset(project_id: str, dataset_id: str | None) -> bool:
+    """Hidden Stock check scratch dataset — small upload checks may run on Railway."""
+    if not dataset_id:
+        return False
+    try:
+        from app.services import supabase_repo as repo
+
+        ds = repo.get_dataset(project_id, dataset_id)
+        name = str((ds or {}).get("name") or "")
+        return name == "__stock_check__"
+    except Exception:
+        return False
+
+
 async def process_job(job_id: str) -> None:
     from app.config import settings
 
@@ -143,8 +157,15 @@ async def process_job(job_id: str) -> None:
         logger.info("Job %s was cancelled before start", job_id)
         return
 
-    # Only full auto-label stays Colab-only. Test-run / compare still run on Railway.
-    if _railway_api_only() and job_type == JobType.AUTO_LABEL:
+    dataset_id = job.get("datasetId")
+    stock_check = _is_stock_check_dataset(project_id, dataset_id)
+
+    # Full training auto-label stays Colab-only. Stock check uploads may run locally.
+    if (
+        _railway_api_only()
+        and job_type == JobType.AUTO_LABEL
+        and not stock_check
+    ):
         logger.warning(
             "Skipping local auto-label job %s (RUN_AUTO_LABEL_WORKER=false). "
             "Job stays queued for Google Colab worker.",
@@ -158,6 +179,12 @@ async def process_job(job_id: str) -> None:
         )
         return
 
+    if stock_check and job_type == JobType.AUTO_LABEL:
+        logger.info(
+            "Running stock-check auto-label on Railway job=%s dataset=%s",
+            job_id,
+            dataset_id,
+        )
     await update_job(
         job_id,
         status=JobStatus.RUNNING,
@@ -257,12 +284,17 @@ async def submit_job(
     job_type: JobType,
     **kwargs,
 ) -> tuple[str, JobQueue, int]:
-    """Create a job row. Auto-label is not enqueued when RUN_AUTO_LABEL_WORKER=false."""
+    """Create a job row. Auto-label is not enqueued when RUN_AUTO_LABEL_WORKER=false
+    (except Stock check scratch datasets, which run on Railway for quick product checks).
+    """
     job_id = await create_job_record(project_id, job_type, **kwargs)
     register_job_project(job_id, project_id)
     queue = QUEUE_FOR_JOB_TYPE[job_type]
 
-    if _railway_api_only() and job_type == JobType.AUTO_LABEL:
+    dataset_id = kwargs.get("dataset_id")
+    stock_check = _is_stock_check_dataset(project_id, dataset_id)
+
+    if _railway_api_only() and job_type == JobType.AUTO_LABEL and not stock_check:
         await update_job(
             job_id,
             status=JobStatus.QUEUED,

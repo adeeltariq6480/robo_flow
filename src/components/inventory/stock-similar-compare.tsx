@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { SimilarPairRow } from "@/lib/stock-csv-download";
 import { extractSimilarPairs } from "@/lib/stock-csv-download";
 import { compareImageUrls } from "@/lib/image-similarity";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { CheckCircle2, GitCompare, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, GitCompare, X, XCircle } from "lucide-react";
 
 export type SimilarCheckItem = SimilarPairRow & {
   visualScore?: number;
@@ -32,9 +32,12 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [copiedItem, setCopiedItem] = useState<string | null>(null);
+  const runTokenRef = useRef(0);
 
   async function handleCheck() {
     if (!csvFile || running) return;
+    const runToken = ++runTokenRef.current;
     setRunning(true);
     setError(null);
     setItems([]);
@@ -65,6 +68,7 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
       const concurrency = 3;
       const next = [...initial];
       for (let i = 0; i < pairs.length; i += concurrency) {
+        if (runToken !== runTokenRef.current) return;
         const batch = pairs.slice(i, i + concurrency);
         await Promise.all(
           batch.map(async (pair, batchIdx) => {
@@ -91,6 +95,7 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
             }
           })
         );
+        if (runToken !== runTokenRef.current) return;
         setItems([...next]);
         setProgress(`Comparing ${Math.min(i + concurrency, pairs.length)} / ${pairs.length}…`);
       }
@@ -107,7 +112,30 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
       setError(e instanceof Error ? e.message : "Similarity check failed");
       setProgress("");
     } finally {
-      setRunning(false);
+      if (runToken === runTokenRef.current) setRunning(false);
+    }
+  }
+
+  function handleClear() {
+    runTokenRef.current += 1;
+    setRunning(false);
+    setItems([]);
+    setTotalMatching(0);
+    setProgress("");
+    setError(null);
+    setCopiedItem(null);
+  }
+
+  async function handleCopyUrls(item: SimilarCheckItem) {
+    const key = `${item.imageId}-${item.resultUrl}`;
+    try {
+      await navigator.clipboard.writeText(
+        `Result Image: ${item.resultUrl}\nSimilar Image: ${item.similarUrl}`
+      );
+      setCopiedItem(key);
+      window.setTimeout(() => setCopiedItem((current) => (current === key ? null : current)), 2000);
+    } catch {
+      setError("Image URLs copy nahi ho sake. Browser clipboard permission check karein.");
     }
   }
 
@@ -166,6 +194,12 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
           {!running && <GitCompare className="h-4 w-4" />}
           Check similar pairs
         </Button>
+        {(running || items.length > 0 || progress || error) && (
+          <Button type="button" variant="secondary" onClick={handleClear}>
+            <X className="h-4 w-4" />
+            Clear
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -184,9 +218,11 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
 
       {items.length > 0 && (
         <div className="mt-5 space-y-4">
-          {items.map((item) => (
+          {items.map((item) => {
+            const itemKey = `${item.imageId}-${item.resultUrl}`;
+            return (
             <article
-              key={`${item.imageId}-${item.resultUrl}`}
+              key={itemKey}
               className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/50"
             >
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
@@ -201,7 +237,19 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
                     CSV: {item.csvScore}% · flag: {item.csvSimilarFlag || "—"}
                   </span>
                 </div>
-                <VerdictBadge item={item} />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void handleCopyUrls(item)}
+                    title="Copy Result Image and Similar Image URLs"
+                    aria-label="Copy both image URLs"
+                  >
+                    <Copy className="h-4 w-4" />
+                    {copiedItem === itemKey ? "Copied" : "Copy URLs"}
+                  </Button>
+                  <VerdictBadge item={item} />
+                </div>
               </div>
               <div className="grid gap-4 p-4 sm:grid-cols-2">
                 <figure className="min-w-0">
@@ -234,7 +282,8 @@ export function StockSimilarComparePanel({ csvFile, disabled }: Props) {
                 </figure>
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

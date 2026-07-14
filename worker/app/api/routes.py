@@ -2374,6 +2374,18 @@ async def create_auto_label(body: AutoLabelRequest, _: None = Depends(verify_api
         else f"{scope_count} unlabeled / empty-detection image(s)"
     )
     if not settings.run_auto_label_worker:
+        from app.core.jobs import _is_stock_check_dataset
+
+        if _is_stock_check_dataset(body.project_id, body.dataset_id):
+            return JobCreateResponse(
+                job_id=job_id,
+                queue_name=queue,
+                status=JobStatus.QUEUED,
+                message=(
+                    f"Stock check detect queued on Railway: {scope} with "
+                    f"{len(model_ids)} model(s)."
+                ),
+            )
         return JobCreateResponse(
             job_id=job_id,
             queue_name=queue,
