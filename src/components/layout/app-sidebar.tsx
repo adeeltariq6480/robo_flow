@@ -19,6 +19,7 @@ import {
   Zap,
   Sparkles,
   ClipboardList,
+  Scissors,
 } from "lucide-react";
 import { readActiveInferenceJob } from "@/lib/inference/active-job";
 
@@ -31,6 +32,7 @@ const projectLinks = [
   { suffix: "/datasets", label: "Datasets", icon: Database },
   { suffix: "/inference", label: "Inference", icon: Zap },
   { suffix: "/inventory", label: "Stock check", icon: ClipboardList },
+  { suffix: "/label-tool", label: "Label tool", icon: Scissors },
 ];
 
 const RESERVED_PROJECT_SEGMENTS = new Set(["new"]);
