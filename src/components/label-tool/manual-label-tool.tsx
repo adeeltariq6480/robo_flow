@@ -11,18 +11,23 @@ import {
   Search,
   Scissors,
   ShieldCheck,
+  Sparkles,
   Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { matchProductsInImage } from "@/lib/label-tool/browser-reference-matcher";
 
-type Box = { id: string; x: number; y: number; width: number; height: number; className: string };
+type Box = { id: string; x: number; y: number; width: number; height: number; className: string; confidence?: number; source?: "manual" | "reference_matcher" };
 type LabelImage = { id: string; file: File; url: string; width: number; height: number; boxes: Box[] };
+type ReferenceImage = { id: string; file: File; url: string };
+type ReferenceProduct = { id: string; className: string; images: ReferenceImage[] };
 type Draft = { startX: number; startY: number; x: number; y: number; width: number; height: number };
 type PendingBox = Omit<Box, "className"> & { imageId: string };
 type StoredImage = Omit<LabelImage, "url">;
-type StoredSession = { images: StoredImage[]; classes: string[]; activeId: string | null };
+type StoredReference = { id: string; className: string; images: Omit<ReferenceImage, "url">[] };
+type StoredSession = { images: StoredImage[]; classes: string[]; activeId: string | null; references?: StoredReference[] };
 
 const COLORS = ["#10b981", "#06b6d4", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6"];
 const safeName = (value: string) => value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_") || "object";
@@ -81,8 +86,16 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
   const [confirmClose, setConfirmClose] = useState(false);
+  const [references, setReferences] = useState<ReferenceProduct[]>([]);
+  const [referenceClass, setReferenceClass] = useState("");
+  const [matchThreshold, setMatchThreshold] = useState(0.8);
+  const [autoMatching, setAutoMatching] = useState(false);
+  const [autoProgress, setAutoProgress] = useState("");
+  const [autoError, setAutoError] = useState<string | null>(null);
+  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const classFileRef = useRef<HTMLInputElement>(null);
+  const referenceFileRef = useRef<HTMLInputElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const imagesRef = useRef<LabelImage[]>([]);
@@ -95,7 +108,8 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
     void readSession(projectId).then((session) => {
       if (cancelled || !session) return;
       const restored = session.images.map((image) => ({ ...image, url: URL.createObjectURL(image.file) }));
-      setImages(restored); setClasses(session.classes); setActiveId(session.activeId ?? restored[0]?.id ?? null);
+      const restoredReferences = (session.references ?? []).map((reference) => ({ ...reference, images: reference.images.map((image) => ({ ...image, url: URL.createObjectURL(image.file) })) }));
+      setImages(restored); setClasses(session.classes); setReferences(restoredReferences); setActiveId(session.activeId ?? restored[0]?.id ?? null);
     }).catch(() => { /* IndexedDB may be disabled in private mode */ }).finally(() => { if (!cancelled) setHydrated(true); });
     return () => { cancelled = true; };
   }, [projectId]);
@@ -105,13 +119,15 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
     setSaveState("saving");
     const timer = window.setTimeout(() => {
       const storedImages = images.map(({ url: _url, ...image }) => image);
-      void writeSession(projectId, { images: storedImages, classes, activeId }).then(() => setSaveState("saved")).catch(() => setSaveState("saved"));
+      const storedReferences = references.map((reference) => ({ ...reference, images: reference.images.map(({ url: _url, ...image }) => image) }));
+      void writeSession(projectId, { images: storedImages, classes, activeId, references: storedReferences }).then(() => setSaveState("saved")).catch(() => setSaveState("saved"));
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [images, classes, activeId, hydrated, projectId]);
+  }, [images, classes, activeId, references, hydrated, projectId]);
 
   const active = images.find((image) => image.id === activeId) ?? null;
   const activeIndex = active ? images.findIndex((image) => image.id === active.id) : -1;
+  const selectedBox = active?.boxes.find((box) => box.id === selectedBoxId) ?? null;
   const boxCount = useMemo(() => images.reduce((sum, image) => sum + image.boxes.length, 0), [images]);
   const filteredClasses = useMemo(() => {
     const query = classSearch.trim().toLocaleLowerCase();
@@ -147,6 +163,9 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
     if (!active) return;
     const point = pointerPosition(event);
     if (!point) return;
+    const hit = [...active.boxes].reverse().find((box) => point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height);
+    if (hit) { setSelectedBoxId(hit.id); return; }
+    setSelectedBoxId(null);
     event.currentTarget.setPointerCapture(event.pointerId);
     setDraft({ startX: point.x, startY: point.y, x: point.x, y: point.y, width: 0, height: 0 });
   }
@@ -196,6 +215,44 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
     setImages((current) => current.map((image) => image.id === imageId ? { ...image, boxes: [...image.boxes, box] } : image));
     setPendingBox(null);
     setClassSearch("");
+  }
+
+  function addReferenceFiles(files: FileList | File[]) {
+    const className = referenceClass.trim();
+    const accepted = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    if (!className || !accepted.length) return;
+    const added = accepted.map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) }));
+    setReferences((current) => {
+      const existing = current.find((item) => item.className === className);
+      return existing ? current.map((item) => item.id === existing.id ? { ...item, images: [...item.images, ...added] } : item) : [...current, { id: crypto.randomUUID(), className, images: added }];
+    });
+    setClasses((current) => current.includes(className) ? current : [...current, className]);
+    setReferenceClass("");
+  }
+
+  function removeReference(id: string) {
+    setReferences((current) => {
+      const target = current.find((item) => item.id === id);
+      target?.images.forEach((image) => URL.revokeObjectURL(image.url));
+      return current.filter((item) => item.id !== id);
+    });
+  }
+
+  async function runAutoMatch() {
+    if (!images.length || !references.length || autoMatching) return;
+    setAutoMatching(true); setAutoError(null);
+    try {
+      for (let i = 0; i < images.length; i++) {
+        const image = images[i];
+        setAutoProgress(`Image ${i + 1}/${images.length}: loading AI…`);
+        const matches = await matchProductsInImage({ image: image.file, references: references.map((item) => ({ className: item.className, files: item.images.map((entry) => entry.file) })), threshold: matchThreshold, onProgress: (message) => setAutoProgress(`Image ${i + 1}/${images.length}: ${message}`) });
+        const boxes: Box[] = matches.map((match) => ({ id: crypto.randomUUID(), x: match.x, y: match.y, width: match.width, height: match.height, className: match.className, confidence: match.score, source: "reference_matcher" }));
+        setImages((current) => current.map((entry) => entry.id === image.id ? { ...entry, boxes: [...entry.boxes, ...boxes] } : entry));
+      }
+      setAutoProgress("Auto Match complete. Click any box to inspect its class.");
+    } catch (error) {
+      setAutoError(error instanceof Error ? error.message : "Auto matching failed");
+    } finally { setAutoMatching(false); }
   }
 
   function removeImage(id: string) {
@@ -256,7 +313,8 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
 
   async function closeSession() {
     images.forEach((image) => URL.revokeObjectURL(image.url));
-    setImages([]); setClasses([]); setActiveId(null); setPendingBox(null); setConfirmClose(false);
+    references.forEach((reference) => reference.images.forEach((image) => URL.revokeObjectURL(image.url)));
+    setImages([]); setClasses([]); setReferences([]); setActiveId(null); setPendingBox(null); setConfirmClose(false);
     await deleteSession(projectId).catch(() => { /* state is still cleared in this tab */ });
   }
 
@@ -266,6 +324,10 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
         <div><div className="flex items-center gap-2"><span className="rounded-xl bg-emerald-100 p-2 text-emerald-700"><Scissors className="h-5 w-5" /></span><h1 className="text-xl font-bold text-slate-900">Manual Label & Crop Tool</h1></div><p className="mt-2 text-sm text-slate-500">Upload images, draw boxes, and export every crop with YOLO TXT and Pascal VOC XML labels.</p></div>
         <div className="flex flex-wrap items-center gap-2"><span className="mr-1 flex items-center gap-1.5 text-xs font-medium text-emerald-700"><ShieldCheck className="h-4 w-4" />{saveState === "saving" ? "Auto-saving…" : "Session saved"}</span>{images.length > 0 && <Button variant="secondary" onClick={() => setConfirmClose(true)} className="!border-red-200 !text-red-600 hover:!bg-red-50"><X className="h-4 w-4" />Close session</Button>}<Button onClick={exportDataset} disabled={!images.length} loading={exporting}>{!exporting && <Download className="h-4 w-4" />}{exporting ? "Building ZIP…" : "Download complete ZIP"}</Button></div>
       </div>
+
+      {images.length > 0 && <section className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-cyan-50 p-4"><div className="flex flex-col gap-4 lg:flex-row lg:items-end"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-600" /><h2 className="text-sm font-bold">Auto Reference Match</h2></div><p className="mt-1 text-xs text-slate-500">Enter a product class and add one or more clear reference photos. Files stay only in this browser.</p><div className="mt-3 flex max-w-md gap-2"><input value={referenceClass} onChange={(e) => setReferenceClass(e.target.value)} placeholder="Product class, e.g. pepsi_500ml" className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" /><Button variant="secondary" disabled={!referenceClass.trim()} onClick={() => referenceFileRef.current?.click()}><ImagePlus className="h-4 w-4" />Add photos</Button></div></div><div className="w-full lg:w-64"><label className="block text-xs font-medium text-slate-600">Match threshold: {Math.round(matchThreshold * 100)}%</label><input type="range" min="0.5" max="0.95" step="0.01" value={matchThreshold} onChange={(e) => setMatchThreshold(Number(e.target.value))} className="mt-1 w-full accent-violet-600" /><Button onClick={() => void runAutoMatch()} disabled={!references.length || autoMatching} loading={autoMatching} className="mt-2 w-full !bg-violet-600 hover:!bg-violet-700">{!autoMatching && <Sparkles className="h-4 w-4" />}{autoMatching ? "Matching…" : "Auto label all images"}</Button></div></div>{references.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{references.map((reference) => <div key={reference.id} className="flex items-center gap-2 rounded-xl border border-white bg-white/85 p-2 shadow-sm"><div className="flex -space-x-2">{reference.images.slice(0, 3).map((image) => <img key={image.id} src={image.url} alt="" className="h-8 w-8 rounded-lg border-2 border-white object-cover" />)}</div><span className="text-xs font-semibold">{reference.className} ({reference.images.length})</span><button onClick={() => removeReference(reference.id)} className="text-slate-400 hover:text-red-500"><X className="h-4 w-4" /></button></div>)}</div>}{autoProgress && <p className="mt-3 text-xs font-medium text-violet-700">{autoProgress}</p>}{autoError && <p className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-600">{autoError}</p>}</section>}
+
+      {selectedBox && <div className="flex items-center gap-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3"><span className="h-3 w-3 rounded-full bg-emerald-500" /><div className="min-w-0 flex-1"><p className="text-xs font-medium text-emerald-700">Selected box class</p><p className="truncate text-sm font-bold text-emerald-950">{selectedBox.className}</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selectedBox.source === "reference_matcher" ? `Auto match · ${Math.round((selectedBox.confidence ?? 0) * 100)}%` : "Manual"}</span><button onClick={() => setSelectedBoxId(null)} className="text-emerald-700"><X className="h-4 w-4" /></button></div>}
 
       {!images.length ? (
         <button type="button" onClick={() => inputRef.current?.click()} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); void addFiles(e.dataTransfer.files); }} className={`flex min-h-[28rem] w-full flex-col items-center justify-center rounded-3xl border-2 border-dashed bg-white/70 p-8 transition ${dragging ? "border-emerald-500 bg-emerald-50" : "border-slate-300 hover:border-emerald-400 hover:bg-emerald-50/40"}`}>
@@ -297,6 +359,7 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
       )}
       <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ""; }} />
       <input ref={classFileRef} type="file" accept=".txt,.json,.csv,text/plain,application/json" hidden onChange={async (e) => { const file = e.target.files?.[0]; if (file) importClasses(await file.text()); e.target.value = ""; }} />
+      <input ref={referenceFileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) addReferenceFiles(e.target.files); e.target.value = ""; }} />
     </div>
   );
 }
