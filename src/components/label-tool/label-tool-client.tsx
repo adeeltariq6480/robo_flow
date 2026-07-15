@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import type { Model } from "@/lib/types/database";
 
 const ManualLabelTool = dynamic(
   () => import("@/components/label-tool/manual-label-tool").then((module) => module.ManualLabelTool),
@@ -14,6 +15,6 @@ const ManualLabelTool = dynamic(
   }
 );
 
-export function LabelToolClient({ projectId }: { projectId: string }) {
-  return <ManualLabelTool projectId={projectId} />;
+export function LabelToolClient({ projectId, models }: { projectId: string; models: Model[] }) {
+  return <ManualLabelTool projectId={projectId} models={models} />;
 }

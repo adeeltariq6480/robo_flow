@@ -15,7 +15,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.475.0",
     "next": "^15.2.0",

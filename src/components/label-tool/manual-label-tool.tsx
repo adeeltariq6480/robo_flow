@@ -17,9 +17,11 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { matchProductsInImage } from "@/lib/label-tool/browser-reference-matcher";
+import type { Model } from "@/lib/types/database";
+import { ModelMultiSelect } from "@/components/inference/model-multi-select";
+import { deleteTemporaryLabelSession, getTemporaryLabelSession, startTemporaryLabelSession, type TemporaryLabelSession } from "@/lib/api/temporary-label-tool";
 
-type Box = { id: string; x: number; y: number; width: number; height: number; className: string; confidence?: number; source?: "manual" | "reference_matcher" };
+type Box = { id: string; x: number; y: number; width: number; height: number; className: string; confidence?: number; source?: "manual" | "yolo" | "reference_matcher" };
 type LabelImage = { id: string; file: File; url: string; width: number; height: number; boxes: Box[] };
 type ReferenceImage = { id: string; file: File; url: string };
 type ReferenceProduct = { id: string; className: string; images: ReferenceImage[] };
@@ -27,7 +29,7 @@ type Draft = { startX: number; startY: number; x: number; y: number; width: numb
 type PendingBox = Omit<Box, "className"> & { imageId: string };
 type StoredImage = Omit<LabelImage, "url">;
 type StoredReference = { id: string; className: string; images: Omit<ReferenceImage, "url">[] };
-type StoredSession = { images: StoredImage[]; classes: string[]; activeId: string | null; references?: StoredReference[] };
+type StoredSession = { images: StoredImage[]; classes: string[]; activeId: string | null; references?: StoredReference[]; productsSubmitted?: boolean; colabToken?: string | null; configUrl?: string | null };
 
 const COLORS = ["#10b981", "#06b6d4", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6"];
 const safeName = (value: string) => value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_") || "object";
@@ -72,7 +74,7 @@ async function deleteSession(key: string) {
   db.close();
 }
 
-export function ManualLabelTool({ projectId }: { projectId: string }) {
+export function ManualLabelTool({ projectId, models }: { projectId: string; models: Model[] }) {
   const [images, setImages] = useState<LabelImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [classes, setClasses] = useState<string[]>([]);
@@ -94,6 +96,13 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   const [autoProgress, setAutoProgress] = useState("");
   const [autoError, setAutoError] = useState<string | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+  const [productsSubmitted, setProductsSubmitted] = useState(false);
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>(models[0] ? [models[0].id] : []);
+  const [confidence, setConfidence] = useState(0.25);
+  const [iou, setIou] = useState(0.45);
+  const [colabToken, setColabToken] = useState<string | null>(null);
+  const [configUrl, setConfigUrl] = useState<string | null>(null);
+  const [remoteSession, setRemoteSession] = useState<TemporaryLabelSession | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const classFileRef = useRef<HTMLInputElement>(null);
   const referenceFileRef = useRef<HTMLInputElement>(null);
@@ -110,7 +119,7 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
       if (cancelled || !session) return;
       const restored = session.images.map((image) => ({ ...image, url: URL.createObjectURL(image.file) }));
       const restoredReferences = (session.references ?? []).map((reference) => ({ ...reference, images: reference.images.map((image) => ({ ...image, url: URL.createObjectURL(image.file) })) }));
-      setImages(restored); setClasses(session.classes); setReferences(restoredReferences); setActiveId(session.activeId ?? restored[0]?.id ?? null);
+      setImages(restored); setClasses(session.classes); setReferences(restoredReferences); setActiveId(session.activeId ?? restored[0]?.id ?? null); setProductsSubmitted(Boolean(session.productsSubmitted)); setColabToken(session.colabToken ?? null); setConfigUrl(session.configUrl ?? null);
     }).catch(() => { /* IndexedDB may be disabled in private mode */ }).finally(() => { if (!cancelled) setHydrated(true); });
     return () => { cancelled = true; };
   }, [projectId]);
@@ -121,10 +130,10 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
     const timer = window.setTimeout(() => {
       const storedImages = images.map(({ url: _url, ...image }) => image);
       const storedReferences = references.map((reference) => ({ ...reference, images: reference.images.map(({ url: _url, ...image }) => image) }));
-      void writeSession(projectId, { images: storedImages, classes, activeId, references: storedReferences }).then(() => setSaveState("saved")).catch(() => setSaveState("saved"));
+      void writeSession(projectId, { images: storedImages, classes, activeId, references: storedReferences, productsSubmitted, colabToken, configUrl }).then(() => setSaveState("saved")).catch(() => setSaveState("saved"));
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [images, classes, activeId, references, hydrated, projectId]);
+  }, [images, classes, activeId, references, productsSubmitted, colabToken, configUrl, hydrated, projectId]);
 
   const active = images.find((image) => image.id === activeId) ?? null;
   const activeIndex = active ? images.findIndex((image) => image.id === active.id) : -1;
@@ -252,21 +261,38 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   }
 
   async function runAutoMatch() {
-    if (!images.length || !references.length || autoMatching) return;
+    if (!images.length || !references.length || !selectedModelIds.length || autoMatching) return;
     setAutoMatching(true); setAutoError(null);
     try {
-      for (let i = 0; i < images.length; i++) {
-        const image = images[i];
-        setAutoProgress(`Image ${i + 1}/${images.length}: loading AI…`);
-        const matches = await matchProductsInImage({ image: image.file, references: references.map((item) => ({ className: item.className, files: item.images.map((entry) => entry.file) })), threshold: matchThreshold, onProgress: (message) => setAutoProgress(`Image ${i + 1}/${images.length}: ${message}`) });
-        const boxes: Box[] = matches.map((match) => ({ id: crypto.randomUUID(), x: match.x, y: match.y, width: match.width, height: match.height, className: match.className, confidence: match.score, source: "reference_matcher" }));
-        setImages((current) => current.map((entry) => entry.id === image.id ? { ...entry, boxes: [...entry.boxes, ...boxes] } : entry));
-      }
-      setAutoProgress("Auto Match complete. Click any box to inspect its class.");
+      setAutoProgress("Uploading temporary products and target images…");
+      const launch = await startTemporaryLabelSession({ projectId, modelIds: selectedModelIds, confidence, iou, threshold: matchThreshold, references: references.map((item) => ({ className: item.className, files: item.images.map((entry) => entry.file) })), targets: images.map((image) => image.file) });
+      setColabToken(launch.token); setConfigUrl(launch.config_url); setAutoProgress("Colab opened — paste Config URL and choose Runtime → Run all.");
+      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
     } catch (error) {
       setAutoError(error instanceof Error ? error.message : "Auto matching failed");
     } finally { setAutoMatching(false); }
   }
+
+  useEffect(() => {
+    if (!colabToken) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const session = await getTemporaryLabelSession(colabToken); if (stopped) return;
+        setRemoteSession(session); setAutoProgress(session.message);
+        if (session.status === "completed") {
+          setImages((current) => current.map((image) => {
+            const result = session.results.find((item) => item.file_name.replace(/^\d+_/, "") === image.file.name || item.file_name.endsWith(image.file.name));
+            if (!result) return image;
+            return { ...image, boxes: result.detections.map((detection) => ({ id: crypto.randomUUID(), className: detection.class_name, confidence: detection.matcher_score ?? detection.confidence, source: detection.source === "reference_matcher" ? "reference_matcher" : "yolo", x: detection.x - detection.width / 2, y: detection.y - detection.height / 2, width: detection.width, height: detection.height })) };
+          }));
+          return;
+        }
+      } catch (error) { if (!stopped) setAutoError(error instanceof Error ? error.message : "Could not read Colab progress"); }
+      if (!stopped) window.setTimeout(poll, 4000);
+    };
+    void poll(); return () => { stopped = true; };
+  }, [colabToken]);
 
   function removeImage(id: string) {
     const index = images.findIndex((image) => image.id === id);
@@ -327,9 +353,18 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   async function closeSession() {
     images.forEach((image) => URL.revokeObjectURL(image.url));
     references.forEach((reference) => reference.images.forEach((image) => URL.revokeObjectURL(image.url)));
-    setImages([]); setClasses([]); setReferences([]); setActiveId(null); setPendingBox(null); setConfirmClose(false);
+    if (colabToken) await deleteTemporaryLabelSession(colabToken).catch(() => undefined);
+    setImages([]); setClasses([]); setReferences([]); setActiveId(null); setPendingBox(null); setConfirmClose(false); setProductsSubmitted(false); setColabToken(null); setConfigUrl(null); setRemoteSession(null);
     await deleteSession(projectId).catch(() => { /* state is still cleared in this tab */ });
   }
+
+  if (!productsSubmitted) return (
+    <div className="space-y-5"><div className="rounded-2xl border border-violet-100 bg-white/90 p-6 shadow-sm"><div className="flex items-center gap-3"><span className="rounded-xl bg-violet-100 p-2.5 text-violet-700"><Sparkles className="h-6 w-6" /></span><div><h1 className="text-xl font-bold">Step 1 — Add new products</h1><p className="mt-1 text-sm text-slate-500">Each product has one class and one or more reference photos. Nothing is saved to Supabase.</p></div></div><div className="mt-6 flex max-w-xl flex-col gap-2 sm:flex-row"><input value={referenceClass} onChange={(e) => setReferenceClass(e.target.value)} placeholder="Product class, e.g. pepsi_500ml" className="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3 text-sm" /><Button disabled={!referenceClass.trim()} onClick={() => { setReferenceUploadTarget(null); referenceFileRef.current?.click(); }}><ImagePlus className="h-4 w-4" />Select multiple photos</Button></div><p className="mt-2 text-xs text-slate-400">File picker mein Ctrl/Shift se multiple images ek saath select karein.</p></div>
+      {references.length > 0 && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{references.map((reference) => <div key={reference.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><h2 className="font-bold">{reference.className}</h2><button onClick={() => removeReference(reference.id)} className="text-slate-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></div><div className="mt-3 flex flex-wrap gap-2">{reference.images.map((image) => <img key={image.id} src={image.url} alt="" className="h-20 w-20 rounded-xl object-cover" />)}</div><Button variant="secondary" className="mt-3 w-full" onClick={() => chooseMoreProductImages(reference.id)}><Plus className="h-4 w-4" />Add more images</Button></div>)}</div>}
+      <div className="flex justify-end"><Button disabled={!references.length} onClick={() => setProductsSubmitted(true)}>Submit {references.length} product{references.length === 1 ? "" : "s"} & continue<ChevronRight className="h-4 w-4" /></Button></div>
+      <input ref={referenceFileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) addReferenceFiles(e.target.files); e.target.value = ""; }} />
+    </div>
+  );
 
   return (
     <div className="space-y-5">
@@ -343,6 +378,8 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
       {references.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-bold text-slate-900">Reference product groups</h2><p className="mt-1 text-xs text-slate-500">Every class is a separate product. Select multiple files together, or add more images later.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-700">{references.length} products</span></div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{references.map((reference) => <div key={reference.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-bold text-slate-800">{reference.className}</p><button onClick={() => removeReference(reference.id)} className="text-slate-400 hover:text-red-500" title="Remove this product"><Trash2 className="h-4 w-4" /></button></div><div className="mt-2 flex flex-wrap gap-1.5">{reference.images.map((image) => <img key={image.id} src={image.url} alt={reference.className} className="h-12 w-12 rounded-lg border border-white object-cover shadow-sm" />)}</div><Button variant="secondary" onClick={() => chooseMoreProductImages(reference.id)} className="mt-3 w-full text-xs"><ImagePlus className="h-3.5 w-3.5" />Add more images</Button></div>)}</div><p className="mt-3 text-xs font-medium text-violet-700">Another product add karne ke liye upar different class name likhein, phir multiple photos select karein.</p></section>}
 
       {selectedBox && <div className="flex items-center gap-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3"><span className="h-3 w-3 rounded-full bg-emerald-500" /><div className="min-w-0 flex-1"><p className="text-xs font-medium text-emerald-700">Selected box class</p><p className="truncate text-sm font-bold text-emerald-950">{selectedBox.className}</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selectedBox.source === "reference_matcher" ? `Auto match · ${Math.round((selectedBox.confidence ?? 0) * 100)}%` : "Manual"}</span><button onClick={() => setSelectedBoxId(null)} className="text-emerald-700"><X className="h-4 w-4" /></button></div>}
+
+      {images.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><div><h2 className="font-bold">Colab models & settings</h2><p className="mt-1 text-xs text-slate-500">YOLO finds boxes; submitted products refine final classes.</p></div><button onClick={() => setProductsSubmitted(false)} disabled={Boolean(colabToken)} className="text-xs font-semibold text-violet-700 disabled:opacity-40">Edit products</button></div><div className="mt-4"><ModelMultiSelect models={models} selectedIds={selectedModelIds} onChange={setSelectedModelIds} disabled={Boolean(colabToken)} /></div><div className="mt-4 grid gap-4 sm:grid-cols-3"><label className="text-xs font-medium">YOLO confidence: {confidence.toFixed(2)}<input type="range" min="0.05" max="0.9" step="0.05" value={confidence} onChange={(e) => setConfidence(Number(e.target.value))} className="mt-2 w-full" /></label><label className="text-xs font-medium">IoU: {iou.toFixed(2)}<input type="range" min="0.1" max="0.9" step="0.05" value={iou} onChange={(e) => setIou(Number(e.target.value))} className="mt-2 w-full" /></label><label className="text-xs font-medium">Product match: {matchThreshold.toFixed(2)}<input type="range" min="0.5" max="0.95" step="0.01" value={matchThreshold} onChange={(e) => setMatchThreshold(Number(e.target.value))} className="mt-2 w-full" /></label></div>{configUrl && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3"><p className="text-xs font-bold">Copy this Config URL into Colab</p><div className="mt-2 flex gap-2"><input readOnly value={configUrl} className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2 text-xs" /><Button variant="secondary" onClick={() => navigator.clipboard.writeText(configUrl)}>Copy</Button></div></div>}{remoteSession && <div className="mt-4"><div className="flex justify-between text-xs"><span>{remoteSession.message}</span><span>{remoteSession.processed}/{remoteSession.total}</span></div><div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-600" style={{ width: `${remoteSession.total ? remoteSession.processed / remoteSession.total * 100 : 0}%` }} /></div></div>}</section>}
 
       {!images.length ? (
         <button type="button" onClick={() => inputRef.current?.click()} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); void addFiles(e.dataTransfer.files); }} className={`flex min-h-[28rem] w-full flex-col items-center justify-center rounded-3xl border-2 border-dashed bg-white/70 p-8 transition ${dragging ? "border-emerald-500 bg-emerald-50" : "border-slate-300 hover:border-emerald-400 hover:bg-emerald-50/40"}`}>

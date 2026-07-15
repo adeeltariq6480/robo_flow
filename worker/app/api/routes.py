@@ -8,6 +8,7 @@ import asyncio
 import tempfile
 import shutil
 import threading
+import urllib.parse
 from uuid import uuid4
 from pathlib import Path
 
@@ -2347,6 +2348,96 @@ async def stock_colab_start(body: StockColabStartRequest, _: None = Depends(veri
         "config_url": config_url,
         "total": len(urls),
     }
+
+
+@api_router.post("/label-tool-colab/start")
+async def label_tool_colab_start(
+    project_id: str = Form(...), model_ids: str = Form(...), confidence: float = Form(0.25),
+    iou: float = Form(0.45), threshold: float = Form(0.80),
+    reference_manifest: str = Form(...), files: list[UploadFile] = File(...),
+):
+    from app.services.colab_launch import github_repo_url, public_worker_url, sign_launch_token
+    from app.services.label_tool_sessions import create, upload
+    try:
+        parsed_models = [str(value) for value in json.loads(model_ids) if str(value)]
+        references = json.loads(reference_manifest)
+        if not parsed_models or not references:
+            raise ValueError("Models and reference products are required")
+        session = create(project_id, parsed_models, confidence, iou, threshold)
+        payloads: list[tuple[str, bytes]] = []
+        for file in files:
+            relative = _safe_filename(file.filename).replace("__", "/")
+            payloads.append((relative, await file.read()))
+        await asyncio.to_thread(upload, session, payloads, references)
+        token = sign_launch_token({"mode": "temporary_label_tool", "session_id": session["id"]}, ttl_seconds=6 * 60 * 60)
+        relay = f"{public_worker_url()}/api/label-tool-colab/file/{token}"
+        for product in session["references"]:
+            product["urls"] = [f"{relay}/{urllib.parse.quote(path, safe='/')}" for path in product["paths"]]
+        for target in session["targets"]:
+            target["url"] = f"{relay}/{urllib.parse.quote(target['path'], safe='/')}"
+        repo = github_repo_url().removesuffix(".git").replace("https://github.com/", "")
+        return {"session_id": session["id"], "token": token, "colab_url": f"https://colab.research.google.com/github/{repo}/blob/main/notebooks/colab_label_tool.ipynb", "config_url": f"{public_worker_url()}/api/label-tool-colab/config/{token}"}
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _label_tool_session_from_token(token_path: str):
+    from app.services.colab_launch import decode_notebook_token, verify_launch_token
+    from app.services.label_tool_sessions import get
+    payload = verify_launch_token(decode_notebook_token(token_path))
+    if payload.get("mode") != "temporary_label_tool": raise ValueError("Invalid label-tool token")
+    session = get(str(payload.get("session_id") or ""))
+    if not session: raise ValueError("Temporary label session expired")
+    return session
+
+
+@api_router.get("/label-tool-colab/session/{token_path:path}")
+async def label_tool_colab_session(token_path: str):
+    from app.services.label_tool_sessions import public
+    try: return public(_label_tool_session_from_token(token_path))
+    except ValueError as exc: raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.get("/label-tool-colab/config/{token_path:path}")
+async def label_tool_colab_config(token_path: str):
+    from app.services.colab_launch import github_repo_url, public_worker_url
+    try:
+        session = _label_tool_session_from_token(token_path)
+        return {**session, "repo_url": github_repo_url(), "railway_url": public_worker_url(), "label_token": token_path,
+                "supabase_url": settings.supabase_url, "supabase_service_role_key": settings.supabase_service_role_key,
+                "hf_token": settings.hf_token, "hf_dataset_repo": settings.dataset_repo_id, "hf_model_repo": settings.model_repo_id}
+    except ValueError as exc: raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.get("/label-tool-colab/file/{token}/{file_path:path}")
+async def label_tool_colab_file(token: str, file_path: str):
+    try:
+        session = _label_tool_session_from_token(token)
+        allowed = {path for product in session["references"] for path in product.get("paths", [])} | {target["path"] for target in session["targets"]}
+        if file_path not in allowed: raise HTTPException(status_code=404, detail="Temporary file not found")
+        from app.services.hf_storage import download_to_local
+        local = await asyncio.to_thread(download_to_local, settings.dataset_repo_id, f"temp_label_tool/{session['id']}/{file_path}", repo_type=settings.dataset_repo_type)
+        return Response(content=Path(local).read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+    except ValueError as exc: raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.post("/label-tool-colab/update/{token_path:path}")
+async def label_tool_colab_update(token_path: str, body: StockColabUpdateRequest):
+    from app.services.label_tool_sessions import update
+    try:
+        session = _label_tool_session_from_token(token_path); fields = body.model_dump(exclude_none=True)
+        result = fields.pop("result", None)
+        if result is not None: session["results"].append(result)
+        return {"ok": True, "processed": update(session["id"], **fields)["processed"]}
+    except (ValueError, KeyError) as exc: raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@api_router.delete("/label-tool-colab/session/{token_path:path}")
+async def label_tool_colab_delete(token_path: str):
+    from app.services.label_tool_sessions import cleanup
+    try:
+        session = _label_tool_session_from_token(token_path); cleanup(session["id"]); return {"ok": True}
+    except ValueError: return {"ok": True}
 
 
 def _stock_session_from_token(token_path: str):

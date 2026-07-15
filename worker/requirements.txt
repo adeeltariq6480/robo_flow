@@ -21,6 +21,7 @@ onnxruntime>=1.16.0
 opencv-python-headless>=4.8.0
 Pillow>=10.4.0
 numpy>=1.26.0
+open_clip_torch>=2.29.0
 
 # YOLOv5 Legacy Runtime Dependencies
 pandas>=2.2.0
