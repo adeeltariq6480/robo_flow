@@ -1,6 +1,6 @@
-import { ManualLabelTool } from "@/components/label-tool/manual-label-tool";
+import { LabelToolClient } from "@/components/label-tool/label-tool-client";
 
 export default async function LabelToolPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <ManualLabelTool projectId={id} />;
+  return <LabelToolClient projectId={id} />;
 }
