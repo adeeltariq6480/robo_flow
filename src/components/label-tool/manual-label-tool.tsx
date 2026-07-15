@@ -8,6 +8,7 @@ import {
   Download,
   ImagePlus,
   Plus,
+  Search,
   Scissors,
   Trash2,
   UploadCloud,
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 type Box = { id: string; x: number; y: number; width: number; height: number; className: string };
 type LabelImage = { id: string; file: File; url: string; width: number; height: number; boxes: Box[] };
 type Draft = { startX: number; startY: number; x: number; y: number; width: number; height: number };
+type PendingBox = Omit<Box, "className"> & { imageId: string };
 
 const COLORS = ["#10b981", "#06b6d4", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6"];
 const safeName = (value: string) => value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_") || "object";
@@ -27,13 +29,16 @@ const escapeXml = (value: string) => value.replace(/[<>&'\"]/g, (c) => ({ "<": "
 export function ManualLabelTool() {
   const [images, setImages] = useState<LabelImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [classes, setClasses] = useState(["object"]);
-  const [activeClass, setActiveClass] = useState("object");
+  const [classes, setClasses] = useState<string[]>([]);
   const [newClass, setNewClass] = useState("");
+  const [bulkClasses, setBulkClasses] = useState("");
+  const [classSearch, setClassSearch] = useState("");
+  const [pendingBox, setPendingBox] = useState<PendingBox | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [exporting, setExporting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const classFileRef = useRef<HTMLInputElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const imagesRef = useRef<LabelImage[]>([]);
@@ -44,6 +49,10 @@ export function ManualLabelTool() {
   const active = images.find((image) => image.id === activeId) ?? null;
   const activeIndex = active ? images.findIndex((image) => image.id === active.id) : -1;
   const boxCount = useMemo(() => images.reduce((sum, image) => sum + image.boxes.length, 0), [images]);
+  const filteredClasses = useMemo(() => {
+    const query = classSearch.trim().toLocaleLowerCase();
+    return query ? classes.filter((name) => name.toLocaleLowerCase().includes(query)) : classes;
+  }, [classes, classSearch]);
 
   async function addFiles(files: FileList | File[]) {
     const accepted = Array.from(files).filter((file) => file.type.startsWith("image/"));
@@ -88,8 +97,8 @@ export function ManualLabelTool() {
   function finishBox(event: React.PointerEvent) {
     if (!draft || !active) return;
     if (draft.width > 0.008 && draft.height > 0.008) {
-      const box: Box = { id: crypto.randomUUID(), x: draft.x, y: draft.y, width: draft.width, height: draft.height, className: activeClass };
-      setImages((current) => current.map((image) => image.id === active.id ? { ...image, boxes: [...image.boxes, box] } : image));
+      setPendingBox({ id: crypto.randomUUID(), imageId: active.id, x: draft.x, y: draft.y, width: draft.width, height: draft.height });
+      setClassSearch("");
     }
     setDraft(null);
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* already released */ }
@@ -99,8 +108,30 @@ export function ManualLabelTool() {
     const value = newClass.trim();
     if (!value) return;
     if (!classes.includes(value)) setClasses((current) => [...current, value]);
-    setActiveClass(value);
     setNewClass("");
+  }
+
+  function parseClasses(value: string) {
+    let values: unknown = value;
+    try { values = JSON.parse(value); } catch { /* accept text and CSV */ }
+    const raw = Array.isArray(values) ? values : String(values).split(/[\n,]+/);
+    return raw.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  function importClasses(value = bulkClasses) {
+    const imported = parseClasses(value);
+    if (!imported.length) return;
+    setClasses((current) => Array.from(new Set([...current, ...imported])));
+    setBulkClasses("");
+  }
+
+  function assignPendingBox(className: string) {
+    if (!pendingBox) return;
+    const { imageId, ...geometry } = pendingBox;
+    const box: Box = { ...geometry, className };
+    setImages((current) => current.map((image) => image.id === imageId ? { ...image, boxes: [...image.boxes, box] } : image));
+    setPendingBox(null);
+    setClassSearch("");
   }
 
   function removeImage(id: string) {
@@ -176,10 +207,21 @@ export function ManualLabelTool() {
 
           <main className="flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-950"><div className="flex items-center justify-between border-b border-slate-800 px-4 py-2 text-slate-300"><span className="truncate text-sm">{active?.file.name}</span><span className="text-xs text-slate-500">Drag on image to create crop box</span></div><div ref={stageRef} className="relative flex min-h-[32rem] flex-1 items-center justify-center overflow-hidden p-3">{active && <div className="relative max-h-full max-w-full touch-none select-none" onPointerDown={startBox} onPointerMove={moveBox} onPointerUp={finishBox}><img ref={imageRef} src={active.url} alt={active.file.name} draggable={false} className="block max-h-[calc(100dvh-17rem)] max-w-full object-contain" />{active.boxes.map((box, i) => { const color = COLORS[classes.indexOf(box.className) % COLORS.length] || COLORS[0]; return <div key={box.id} className="absolute border-2" style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%`, borderColor: color, backgroundColor: `${color}18` }}><span className="absolute -top-6 left-[-2px] rounded-t px-1.5 py-0.5 text-[10px] font-bold text-white" style={{ backgroundColor: color }}>{i + 1} · {box.className}</span></div>; })}{draft && <div className="pointer-events-none absolute border-2 border-dashed border-cyan-400 bg-cyan-400/10" style={{ left: `${draft.x * 100}%`, top: `${draft.y * 100}%`, width: `${draft.width * 100}%`, height: `${draft.height * 100}%` }} />}</div>}</div><div className="flex items-center justify-center gap-3 border-t border-slate-800 p-2"><Button variant="secondary" onClick={() => activeIndex > 0 && setActiveId(images[activeIndex - 1].id)} disabled={activeIndex <= 0}><ChevronLeft className="h-4 w-4" />Prev</Button><span className="text-xs text-slate-400">{activeIndex + 1} / {images.length}</span><Button variant="secondary" onClick={() => activeIndex < images.length - 1 && setActiveId(images[activeIndex + 1].id)} disabled={activeIndex >= images.length - 1}>Next<ChevronRight className="h-4 w-4" /></Button></div></main>
 
-          <aside className="space-y-4"><section className="rounded-2xl border border-slate-200 bg-white p-4"><h2 className="text-sm font-bold">Active class</h2><div className="mt-3 flex flex-wrap gap-2">{classes.map((name, i) => <button key={name} onClick={() => setActiveClass(name)} className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${name === activeClass ? "text-white shadow" : "bg-white text-slate-600"}`} style={name === activeClass ? { backgroundColor: COLORS[i % COLORS.length], borderColor: COLORS[i % COLORS.length] } : {}}>{name}</button>)}</div><div className="mt-3 flex gap-2"><input value={newClass} onChange={(e) => setNewClass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addClass()} placeholder="New class name" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button onClick={addClass} className="rounded-lg bg-slate-900 p-2 text-white"><Plus className="h-4 w-4" /></button></div></section><section className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-center justify-between"><h2 className="text-sm font-bold">Crops ({active?.boxes.length ?? 0})</h2>{active?.boxes.length ? <button onClick={() => setImages((current) => current.map((image) => image.id === active.id ? { ...image, boxes: [] } : image))} className="text-xs text-red-500">Clear all</button> : null}</div><div className="mt-3 max-h-80 space-y-2 overflow-y-auto">{active?.boxes.map((box, i) => <div key={box.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-xs font-bold text-emerald-700">{i + 1}</span><span className="min-w-0 flex-1 truncate text-sm font-medium">{box.className}</span><button onClick={() => setImages((current) => current.map((image) => image.id === active.id ? { ...image, boxes: image.boxes.filter((item) => item.id !== box.id) } : image))} className="text-slate-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></div>)}{!active?.boxes.length && <p className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400">Draw a rectangle over an object to add your first crop.</p>}</div></section></aside>
+          <aside className="space-y-4"><section className="rounded-2xl border border-slate-200 bg-white p-4"><h2 className="text-sm font-bold">Class library</h2><p className="mt-1 text-xs text-slate-400">Paste a JSON array, comma list, or one class per line.</p><textarea value={bulkClasses} onChange={(e) => setBulkClasses(e.target.value)} placeholder={'["person", "car", "bottle"]'} rows={3} className="mt-3 w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs" /><div className="mt-2 grid grid-cols-2 gap-2"><Button variant="secondary" className="text-xs" onClick={() => classFileRef.current?.click()}><UploadCloud className="h-3.5 w-3.5" />Upload file</Button><Button className="text-xs" onClick={() => importClasses()} disabled={!bulkClasses.trim()}>Import classes</Button></div><div className="mt-3 flex gap-2"><input value={newClass} onChange={(e) => setNewClass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addClass()} placeholder="Add one class" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button onClick={addClass} className="rounded-lg bg-slate-900 p-2 text-white"><Plus className="h-4 w-4" /></button></div><p className="mt-2 text-xs font-medium text-slate-500">{classes.length} classes loaded</p></section><section className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-center justify-between"><h2 className="text-sm font-bold">Crops ({active?.boxes.length ?? 0})</h2>{active?.boxes.length ? <button onClick={() => setImages((current) => current.map((image) => image.id === active.id ? { ...image, boxes: [] } : image))} className="text-xs text-red-500">Clear all</button> : null}</div><div className="mt-3 max-h-80 space-y-2 overflow-y-auto">{active?.boxes.map((box, i) => <div key={box.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-xs font-bold text-emerald-700">{i + 1}</span><span className="min-w-0 flex-1 truncate text-sm font-medium">{box.className}</span><button onClick={() => setImages((current) => current.map((image) => image.id === active.id ? { ...image, boxes: image.boxes.filter((item) => item.id !== box.id) } : image))} className="text-slate-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></div>)}{!active?.boxes.length && <p className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400">Draw a rectangle over an object to add your first crop.</p>}</div></section></aside>
+        </div>
+      )}
+      {pendingBox && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Select class for box">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/20 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 p-5"><div><h2 className="text-lg font-bold text-slate-900">Assign a class</h2><p className="mt-1 text-sm text-slate-500">Select the class for this box. The box saves after selection.</p></div><button onClick={() => setPendingBox(null)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Cancel box"><X className="h-5 w-5" /></button></div>
+            <div className="p-5"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input autoFocus value={classSearch} onChange={(e) => setClassSearch(e.target.value)} placeholder="Search classes…" className="w-full rounded-xl border border-slate-300 py-3 pl-10 pr-3 text-sm" /></div>
+              <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">{filteredClasses.map((name, i) => <button key={name} onClick={() => assignPendingBox(name)} className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-3 text-left transition hover:border-emerald-400 hover:bg-emerald-50"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: COLORS[classes.indexOf(name) % COLORS.length] }} /><span className="flex-1 text-sm font-semibold text-slate-700">{name}</span><span className="text-xs text-slate-400">Select</span></button>)}{classes.length === 0 && <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-5 text-center text-sm text-amber-800">No classes loaded. Cancel this box and import your class array from the Class library first.</div>}{classes.length > 0 && filteredClasses.length === 0 && <p className="p-5 text-center text-sm text-slate-400">No class matches “{classSearch}”.</p>}</div>
+            </div>
+          </div>
         </div>
       )}
       <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ""; }} />
+      <input ref={classFileRef} type="file" accept=".txt,.json,.csv,text/plain,application/json" hidden onChange={async (e) => { const file = e.target.files?.[0]; if (file) importClasses(await file.text()); e.target.value = ""; }} />
     </div>
   );
 }
