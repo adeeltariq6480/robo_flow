@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { StockSimilarComparePanel } from "@/components/inventory/stock-similar-compare";
 import { StockCsvDetectionPanel } from "@/components/inventory/stock-csv-detection";
+import { StockBarcodeIssuesPanel } from "@/components/inventory/stock-barcode-issues";
 import { Download, RefreshCw, Trash2, Upload, X } from "lucide-react";
 
 interface InventoryPanelProps {
@@ -577,6 +578,12 @@ export function InventoryPanel({
         />
 
         <StockSimilarComparePanel
+          csvFile={csvFile}
+          limit={downloadLimit}
+          disabled={csvDownloading || uploading}
+        />
+
+        <StockBarcodeIssuesPanel
           csvFile={csvFile}
           limit={downloadLimit}
           disabled={csvDownloading || uploading}

@@ -175,6 +175,60 @@ export type SimilarPairRow = {
   similarUrl: string;
 };
 
+export type BarcodeIssueRow = {
+  imageId: string;
+  outletName: string;
+  status: "mismatch" | "fake";
+  statusLabel: string;
+  barcode: string;
+  aiBarcode: string;
+  imageUrl: string;
+};
+
+export function extractBarcodeIssues(
+  csvText: string,
+  limit = 0
+): { issues: BarcodeIssueRow[]; totalMatching: number } {
+  const { headers, rows } = parseCsv(csvText);
+  const statusIdx = findHeaderIndex(headers, ["barcode status"]);
+  const imageIdx = findHeaderIndex(headers, ["barcode image"]);
+  const barcodeIdx = findHeaderIndex(headers, ["barcode"]);
+  const aiBarcodeIdx = findHeaderIndex(headers, ["ai barcode number"]);
+  const imageIdIdx = findHeaderIndex(headers, ["image id", "image_id"]);
+  const outletIdx = findHeaderIndex(headers, ["outlet name", "outlet_name"]);
+  if (statusIdx < 0 || imageIdx < 0) {
+    throw new Error('CSV mein "Barcode Status" aur "Barcode Image" columns chahiye.');
+  }
+
+  const cleanBarcode = (value: string) => value.trim().replace(/^"+|"+$/g, "");
+  const issues: BarcodeIssueRow[] = [];
+  for (const row of rows) {
+    const label = (row[statusIdx] ?? "").trim();
+    const normalized = label.toLowerCase();
+    const status = normalized.includes("mismatch")
+      ? "mismatch"
+      : normalized.includes("fake")
+        ? "fake"
+        : null;
+    if (!status) continue;
+    const rawUrl = (row[imageIdx] ?? "").trim();
+    if (!rawUrl || !isHttpUrl(rawUrl)) continue;
+    issues.push({
+      imageId: imageIdIdx >= 0 ? (row[imageIdIdx] ?? "").trim() : String(issues.length + 1),
+      outletName: outletIdx >= 0 ? (row[outletIdx] ?? "").trim() : "",
+      status,
+      statusLabel: label,
+      barcode: barcodeIdx >= 0 ? cleanBarcode(row[barcodeIdx] ?? "") : "",
+      aiBarcode: aiBarcodeIdx >= 0 ? cleanBarcode(row[aiBarcodeIdx] ?? "") : "",
+      imageUrl: normalizeImageUrl(rawUrl),
+    });
+  }
+  return {
+    issues: limit > 0 ? issues.slice(0, limit) : issues,
+    totalMatching: issues.length,
+  };
+}
+
 /**
  * Rows with Result Image + Similar Image where Similar Score% >= minScore
  * (default 80 — pairs claimed similar at/above 80%).
