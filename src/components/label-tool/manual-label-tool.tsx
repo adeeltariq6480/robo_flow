@@ -10,6 +10,7 @@ import {
   Plus,
   Search,
   Scissors,
+  ShieldCheck,
   Trash2,
   UploadCloud,
   X,
@@ -20,13 +21,53 @@ type Box = { id: string; x: number; y: number; width: number; height: number; cl
 type LabelImage = { id: string; file: File; url: string; width: number; height: number; boxes: Box[] };
 type Draft = { startX: number; startY: number; x: number; y: number; width: number; height: number };
 type PendingBox = Omit<Box, "className"> & { imageId: string };
+type StoredImage = Omit<LabelImage, "url">;
+type StoredSession = { images: StoredImage[]; classes: string[]; activeId: string | null };
 
 const COLORS = ["#10b981", "#06b6d4", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6"];
 const safeName = (value: string) => value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_") || "object";
 const baseName = (name: string) => name.replace(/\.[^.]+$/, "");
 const escapeXml = (value: string) => value.replace(/[<>&'\"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]!);
+const DB_NAME = "axiom-manual-label-tool";
+const STORE_NAME = "sessions";
 
-export function ManualLabelTool() {
+function openSessionDb() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readSession(key: string) {
+  const db = await openSessionDb();
+  return new Promise<StoredSession | undefined>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME).objectStore(STORE_NAME).get(key);
+    request.onsuccess = () => { resolve(request.result as StoredSession | undefined); db.close(); };
+    request.onerror = () => { reject(request.error); db.close(); };
+  });
+}
+
+async function writeSession(key: string, session: StoredSession) {
+  const db = await openSessionDb();
+  await new Promise<void>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(session, key);
+    request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+  });
+  db.close();
+}
+
+async function deleteSession(key: string) {
+  const db = await openSessionDb();
+  await new Promise<void>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(key);
+    request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+  });
+  db.close();
+}
+
+export function ManualLabelTool({ projectId }: { projectId: string }) {
   const [images, setImages] = useState<LabelImage[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [classes, setClasses] = useState<string[]>([]);
@@ -37,6 +78,9 @@ export function ManualLabelTool() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [exporting, setExporting] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
+  const [confirmClose, setConfirmClose] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const classFileRef = useRef<HTMLInputElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -45,6 +89,26 @@ export function ManualLabelTool() {
 
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => () => imagesRef.current.forEach((image) => URL.revokeObjectURL(image.url)), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readSession(projectId).then((session) => {
+      if (cancelled || !session) return;
+      const restored = session.images.map((image) => ({ ...image, url: URL.createObjectURL(image.file) }));
+      setImages(restored); setClasses(session.classes); setActiveId(session.activeId ?? restored[0]?.id ?? null);
+    }).catch(() => { /* IndexedDB may be disabled in private mode */ }).finally(() => { if (!cancelled) setHydrated(true); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    setSaveState("saving");
+    const timer = window.setTimeout(() => {
+      const storedImages = images.map(({ url: _url, ...image }) => image);
+      void writeSession(projectId, { images: storedImages, classes, activeId }).then(() => setSaveState("saved")).catch(() => setSaveState("saved"));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [images, classes, activeId, hydrated, projectId]);
 
   const active = images.find((image) => image.id === activeId) ?? null;
   const activeIndex = active ? images.findIndex((image) => image.id === active.id) : -1;
@@ -190,11 +254,17 @@ export function ManualLabelTool() {
     } finally { setExporting(false); }
   }
 
+  async function closeSession() {
+    images.forEach((image) => URL.revokeObjectURL(image.url));
+    setImages([]); setClasses([]); setActiveId(null); setPendingBox(null); setConfirmClose(false);
+    await deleteSession(projectId).catch(() => { /* state is still cleared in this tab */ });
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-4 rounded-2xl border border-emerald-100 bg-white/80 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <div><div className="flex items-center gap-2"><span className="rounded-xl bg-emerald-100 p-2 text-emerald-700"><Scissors className="h-5 w-5" /></span><h1 className="text-xl font-bold text-slate-900">Manual Label & Crop Tool</h1></div><p className="mt-2 text-sm text-slate-500">Upload images, draw boxes, and export every crop with YOLO TXT and Pascal VOC XML labels.</p></div>
-        <Button onClick={exportDataset} disabled={!images.length} loading={exporting}>{!exporting && <Download className="h-4 w-4" />}{exporting ? "Building ZIP…" : "Download complete ZIP"}</Button>
+        <div className="flex flex-wrap items-center gap-2"><span className="mr-1 flex items-center gap-1.5 text-xs font-medium text-emerald-700"><ShieldCheck className="h-4 w-4" />{saveState === "saving" ? "Auto-saving…" : "Session saved"}</span>{images.length > 0 && <Button variant="secondary" onClick={() => setConfirmClose(true)} className="!border-red-200 !text-red-600 hover:!bg-red-50"><X className="h-4 w-4" />Close session</Button>}<Button onClick={exportDataset} disabled={!images.length} loading={exporting}>{!exporting && <Download className="h-4 w-4" />}{exporting ? "Building ZIP…" : "Download complete ZIP"}</Button></div>
       </div>
 
       {!images.length ? (
@@ -218,6 +288,11 @@ export function ManualLabelTool() {
               <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">{filteredClasses.map((name, i) => <button key={name} onClick={() => assignPendingBox(name)} className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-3 text-left transition hover:border-emerald-400 hover:bg-emerald-50"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: COLORS[classes.indexOf(name) % COLORS.length] }} /><span className="flex-1 text-sm font-semibold text-slate-700">{name}</span><span className="text-xs text-slate-400">Select</span></button>)}{classes.length === 0 && <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-5 text-center text-sm text-amber-800">No classes loaded. Cancel this box and import your class array from the Class library first.</div>}{classes.length > 0 && filteredClasses.length === 0 && <p className="p-5 text-center text-sm text-slate-400">No class matches “{classSearch}”.</p>}</div>
             </div>
           </div>
+        </div>
+      )}
+      {confirmClose && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Close labeling session">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600"><Trash2 className="h-6 w-6" /></div><h2 className="mt-4 text-center text-lg font-bold">Close and clear this session?</h2><p className="mt-2 text-center text-sm text-slate-500">All uploaded images, boxes, and imported classes will be permanently removed from this browser. Make sure you downloaded the ZIP first.</p><div className="mt-6 grid grid-cols-2 gap-3"><Button variant="secondary" onClick={() => setConfirmClose(false)}>Keep working</Button><Button onClick={() => void closeSession()} className="!bg-red-600 hover:!bg-red-700"><Trash2 className="h-4 w-4" />Yes, clear all</Button></div></div>
         </div>
       )}
       <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ""; }} />
