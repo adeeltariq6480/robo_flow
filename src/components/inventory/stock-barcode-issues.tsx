@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { extractBarcodeIssues, type BarcodeIssueRow } from "@/lib/stock-csv-download";
-import { AlertTriangle, Copy, ScanBarcode, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Copy, Search, ScanBarcode, ShieldAlert, X } from "lucide-react";
 
 function proxySrc(url: string) {
   return `/api/image-proxy?url=${encodeURIComponent(url)}`;
@@ -15,6 +15,7 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   async function showIssues() {
     if (!csvFile) return;
@@ -36,11 +37,14 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
   }
 
   function clear() {
-    setIssues([]); setTotal(0); setError(null); setCopied(null);
+    setIssues([]); setTotal(0); setError(null); setCopied(null); setSearch("");
   }
 
-  const fakeIssues = issues.filter((item) => item.status === "fake");
-  const mismatchIssues = issues.filter((item) => item.status === "mismatch");
+  const query = search.trim().toLowerCase();
+  const visibleIssues = query ? issues.filter((item) => [item.imageId, item.barcode, item.aiBarcode, item.outletName, item.statusLabel]
+    .some((value) => value.toLowerCase().includes(query))) : issues;
+  const fakeIssues = visibleIssues.filter((item) => item.status === "fake");
+  const mismatchIssues = visibleIssues.filter((item) => item.status === "mismatch");
 
   function issueGrid(items: BarcodeIssueRow[]) {
     return <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-5">
@@ -76,9 +80,14 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
       </div>
       {error && <div className="mt-3"><Alert variant="info">{error}</Alert></div>}
       {issues.length > 0 && <div className="mt-5 space-y-6">
+        <label className="relative block max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search Image ID, Barcode or AI Barcode…" className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm outline-none transition focus:border-violet-400 focus:ring-4 focus:ring-violet-100" />
+          {search && <button type="button" onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700" aria-label="Clear search"><X className="h-4 w-4" /></button>}
+        </label>
         <div className="flex flex-wrap gap-2 text-sm">
           <span className="rounded-full bg-violet-100 px-3 py-1 font-semibold text-violet-900">Total issues: {total}</span>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing: {issues.length}</span>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing: {visibleIssues.length}</span>
           <span className="rounded-full bg-rose-100 px-3 py-1 font-semibold text-rose-900">Fake: {fakeIssues.length}</span>
           <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-900">Mismatch: {mismatchIssues.length}</span>
         </div>
@@ -100,6 +109,7 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
           </div>
           {issueGrid(mismatchIssues)}
         </section>}
+        {visibleIssues.length === 0 && <Alert variant="info">Is search se koi barcode image nahi mili.</Alert>}
       </div>}
     </div>
   );

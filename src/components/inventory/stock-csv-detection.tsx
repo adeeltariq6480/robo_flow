@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
 import { extractImageUrls } from "@/lib/stock-csv-download";
 import type { DirectStockResult } from "@/lib/worker/client";
-import { AlertTriangle, CheckCircle2, Copy, ExternalLink, Package, Play, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, ExternalLink, Package, Play, Search, X } from "lucide-react";
 
 interface Props {
   projectId: string;
@@ -41,6 +41,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
   const [sessionToken, setSessionToken] = useState("");
   const [processed, setProcessed] = useState(0);
   const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
   const runRef = useRef(0);
   const watchingRef = useRef(false);
   const storageKey = `robo-flow:stock-colab:${projectId}`;
@@ -87,6 +88,12 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     }
     return result;
   }, [rows]);
+  const visibleRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter((row) => [row.url, ...Object.keys(row.counts || {}), ...Object.keys(row.needs_review || {})]
+      .some((value) => value.toLowerCase().includes(query)));
+  }, [rows, search]);
 
   async function handleCheck() {
     if (!csvFile || running || modelIds.length === 0) return;
@@ -99,6 +106,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
     setSessionToken("");
     setProcessed(0);
     setTotal(0);
+    setSearch("");
     try {
       const parsed = extractImageUrls(await csvFile.text(), "result", limit);
       if (!parsed.urls.length) throw new Error('CSV mein valid "Result Image" URL nahi mila.');
@@ -245,6 +253,11 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
       {rows.length > 0 && (
         <ResultsPortal>
         <div className="space-y-6">
+          <label className="relative block max-w-xl">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search image URL or detected product…" className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm outline-none transition focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100" />
+            {search && <button type="button" onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700" aria-label="Clear search"><X className="h-4 w-4" /></button>}
+          </label>
           <section className="overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-cyan-50 shadow-sm">
             <div className="flex flex-col gap-3 border-b border-emerald-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
@@ -280,7 +293,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
           </section>
 
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-5">
-          {rows.map((row, index) => (
+          {visibleRows.map((row, index) => (
             <article key={`${row.url}-${index}`} className="group flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg">
               <div className="flex items-center justify-between border-b border-slate-100 px-3.5 py-2.5">
                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Image {index + 1}</span>
@@ -307,6 +320,7 @@ export function StockCsvDetectionPanel({ projectId, modelIds, csvFile, limit, di
             </article>
           ))}
           </div>
+          {visibleRows.length === 0 && <Alert variant="info">Is search se koi stock image nahi mili.</Alert>}
         </div>
         </ResultsPortal>
       )}

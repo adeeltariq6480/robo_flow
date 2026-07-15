@@ -6,7 +6,7 @@ import { extractSimilarPairs } from "@/lib/stock-csv-download";
 import { compareImageUrls } from "@/lib/image-similarity";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { CheckCircle2, Copy, GitCompare, X, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, GitCompare, Search, X, XCircle } from "lucide-react";
 
 export type SimilarCheckItem = SimilarPairRow & {
   visualScore?: number;
@@ -33,6 +33,7 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [copiedItem, setCopiedItem] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const runTokenRef = useRef(0);
 
   async function handleCheck() {
@@ -124,6 +125,7 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
     setProgress("");
     setError(null);
     setCopiedItem(null);
+    setSearch("");
   }
 
   async function handleCopyUrls(item: SimilarCheckItem) {
@@ -138,6 +140,10 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
       setError("Image URLs copy nahi ho sake. Browser clipboard permission check karein.");
     }
   }
+
+  const query = search.trim().toLowerCase();
+  const visibleItems = query ? items.filter((item) => [item.imageId, item.outletName, item.resultUrl, item.similarUrl]
+    .some((value) => value.toLowerCase().includes(query))) : items;
 
   return (
     <div className="mt-8 border-t border-slate-100 pt-6">
@@ -204,15 +210,20 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
 
       {items.length > 0 && (
         <div className="mt-5 space-y-4">
+          <label className="relative block max-w-xl">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search Image ID, outlet or image URL…" className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm outline-none transition focus:border-violet-400 focus:ring-4 focus:ring-violet-100" />
+            {search && <button type="button" onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700" aria-label="Clear search"><X className="h-4 w-4" /></button>}
+          </label>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="rounded-full bg-violet-100 px-3 py-1 font-semibold text-violet-900">
               Total similar pairs: {totalMatching}
             </span>
             <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
-              Showing: {items.length}
+              Showing: {visibleItems.length}
             </span>
           </div>
-          {items.map((item, index) => {
+          {visibleItems.map((item, index) => {
             const itemKey = `${item.imageId}-${item.resultUrl}`;
             return (
             <article
@@ -281,6 +292,7 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
             </article>
             );
           })}
+          {visibleItems.length === 0 && <Alert variant="info">Is search se koi similar image nahi mili.</Alert>}
         </div>
       )}
     </div>
