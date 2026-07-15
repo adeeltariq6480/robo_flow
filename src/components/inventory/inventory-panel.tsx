@@ -585,7 +585,6 @@ export function InventoryPanel({
 
         <StockBarcodeIssuesPanel
           csvFile={csvFile}
-          limit={downloadLimit}
           disabled={csvDownloading || uploading}
         />
       </section>
