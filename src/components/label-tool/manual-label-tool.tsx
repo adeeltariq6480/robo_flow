@@ -88,6 +88,7 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   const [confirmClose, setConfirmClose] = useState(false);
   const [references, setReferences] = useState<ReferenceProduct[]>([]);
   const [referenceClass, setReferenceClass] = useState("");
+  const [referenceUploadTarget, setReferenceUploadTarget] = useState<string | null>(null);
   const [matchThreshold, setMatchThreshold] = useState(0.8);
   const [autoMatching, setAutoMatching] = useState(false);
   const [autoProgress, setAutoProgress] = useState("");
@@ -218,16 +219,28 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
   }
 
   function addReferenceFiles(files: FileList | File[]) {
-    const className = referenceClass.trim();
     const accepted = Array.from(files).filter((file) => file.type.startsWith("image/"));
-    if (!className || !accepted.length) return;
+    if (!accepted.length) return;
     const added = accepted.map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) }));
+    if (referenceUploadTarget && !referenceClass.trim()) {
+      setReferences((current) => current.map((item) => item.id === referenceUploadTarget ? { ...item, images: [...item.images, ...added] } : item));
+      setReferenceUploadTarget(null);
+      return;
+    }
+    const className = referenceClass.trim();
+    if (!className) { added.forEach((image) => URL.revokeObjectURL(image.url)); return; }
     setReferences((current) => {
       const existing = current.find((item) => item.className === className);
       return existing ? current.map((item) => item.id === existing.id ? { ...item, images: [...item.images, ...added] } : item) : [...current, { id: crypto.randomUUID(), className, images: added }];
     });
     setClasses((current) => current.includes(className) ? current : [...current, className]);
     setReferenceClass("");
+  }
+
+  function chooseMoreProductImages(productId: string) {
+    setReferenceClass("");
+    setReferenceUploadTarget(productId);
+    referenceFileRef.current?.click();
   }
 
   function removeReference(id: string) {
@@ -326,6 +339,8 @@ export function ManualLabelTool({ projectId }: { projectId: string }) {
       </div>
 
       {images.length > 0 && <section className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-cyan-50 p-4"><div className="flex flex-col gap-4 lg:flex-row lg:items-end"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-600" /><h2 className="text-sm font-bold">Auto Reference Match</h2></div><p className="mt-1 text-xs text-slate-500">Enter a product class and add one or more clear reference photos. Files stay only in this browser.</p><div className="mt-3 flex max-w-md gap-2"><input value={referenceClass} onChange={(e) => setReferenceClass(e.target.value)} placeholder="Product class, e.g. pepsi_500ml" className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" /><Button variant="secondary" disabled={!referenceClass.trim()} onClick={() => referenceFileRef.current?.click()}><ImagePlus className="h-4 w-4" />Add photos</Button></div></div><div className="w-full lg:w-64"><label className="block text-xs font-medium text-slate-600">Match threshold: {Math.round(matchThreshold * 100)}%</label><input type="range" min="0.5" max="0.95" step="0.01" value={matchThreshold} onChange={(e) => setMatchThreshold(Number(e.target.value))} className="mt-1 w-full accent-violet-600" /><Button onClick={() => void runAutoMatch()} disabled={!references.length || autoMatching} loading={autoMatching} className="mt-2 w-full !bg-violet-600 hover:!bg-violet-700">{!autoMatching && <Sparkles className="h-4 w-4" />}{autoMatching ? "Matching…" : "Auto label all images"}</Button></div></div>{references.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{references.map((reference) => <div key={reference.id} className="flex items-center gap-2 rounded-xl border border-white bg-white/85 p-2 shadow-sm"><div className="flex -space-x-2">{reference.images.slice(0, 3).map((image) => <img key={image.id} src={image.url} alt="" className="h-8 w-8 rounded-lg border-2 border-white object-cover" />)}</div><span className="text-xs font-semibold">{reference.className} ({reference.images.length})</span><button onClick={() => removeReference(reference.id)} className="text-slate-400 hover:text-red-500"><X className="h-4 w-4" /></button></div>)}</div>}{autoProgress && <p className="mt-3 text-xs font-medium text-violet-700">{autoProgress}</p>}{autoError && <p className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-600">{autoError}</p>}</section>}
+
+      {references.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-bold text-slate-900">Reference product groups</h2><p className="mt-1 text-xs text-slate-500">Every class is a separate product. Select multiple files together, or add more images later.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-700">{references.length} products</span></div><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{references.map((reference) => <div key={reference.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="flex items-center justify-between gap-2"><p className="truncate text-sm font-bold text-slate-800">{reference.className}</p><button onClick={() => removeReference(reference.id)} className="text-slate-400 hover:text-red-500" title="Remove this product"><Trash2 className="h-4 w-4" /></button></div><div className="mt-2 flex flex-wrap gap-1.5">{reference.images.map((image) => <img key={image.id} src={image.url} alt={reference.className} className="h-12 w-12 rounded-lg border border-white object-cover shadow-sm" />)}</div><Button variant="secondary" onClick={() => chooseMoreProductImages(reference.id)} className="mt-3 w-full text-xs"><ImagePlus className="h-3.5 w-3.5" />Add more images</Button></div>)}</div><p className="mt-3 text-xs font-medium text-violet-700">Another product add karne ke liye upar different class name likhein, phir multiple photos select karein.</p></section>}
 
       {selectedBox && <div className="flex items-center gap-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3"><span className="h-3 w-3 rounded-full bg-emerald-500" /><div className="min-w-0 flex-1"><p className="text-xs font-medium text-emerald-700">Selected box class</p><p className="truncate text-sm font-bold text-emerald-950">{selectedBox.className}</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selectedBox.source === "reference_matcher" ? `Auto match · ${Math.round((selectedBox.confidence ?? 0) * 100)}%` : "Manual"}</span><button onClick={() => setSelectedBoxId(null)} className="text-emerald-700"><X className="h-4 w-4" /></button></div>}
 
