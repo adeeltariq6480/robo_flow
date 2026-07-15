@@ -204,7 +204,15 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
 
       {items.length > 0 && (
         <div className="mt-5 space-y-4">
-          {items.map((item) => {
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="rounded-full bg-violet-100 px-3 py-1 font-semibold text-violet-900">
+              Total similar pairs: {totalMatching}
+            </span>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+              Showing: {items.length}
+            </span>
+          </div>
+          {items.map((item, index) => {
             const itemKey = `${item.imageId}-${item.resultUrl}`;
             return (
             <article
@@ -213,6 +221,9 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
             >
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
                 <div className="min-w-0 text-sm">
+                  <span className="mr-2 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-violet-600 px-1.5 text-xs font-bold text-white">
+                    {index + 1}
+                  </span>
                   <span className="font-medium text-slate-900">
                     #{item.imageId}
                   </span>

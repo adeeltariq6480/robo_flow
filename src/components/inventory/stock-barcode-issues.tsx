@@ -54,15 +54,16 @@ export function StockBarcodeIssuesPanel({ csvFile, limit, disabled }: { csvFile:
       {error && <div className="mt-3"><Alert variant="info">{error}</Alert></div>}
       {issues.length > 0 && <div className="mt-5 space-y-4">
         <div className="flex flex-wrap gap-2 text-sm">
+          <span className="rounded-full bg-violet-100 px-3 py-1 font-semibold text-violet-900">Total issues: {total}</span>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing: {issues.length}</span>
           <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-900">Mismatch: {mismatch}</span>
           <span className="rounded-full bg-rose-100 px-3 py-1 font-semibold text-rose-900">Fake: {fake}</span>
-          {total > issues.length && <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing {issues.length} of {total}</span>}
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-5">
           {issues.map((issue, index) => <article key={`${issue.imageId}-${index}`} className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${issue.status === "fake" ? "border-rose-200" : "border-amber-200"}`}>
             <div className={`flex items-center justify-between px-3 py-2 text-xs font-semibold ${issue.status === "fake" ? "bg-rose-50 text-rose-900" : "bg-amber-50 text-amber-900"}`}>
-              <span className="flex items-center gap-1.5">{issue.status === "fake" ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}{issue.statusLabel}</span>
-              <span>#{issue.imageId || index + 1}</span>
+              <span className="flex min-w-0 items-center gap-1.5">{issue.status === "fake" ? <ShieldAlert className="h-4 w-4 shrink-0" /> : <AlertTriangle className="h-4 w-4 shrink-0" />}<span className="truncate">{issue.statusLabel}</span></span>
+              <span className="flex shrink-0 items-center gap-1.5"><strong className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-slate-900 px-1.5 text-white">{index + 1}</strong><span>#{issue.imageId || "—"}</span></span>
             </div>
             <div className="p-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
