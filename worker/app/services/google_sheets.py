@@ -131,14 +131,14 @@ def append_rows(category: str, items: list[dict]) -> dict:
         values = [[
             _file_date(item.get("result_url"), item.get("similar_url")),
             item.get("image_id", ""), item.get("result_url", ""),
-            item.get("similar_url", ""), _percent(item.get("csv_score")), "Done",
+            item.get("similar_url", ""), _percent(item.get("csv_score")), "Pending",
         ] for item in items]
     else:
         # Existing Fake_Barcode_May columns: Date, Image ID,
         # Fake Barcode Url, Status.
         values = [[
             _file_date(item.get("image_url")), item.get("image_id", ""),
-            item.get("image_url", ""), "Done",
+            item.get("image_url", ""), "Pending",
         ] for item in items]
     quoted = title.replace("'", "''")
     width = 6 if category == "similar" else 4

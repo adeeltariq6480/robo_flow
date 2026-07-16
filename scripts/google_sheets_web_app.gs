@@ -30,10 +30,25 @@ function percent(value) {
   return !text || text.endsWith("%") ? text : text + "%";
 }
 
-function lastSavedDate(sheet) {
+function lastDataRow(sheet) {
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return "";
-  const values = sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+  if (lastRow < 2) return 1;
+  const values = sheet.getRange(2, 1, lastRow - 1, 4).getDisplayValues();
+  const statusOptions = ["pending", "in progress", "fixed", "testing", "completed"];
+  let dataRow = 1;
+  for (let i = 0; i < values.length; i += 1) {
+    const row = values[i].map(function (value) { return String(value || "").trim(); });
+    // The Fake sheet keeps dropdown source values far below the visible data.
+    // Never append below that list.
+    if (!row[0] && !row[1] && !row[2] && statusOptions.indexOf(row[3].toLowerCase()) !== -1) break;
+    if (row[1] || row[2]) dataRow = i + 2;
+  }
+  return dataRow;
+}
+
+function lastSavedDate(sheet, dataRow) {
+  if (dataRow < 2) return "";
+  const values = sheet.getRange(2, 1, dataRow - 1, 1).getDisplayValues();
   for (let i = values.length - 1; i >= 0; i -= 1) {
     const value = String(values[i][0] || "").trim();
     if (value && value.toLowerCase() !== "date") return value;
@@ -50,21 +65,26 @@ function doPost(event) {
 
     const sheet = findSheet(body.category);
     const width = body.category === "similar" ? 6 : 4;
-    let previousDate = lastSavedDate(sheet);
+    const currentLastDataRow = lastDataRow(sheet);
+    let nextRow = currentLastDataRow + 1;
+    let previousDate = lastSavedDate(sheet, currentLastDataRow);
 
     body.items.forEach(function (item) {
       const date = body.category === "similar"
         ? fileDate(item.result_url, item.similar_url)
         : fileDate(item.image_url);
       if (date && date !== previousDate) {
-        sheet.appendRow(new Array(width).fill(""));
-        sheet.getRange(sheet.getLastRow(), 1, 1, width).setBackground(BLUE_SEPARATOR);
+        sheet.getRange(nextRow, 1, 1, width)
+          .setValues([new Array(width).fill("")])
+          .setBackground(BLUE_SEPARATOR);
+        nextRow += 1;
         previousDate = date;
       }
       const row = body.category === "similar"
-        ? [date, item.image_id || "", item.result_url || "", item.similar_url || "", percent(item.csv_score), "Done"]
-        : [date, item.image_id || "", item.image_url || "", "Done"];
-      sheet.appendRow(row);
+        ? [date, item.image_id || "", item.result_url || "", item.similar_url || "", percent(item.csv_score), "Pending"]
+        : [date, item.image_id || "", item.image_url || "", "Pending"];
+      sheet.getRange(nextRow, 1, 1, width).setValues([row]).setBackground(null);
+      nextRow += 1;
     });
 
     return ContentService.createTextOutput(JSON.stringify({ok: true, added: body.items.length, tab: sheet.getName()}))
