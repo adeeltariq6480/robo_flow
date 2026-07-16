@@ -14,6 +14,10 @@ Model repo (HF model):
 
 import os
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+# Railway-to-Hugging-Face transfers can take longer than the Hub client's
+# short defaults, especially while preparing a multi-image training export.
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 
 import logging
 import tempfile
@@ -803,9 +807,30 @@ def download_to_local(
         "token": normalized_hf_token() or None,
         "cache_dir": str(settings.hf_cache_dir),
     }
-    try:
-        cached = Path(hf_hub_download(**download_kwargs))
-    except Exception as exc:
+    exc: Exception | None = None
+    cached: Path | None = None
+    for attempt in range(3):
+        try:
+            cached = Path(hf_hub_download(**download_kwargs, force_download=attempt > 0))
+            exc = None
+            break
+        except Exception as download_exc:
+            exc = download_exc
+            detail = str(download_exc).lower()
+            transient = any(marker in detail for marker in (
+                "timeout", "timed out", "read operation", "connection reset",
+                "server disconnected", "502", "503", "504",
+            ))
+            if transient and attempt < 2:
+                logger.warning(
+                    "Transient HF download failure; retry %s/3 in %ss: %s/%s (%s)",
+                    attempt + 2, attempt + 1, repo_id, path_in_repo, download_exc,
+                )
+                time.sleep(attempt + 1)
+                continue
+            break
+
+    if exc is not None:
         detail = str(exc).lower()
         if "signatureerror" in detail or "invalid key pair" in detail or "403 forbidden" in detail:
             logger.warning(
@@ -842,7 +867,7 @@ def download_to_local(
             logger.exception("File download failed with full error: %s/%s", repo_id, path_in_repo)
             raise
 
-    if cached.exists():
+    if cached is not None and cached.exists():
         if cached.resolve() != dest.resolve():
             dest.write_bytes(cached.read_bytes())
         logger.info("Download completed: %s", dest)

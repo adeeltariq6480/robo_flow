@@ -2484,7 +2484,19 @@ async def review_train_start(body: dict = Body(...)):
     from app.services.label_tool_sessions import create, update
     project_id, dataset_id = str(body.get("project_id") or ""), str(body.get("dataset_id") or "")
     if not project_id or not dataset_id: raise HTTPException(status_code=400, detail="project_id and dataset_id are required")
-    zip_bytes, _ = await asyncio.to_thread(export_builder.build_export, project_id, "yolo", dataset_id)
+    try:
+        zip_bytes, _ = await asyncio.to_thread(export_builder.build_export, project_id, "yolo", dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        detail = str(exc)
+        if any(marker in detail.lower() for marker in ("timeout", "timed out", "read operation")):
+            raise HTTPException(
+                status_code=504,
+                detail="Hugging Face image download timed out while preparing training. Please click Train Now again; downloads already cached will be reused.",
+            ) from exc
+        logger.exception("Approved training export failed")
+        raise HTTPException(status_code=502, detail=f"Training dataset could not be prepared: {detail}") from exc
     session = create(project_id, [], 0.0, 0.0, 0.0); remote_path = f"temp_label_tool/{session['id']}/training/dataset.zip"
     await asyncio.to_thread(HfApi(token=settings.hf_token).upload_file, path_or_fileobj=zip_bytes, path_in_repo=remote_path, repo_id=settings.dataset_repo_id, repo_type=settings.dataset_repo_type, commit_message=f"Approved training {session['id']}")
     session["targets"] = [{"name": "dataset.zip", "path": "training/dataset.zip", "url": ""}]
