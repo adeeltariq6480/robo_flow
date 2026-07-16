@@ -33,3 +33,18 @@ export async function startTemporaryTraining(args: { projectId: string; datasetZ
 export async function startApprovedDatasetTraining(args: { projectId: string; datasetId: string; epochs?: number; imageSize?: number }) {
   return response<{ token: string; colab_url: string; config_url: string }>(await fetch(`${API_BASE_URL}/api/review-train/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: args.projectId, dataset_id: args.datasetId, epochs: args.epochs ?? 50, image_size: args.imageSize ?? 640 }) }));
 }
+
+type TrainingLaunch = { token: string; colab_url: string; config_url: string };
+const approvedTrainingRequests = new Map<string, Promise<TrainingLaunch>>();
+
+export function startApprovedDatasetTrainingOnce(args: { projectId: string; datasetId: string; epochs?: number; imageSize?: number }) {
+  const key = `${args.projectId}:${args.datasetId}:${args.epochs ?? 50}:${args.imageSize ?? 640}`;
+  const current = approvedTrainingRequests.get(key);
+  if (current) return current;
+  const request = startApprovedDatasetTraining(args).catch((error) => {
+    approvedTrainingRequests.delete(key);
+    throw error;
+  });
+  approvedTrainingRequests.set(key, request);
+  return request;
+}

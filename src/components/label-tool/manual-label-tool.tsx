@@ -78,6 +78,7 @@ type StoredSession = {
   toolMode?: ToolMode | null;
   trainingToken?: string | null;
   trainingConfigUrl?: string | null;
+  trainingEpochs?: number;
 };
 
 const COLORS = [
@@ -199,6 +200,7 @@ export function ManualLabelTool({
   const [remoteSession, setRemoteSession] =
     useState<TemporaryLabelSession | null>(null);
   const [training, setTraining] = useState(false);
+  const [trainingEpochs, setTrainingEpochs] = useState(50);
   const [trainingToken, setTrainingToken] = useState<string | null>(null);
   const [trainingConfigUrl, setTrainingConfigUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -245,6 +247,7 @@ export function ManualLabelTool({
       setToolMode(session.toolMode ?? null);
       setTrainingToken(session.trainingToken ?? null);
       setTrainingConfigUrl(session.trainingConfigUrl ?? null);
+      setTrainingEpochs(session.trainingEpochs ?? 50);
       })
       .catch(() => {
         /* IndexedDB may be disabled in private mode */
@@ -277,6 +280,7 @@ export function ManualLabelTool({
         toolMode,
         trainingToken,
         trainingConfigUrl,
+        trainingEpochs,
       })
         .then(() => setSaveState("saved"))
         .catch(() => setSaveState("saved"));
@@ -293,6 +297,7 @@ export function ManualLabelTool({
     toolMode,
     trainingToken,
     trainingConfigUrl,
+    trainingEpochs,
     hydrated,
     projectId,
   ]);
@@ -726,7 +731,7 @@ export function ManualLabelTool({
     }
     setTraining(true); setAutoError(null);
     try {
-      const launch = await startTemporaryTraining({ projectId, datasetZip: await buildTrainingZip(), epochs: 50, imageSize: 640 });
+      const launch = await startTemporaryTraining({ projectId, datasetZip: await buildTrainingZip(), epochs: trainingEpochs, imageSize: 640 });
       setTrainingToken(launch.token); setTrainingConfigUrl(launch.config_url);
       if (colabWindow && !colabWindow.closed) colabWindow.location.replace(launch.colab_url);
       else window.location.assign(launch.colab_url);
@@ -977,6 +982,7 @@ export function ManualLabelTool({
               Close session
             </Button>
           )}
+          <label className="flex items-center gap-1.5 text-xs font-semibold text-violet-800">Epochs<select value={trainingEpochs} disabled={training} onChange={(event) => setTrainingEpochs(Number(event.target.value))} className="rounded-lg border border-violet-300 bg-white px-2 py-2 text-sm">{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
           <Button
             variant="secondary"
             onClick={() => void trainNow()}
@@ -985,7 +991,7 @@ export function ManualLabelTool({
             className="!border-violet-300 !text-violet-700 hover:!bg-violet-50"
           >
             {!training && <Sparkles className="h-4 w-4" />}
-            {training ? "Preparing training…" : "Train Now"}
+            {training ? `Preparing ${trainingEpochs} epochs…` : "Train Now"}
           </Button>
           <Button
             onClick={exportDataset}

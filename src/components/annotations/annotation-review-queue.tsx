@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -38,7 +38,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { ClassCountChips } from "@/components/annotations/class-count-chips";
-import { startApprovedDatasetTraining } from "@/lib/api/temporary-label-tool";
+import { startApprovedDatasetTrainingOnce } from "@/lib/api/temporary-label-tool";
 
 interface AnnotationReviewQueueProps {
   projectId: string;
@@ -117,7 +117,32 @@ export function AnnotationReviewQueue({
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [training, setTraining] = useState(false);
+  const [trainingEpochs, setTrainingEpochs] = useState(50);
   const [trainingConfigUrl, setTrainingConfigUrl] = useState<string | null>(null);
+  const [trainingColabUrl, setTrainingColabUrl] = useState<string | null>(null);
+  const trainingStorageKey = `approved-training:${projectId}:${datasetId}`;
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(trainingStorageKey);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { status?: string; configUrl?: string; colabUrl?: string; epochs?: number };
+      const savedEpochs = Math.max(10, Math.min(200, Number(saved.epochs) || 50));
+      setTrainingEpochs(savedEpochs);
+      if (saved.status === "ready" && saved.configUrl && saved.colabUrl) {
+        setTrainingConfigUrl(saved.configUrl); setTrainingColabUrl(saved.colabUrl); return;
+      }
+      if (saved.status !== "preparing") return;
+      setTraining(true);
+      void startApprovedDatasetTrainingOnce({ projectId, datasetId, epochs: savedEpochs }).then((launch) => {
+        setTraining(false); setTrainingConfigUrl(launch.config_url); setTrainingColabUrl(launch.colab_url);
+        window.localStorage.setItem(trainingStorageKey, JSON.stringify({ status: "ready", configUrl: launch.config_url, colabUrl: launch.colab_url, epochs: savedEpochs }));
+      }).catch((error) => {
+        setTraining(false); window.localStorage.removeItem(trainingStorageKey);
+        setError(error instanceof Error ? error.message : "Training launch failed");
+      });
+    } catch { window.localStorage.removeItem(trainingStorageKey); }
+  }, [datasetId, projectId, trainingStorageKey]);
 
   const visibleFiles = useMemo(
     () =>
@@ -254,13 +279,16 @@ export function AnnotationReviewQueue({
       colabWindow.document.body.textContent = "Preparing training dataset…";
     }
     setTraining(true); setError(null);
+    window.localStorage.setItem(trainingStorageKey, JSON.stringify({ status: "preparing", epochs: trainingEpochs }));
     try {
-      const launch = await startApprovedDatasetTraining({ projectId, datasetId });
-      setTrainingConfigUrl(launch.config_url);
+      const launch = await startApprovedDatasetTrainingOnce({ projectId, datasetId, epochs: trainingEpochs });
+      setTrainingConfigUrl(launch.config_url); setTrainingColabUrl(launch.colab_url);
+      window.localStorage.setItem(trainingStorageKey, JSON.stringify({ status: "ready", configUrl: launch.config_url, colabUrl: launch.colab_url, epochs: trainingEpochs }));
       if (colabWindow && !colabWindow.closed) colabWindow.location.replace(launch.colab_url);
       else window.location.assign(launch.colab_url);
     } catch (e) {
       if (colabWindow && !colabWindow.closed) colabWindow.close();
+      window.localStorage.removeItem(trainingStorageKey);
       setError(e instanceof Error ? e.message : "Training launch failed");
     }
     finally { setTraining(false); }
@@ -290,9 +318,9 @@ export function AnnotationReviewQueue({
           <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div><p className="text-sm font-bold text-violet-950">Train approved labels</p><p className="mt-0.5 text-xs text-violet-700">Only this dataset&apos;s {counts.approved ?? 0} approved image(s) will train on Colab.</p></div>
-              <Button type="button" onClick={() => void handleTrainNow()} disabled={(counts.approved ?? 0) === 0 || training} loading={training} className="!bg-violet-600 hover:!bg-violet-700">{!training && <Sparkles className="h-4 w-4" />}{training ? "Preparing…" : "Train Now"}</Button>
+              <div className="flex items-center gap-2"><label className="flex items-center gap-2 text-xs font-semibold text-violet-900">Epochs<select value={trainingEpochs} disabled={training} onChange={(event) => setTrainingEpochs(Number(event.target.value))} className="rounded-lg border border-violet-300 bg-white px-2 py-2 text-sm">{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><Button type="button" onClick={() => void handleTrainNow()} disabled={(counts.approved ?? 0) === 0 || training} loading={training} className="!bg-violet-600 hover:!bg-violet-700">{!training && <Sparkles className="h-4 w-4" />}{training ? `Preparing ${trainingEpochs} epochs…` : "Train Now"}</Button></div>
             </div>
-            {trainingConfigUrl && <div className="mt-3 flex gap-2"><input readOnly value={trainingConfigUrl} className="min-w-0 flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs" /><Button type="button" variant="secondary" onClick={() => navigator.clipboard.writeText(trainingConfigUrl)}><Copy className="h-4 w-4" />Copy Config URL</Button></div>}
+            {trainingConfigUrl && <div className="mt-3 flex flex-wrap gap-2"><input readOnly value={trainingConfigUrl} className="min-w-0 flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs" /><Button type="button" variant="secondary" onClick={() => navigator.clipboard.writeText(trainingConfigUrl)}><Copy className="h-4 w-4" />Copy Config URL</Button>{trainingColabUrl && <Button type="button" onClick={() => window.open(trainingColabUrl, "_blank", "noopener,noreferrer")}><ExternalLink className="h-4 w-4" />Open Colab</Button>}</div>}
           </div>
 
           <div className="flex flex-wrap items-end gap-4">
