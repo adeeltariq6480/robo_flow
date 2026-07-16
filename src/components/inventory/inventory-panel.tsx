@@ -28,6 +28,7 @@ import { StockSimilarComparePanel } from "@/components/inventory/stock-similar-c
 import { StockCsvDetectionPanel } from "@/components/inventory/stock-csv-detection";
 import { StockBarcodeIssuesPanel } from "@/components/inventory/stock-barcode-issues";
 import { Download, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { downloadStockIssueZip, type StockIssueCategory } from "@/lib/download-stock-issue-zip";
 
 interface InventoryPanelProps {
   projectId: string;
@@ -62,6 +63,9 @@ export function InventoryPanel({
   const [csvProgressPct, setCsvProgressPct] = useState(0);
   /** 0 = all; otherwise max images in ZIP */
   const [downloadLimit, setDownloadLimit] = useState(50);
+  const [issueCategories, setIssueCategories] = useState<StockIssueCategory[]>([]);
+  const [issueDownloading, setIssueDownloading] = useState(false);
+  const [issueProgress, setIssueProgress] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const checkAbortRef = useRef(false);
@@ -401,6 +405,14 @@ export function InventoryPanel({
     }
   }
 
+  async function handleIssueDownload() {
+    if (!csvFile || !issueCategories.length || issueDownloading) return;
+    setIssueDownloading(true); setError(null);
+    try { await downloadStockIssueZip(csvFile, issueCategories, setIssueProgress); setIssueProgress("Selected images downloaded."); }
+    catch (e) { setError(e instanceof Error ? e.message : "Issue images download failed"); }
+    finally { setIssueDownloading(false); }
+  }
+
   return (
     <div className="space-y-8">
       {/* Hero controls */}
@@ -568,6 +580,16 @@ export function InventoryPanel({
             )}
           </div>
         )}
+
+        <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4">
+          <h4 className="text-sm font-semibold text-slate-900">Download selected issue images</h4>
+          <p className="mt-1 text-xs text-slate-500">Checkbox select karein; ZIP mein har category ka separate folder banega.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-4">
+            {([['similar', 'Similar images'], ['fake', 'Fake barcodes'], ['mismatch', 'Barcode mismatch']] as const).map(([value, label]) => <label key={value} className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={issueCategories.includes(value)} onChange={(e) => setIssueCategories((current) => e.target.checked ? [...current, value] : current.filter((item) => item !== value))} className="h-4 w-4 rounded border-slate-300 accent-cyan-600" />{label}</label>)}
+            <Button type="button" onClick={() => void handleIssueDownload()} disabled={!csvFile || !issueCategories.length || issueDownloading} loading={issueDownloading}>{!issueDownloading && <Download className="h-4 w-4" />}Download selected</Button>
+          </div>
+          {issueProgress && <p className="mt-2 text-xs text-cyan-800">{issueProgress}</p>}
+        </div>
 
         <StockCsvDetectionPanel
           projectId={projectId}

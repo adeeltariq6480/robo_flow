@@ -183,6 +183,16 @@ export async function submitModelCompare(body: {
   );
 }
 
+export async function appendStockSheetRows(body: {
+  category: "similar" | "fake";
+  items: Record<string, unknown>[];
+}) {
+  return workerFetch<{ added: number; tab: string }>("/api/stock-sheet/append", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function startStockColabSession(body: {
   project_id: string;
   model_ids: string[];

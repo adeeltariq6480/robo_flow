@@ -1690,7 +1690,7 @@ def fail_export_job(project_id: str, export_job_id: str, error: str) -> None:
     ).eq("id", export_job_id).execute()
 
 
-def get_approved_export_data(project_id: str) -> list[dict]:
+def get_approved_export_data(project_id: str, dataset_id: str | None = None) -> list[dict]:
     ann_res = (
         _sb()
         .table("annotations")
@@ -1703,7 +1703,10 @@ def get_approved_export_data(project_id: str) -> list[dict]:
     if not approved_ids:
         return []
 
-    img_res = _sb().table("images").select("*").eq("project_id", project_id).execute()
+    query = _sb().table("images").select("*").eq("project_id", project_id)
+    if dataset_id:
+        query = query.eq("dataset_id", dataset_id)
+    img_res = query.execute()
     out: list[dict] = []
     for row in img_res.data or []:
         image_id = str(row["id"])

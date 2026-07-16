@@ -32,10 +32,13 @@ import {
   Clock,
   ExternalLink,
   Filter,
+  Copy,
+  Sparkles,
   X,
   XCircle,
 } from "lucide-react";
 import { ClassCountChips } from "@/components/annotations/class-count-chips";
+import { startApprovedDatasetTraining } from "@/lib/api/temporary-label-tool";
 
 interface AnnotationReviewQueueProps {
   projectId: string;
@@ -113,6 +116,8 @@ export function AnnotationReviewQueue({
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [training, setTraining] = useState(false);
+  const [trainingConfigUrl, setTrainingConfigUrl] = useState<string | null>(null);
 
   const visibleFiles = useMemo(
     () =>
@@ -238,6 +243,17 @@ export function AnnotationReviewQueue({
     setLoading(false);
   }
 
+  async function handleTrainNow() {
+    if ((counts.approved ?? 0) === 0 || training) return;
+    setTraining(true); setError(null);
+    try {
+      const launch = await startApprovedDatasetTraining({ projectId, datasetId });
+      setTrainingConfigUrl(launch.config_url);
+      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
+    } catch (e) { setError(e instanceof Error ? e.message : "Training launch failed"); }
+    finally { setTraining(false); }
+  }
+
   return (
     <div className="relative pb-20">
       {loadingLabel && (
@@ -258,6 +274,14 @@ export function AnnotationReviewQueue({
             description={`Open each image to edit boxes, or select images to approve / reject in bulk.`}
             className="mb-0"
           />
+
+          <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div><p className="text-sm font-bold text-violet-950">Train approved labels</p><p className="mt-0.5 text-xs text-violet-700">Only this dataset&apos;s {counts.approved ?? 0} approved image(s) will train on Colab.</p></div>
+              <Button type="button" onClick={() => void handleTrainNow()} disabled={(counts.approved ?? 0) === 0 || training} loading={training} className="!bg-violet-600 hover:!bg-violet-700">{!training && <Sparkles className="h-4 w-4" />}{training ? "Preparing…" : "Train Now"}</Button>
+            </div>
+            {trainingConfigUrl && <div className="mt-3 flex gap-2"><input readOnly value={trainingConfigUrl} className="min-w-0 flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs" /><Button type="button" variant="secondary" onClick={() => navigator.clipboard.writeText(trainingConfigUrl)}><Copy className="h-4 w-4" />Copy Config URL</Button></div>}
+          </div>
 
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex flex-wrap items-center gap-2">

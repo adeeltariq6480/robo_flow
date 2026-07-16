@@ -2350,6 +2350,15 @@ async def stock_colab_start(body: StockColabStartRequest, _: None = Depends(veri
     }
 
 
+@api_router.post("/stock-sheet/append")
+async def stock_sheet_append(body: dict = Body(...), _: None = Depends(verify_api_key)):
+    from app.services.google_sheets import append_rows
+    category = str(body.get("category") or ""); items = body.get("items") or []
+    if not isinstance(items, list) or not items: raise HTTPException(status_code=400, detail="Select at least one image")
+    try: return await asyncio.to_thread(append_rows, category, items)
+    except (ValueError, RuntimeError) as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @api_router.post("/label-tool-colab/start")
 async def label_tool_colab_start(
     project_id: str = Form(...), model_ids: str = Form(...), confidence: float = Form(0.25),
@@ -2385,7 +2394,7 @@ def _label_tool_session_from_token(token_path: str):
     from app.services.colab_launch import decode_notebook_token, verify_launch_token
     from app.services.label_tool_sessions import get
     payload = verify_launch_token(decode_notebook_token(token_path))
-    if payload.get("mode") != "temporary_label_tool": raise ValueError("Invalid label-tool token")
+    if payload.get("mode") not in {"temporary_label_tool", "temporary_label_training"}: raise ValueError("Invalid label-tool token")
     session = get(str(payload.get("session_id") or ""))
     if not session: raise ValueError("Temporary label session expired")
     return session
@@ -2438,6 +2447,53 @@ async def label_tool_colab_delete(token_path: str):
     try:
         session = _label_tool_session_from_token(token_path); cleanup(session["id"]); return {"ok": True}
     except ValueError: return {"ok": True}
+
+
+@api_router.post("/label-tool-train/start")
+async def label_tool_train_start(
+    project_id: str = Form(...), epochs: int = Form(50), image_size: int = Form(640),
+    dataset_zip: UploadFile = File(...),
+):
+    from app.services.colab_launch import github_repo_url, public_worker_url, sign_launch_token
+    from app.services.label_tool_sessions import create, update
+    from huggingface_hub import HfApi
+    session = create(project_id, [], 0.0, 0.0, 0.0)
+    remote_path = f"temp_label_tool/{session['id']}/training/dataset.zip"
+    content = await dataset_zip.read()
+    await asyncio.to_thread(HfApi(token=settings.hf_token).upload_file, path_or_fileobj=content, path_in_repo=remote_path, repo_id=settings.dataset_repo_id, repo_type=settings.dataset_repo_type, commit_message=f"Temporary training {session['id']}")
+    session["targets"] = [{"name": "dataset.zip", "path": "training/dataset.zip", "url": ""}]
+    session["epochs"] = max(1, min(500, epochs)); session["image_size"] = max(320, min(1280, image_size))
+    update(session["id"], status="waiting_for_colab", total=epochs, message="Open training Colab and run all")
+    token = sign_launch_token({"mode": "temporary_label_training", "session_id": session["id"]}, ttl_seconds=12 * 60 * 60)
+    relay = f"{public_worker_url()}/api/label-tool-colab/file/{token}/training/dataset.zip"
+    session["targets"][0]["url"] = relay
+    repo = github_repo_url().removesuffix(".git").replace("https://github.com/", "")
+    return {"token": token, "colab_url": f"https://colab.research.google.com/github/{repo}/blob/main/notebooks/colab_train_label_tool.ipynb", "config_url": f"{public_worker_url()}/api/label-tool-train/config/{token}"}
+
+
+@api_router.get("/label-tool-train/config/{token_path:path}")
+async def label_tool_train_config(token_path: str):
+    from app.services.colab_launch import public_worker_url
+    session = _label_tool_session_from_token(token_path)
+    return {"dataset_url": session["targets"][0]["url"], "epochs": session["epochs"], "image_size": session["image_size"], "railway_url": public_worker_url(), "train_token": token_path}
+
+
+@api_router.post("/review-train/start")
+async def review_train_start(body: dict = Body(...)):
+    from app.services.colab_launch import github_repo_url, public_worker_url, sign_launch_token
+    from app.services.label_tool_sessions import create, update
+    project_id, dataset_id = str(body.get("project_id") or ""), str(body.get("dataset_id") or "")
+    if not project_id or not dataset_id: raise HTTPException(status_code=400, detail="project_id and dataset_id are required")
+    zip_bytes, _ = await asyncio.to_thread(export_builder.build_export, project_id, "yolo", dataset_id)
+    session = create(project_id, [], 0.0, 0.0, 0.0); remote_path = f"temp_label_tool/{session['id']}/training/dataset.zip"
+    await asyncio.to_thread(HfApi(token=settings.hf_token).upload_file, path_or_fileobj=zip_bytes, path_in_repo=remote_path, repo_id=settings.dataset_repo_id, repo_type=settings.dataset_repo_type, commit_message=f"Approved training {session['id']}")
+    session["targets"] = [{"name": "dataset.zip", "path": "training/dataset.zip", "url": ""}]
+    session["epochs"] = max(1, min(500, int(body.get("epochs") or 50))); session["image_size"] = max(320, min(1280, int(body.get("image_size") or 640)))
+    update(session["id"], status="waiting_for_colab", total=session["epochs"], message="Open training Colab and run all")
+    token = sign_launch_token({"mode": "temporary_label_training", "session_id": session["id"]}, ttl_seconds=12 * 60 * 60)
+    session["targets"][0]["url"] = f"{public_worker_url()}/api/label-tool-colab/file/{token}/training/dataset.zip"
+    repo_name = github_repo_url().removesuffix(".git").replace("https://github.com/", "")
+    return {"token": token, "colab_url": f"https://colab.research.google.com/github/{repo_name}/blob/main/notebooks/colab_train_label_tool.ipynb", "config_url": f"{public_worker_url()}/api/label-tool-train/config/{token}"}
 
 
 def _stock_session_from_token(token_path: str):

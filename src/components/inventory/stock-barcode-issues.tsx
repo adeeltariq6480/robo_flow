@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { extractBarcodeIssues, type BarcodeIssueRow } from "@/lib/stock-csv-download";
-import { AlertTriangle, Copy, Search, ScanBarcode, ShieldAlert, X } from "lucide-react";
+import { addStockItemsToSheet } from "@/lib/actions/stock-sheet";
+import { AlertTriangle, Copy, FileSpreadsheet, Search, ScanBarcode, ShieldAlert, X } from "lucide-react";
 
 function proxySrc(url: string) {
   return `/api/image-proxy?url=${encodeURIComponent(url)}`;
@@ -16,6 +17,9 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sheetLoading, setSheetLoading] = useState(false);
+  const [sheetMessage, setSheetMessage] = useState<string | null>(null);
 
   async function showIssues() {
     if (!csvFile) return;
@@ -23,6 +27,7 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
     try {
       const result = extractBarcodeIssues(await csvFile.text());
       setIssues(result.issues);
+      setSelected(new Set()); setSheetMessage(null);
       setTotal(result.totalMatching);
       if (!result.issues.length) setError("CSV mein mismatch ya fake Barcode Image nahi mili.");
     } catch (e) {
@@ -37,7 +42,27 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
   }
 
   function clear() {
-    setIssues([]); setTotal(0); setError(null); setCopied(null); setSearch("");
+    setIssues([]); setTotal(0); setError(null); setCopied(null); setSearch(""); setSelected(new Set()); setSheetMessage(null);
+  }
+
+  const issueKey = (issue: BarcodeIssueRow) => `${issue.imageId}-${issue.imageUrl}`;
+  function toggleSelected(issue: BarcodeIssueRow) {
+    const key = issueKey(issue);
+    setSelected((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+    setSheetMessage(null);
+  }
+
+  async function addSelectedToSheet() {
+    const chosen = issues.filter((issue) => issue.status === "fake" && selected.has(issueKey(issue)));
+    if (!chosen.length || sheetLoading) return;
+    setSheetLoading(true); setError(null); setSheetMessage(null);
+    const result = await addStockItemsToSheet({ category: "fake", items: chosen.map((issue) => ({
+      image_id: issue.imageId, outlet_name: issue.outletName, image_url: issue.imageUrl,
+      barcode: issue.barcode, ai_barcode: issue.aiBarcode, status: issue.statusLabel,
+    })) });
+    setSheetLoading(false);
+    if (!result.ok) { setError(result.error); return; }
+    setSelected(new Set()); setSheetMessage(`${result.added} image row(s) “${result.tab}” sheet mein add ho gayi.`);
   }
 
   const query = search.trim().toLowerCase();
@@ -54,6 +79,9 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
           <span className="flex shrink-0 items-center gap-1.5"><strong className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-slate-900 px-1.5 text-white">{index + 1}</strong><span>#{issue.imageId || "—"}</span></span>
         </div>
         <div className="p-3">
+          {issue.status === "fake" && <label className="mb-3 flex cursor-pointer items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
+            <input type="checkbox" checked={selected.has(issueKey(issue))} onChange={() => toggleSelected(issue)} className="h-4 w-4 accent-rose-600" />Select for Fake Barcode sheet
+          </label>}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={proxySrc(issue.imageUrl)} alt={issue.statusLabel} className="max-h-[55vh] w-full rounded-xl bg-slate-100 object-contain" loading="lazy" />
           <div className="mt-3 space-y-1 text-xs text-slate-600">
@@ -90,7 +118,11 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
           <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing: {visibleIssues.length}</span>
           <span className="rounded-full bg-rose-100 px-3 py-1 font-semibold text-rose-900">Fake: {fakeIssues.length}</span>
           <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-900">Mismatch: {mismatchIssues.length}</span>
+          {selected.size > 0 && <Button type="button" loading={sheetLoading} onClick={() => void addSelectedToSheet()}>
+            {!sheetLoading && <FileSpreadsheet className="h-4 w-4" />}Add {selected.size} to Sheet
+          </Button>}
         </div>
+        {sheetMessage && <Alert variant="success">{sheetMessage}</Alert>}
 
         {fakeIssues.length > 0 && <section className="space-y-3">
           <div className="flex items-center gap-2 border-b border-rose-200 pb-2 text-rose-900">

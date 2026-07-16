@@ -41,6 +41,8 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
     )
+    google_sheets_service_account_json: str = Field(default="", validation_alias=AliasChoices("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON"))
+    stock_spreadsheet_id: str = Field(default="1XsLLOsz1zuj52NY1eWp6MduzYoFIaZLLTXL4GaMTqZY", validation_alias=AliasChoices("STOCK_SPREADSHEET_ID"))
 
     # --- Hugging Face Hub (binary file storage) ---
     hf_token: str = Field(default="", validation_alias=AliasChoices("HF_TOKEN"))

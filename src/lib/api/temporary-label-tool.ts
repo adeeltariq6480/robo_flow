@@ -24,3 +24,12 @@ export async function startTemporaryLabelSession(args: { projectId: string; mode
 
 export async function getTemporaryLabelSession(token: string) { return response<TemporaryLabelSession>(await fetch(`${API_BASE_URL}/api/label-tool-colab/session/${encodeURIComponent(token)}`, { cache: "no-store" })); }
 export async function deleteTemporaryLabelSession(token: string) { return response<{ ok: boolean }>(await fetch(`${API_BASE_URL}/api/label-tool-colab/session/${encodeURIComponent(token)}`, { method: "DELETE" })); }
+
+export async function startTemporaryTraining(args: { projectId: string; datasetZip: Blob; epochs: number; imageSize: number }) {
+  const form = new FormData(); form.set("project_id", args.projectId); form.set("epochs", String(args.epochs)); form.set("image_size", String(args.imageSize)); form.set("dataset_zip", args.datasetZip, "label-tool-training.zip");
+  return response<{ token: string; colab_url: string; config_url: string }>(await fetch(`${API_BASE_URL}/api/label-tool-train/start`, { method: "POST", body: form }));
+}
+
+export async function startApprovedDatasetTraining(args: { projectId: string; datasetId: string; epochs?: number; imageSize?: number }) {
+  return response<{ token: string; colab_url: string; config_url: string }>(await fetch(`${API_BASE_URL}/api/review-train/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: args.projectId, dataset_id: args.datasetId, epochs: args.epochs ?? 50, image_size: args.imageSize ?? 640 }) }));
+}

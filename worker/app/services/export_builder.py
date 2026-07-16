@@ -43,10 +43,10 @@ def _append_images(data: list[dict], files: dict[str, str | bytes]) -> None:
         files[f"images/{img['fileName']}"] = _image_bytes(img)
 
 
-def build_export(project_id: str, export_format: str) -> tuple[bytes, str]:
+def build_export(project_id: str, export_format: str, dataset_id: str | None = None) -> tuple[bytes, str]:
     """Return (zip_bytes, file_name)."""
     fmt = export_format.lower()
-    data = supabase_repo.get_approved_export_data(project_id)
+    data = supabase_repo.get_approved_export_data(project_id, dataset_id)
     if not data:
         raise ValueError("No approved images to export. Review and approve labels first.")
 
