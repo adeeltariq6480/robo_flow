@@ -74,8 +74,11 @@ function doPost(event) {
         ? fileDate(item.result_url, item.similar_url)
         : fileDate(item.image_url);
       if (date && date !== previousDate) {
+        // Insert a real separator row so an existing data row can never receive
+        // the blue fill. New data is written on the row immediately below it.
+        sheet.insertRowBefore(nextRow);
         sheet.getRange(nextRow, 1, 1, width)
-          .setValues([new Array(width).fill("")])
+          .clearContent()
           .setBackground(BLUE_SEPARATOR);
         nextRow += 1;
         previousDate = date;
