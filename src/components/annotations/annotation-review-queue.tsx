@@ -245,12 +245,24 @@ export function AnnotationReviewQueue({
 
   async function handleTrainNow() {
     if ((counts.approved ?? 0) === 0 || training) return;
+    // Open synchronously during the click so popup blockers do not reject the
+    // Colab tab after the (potentially long) dataset preparation request.
+    const colabWindow = window.open("about:blank", "_blank");
+    if (colabWindow) {
+      colabWindow.opener = null;
+      colabWindow.document.title = "Preparing Google Colab…";
+      colabWindow.document.body.textContent = "Preparing training dataset…";
+    }
     setTraining(true); setError(null);
     try {
       const launch = await startApprovedDatasetTraining({ projectId, datasetId });
       setTrainingConfigUrl(launch.config_url);
-      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
-    } catch (e) { setError(e instanceof Error ? e.message : "Training launch failed"); }
+      if (colabWindow && !colabWindow.closed) colabWindow.location.replace(launch.colab_url);
+      else window.location.assign(launch.colab_url);
+    } catch (e) {
+      if (colabWindow && !colabWindow.closed) colabWindow.close();
+      setError(e instanceof Error ? e.message : "Training launch failed");
+    }
     finally { setTraining(false); }
   }
 

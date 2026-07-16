@@ -718,12 +718,22 @@ export function ManualLabelTool({
 
   async function trainNow() {
     if (!images.length || !boxCount || training) return;
+    const colabWindow = window.open("about:blank", "_blank");
+    if (colabWindow) {
+      colabWindow.opener = null;
+      colabWindow.document.title = "Preparing Google Colab…";
+      colabWindow.document.body.textContent = "Preparing training dataset…";
+    }
     setTraining(true); setAutoError(null);
     try {
       const launch = await startTemporaryTraining({ projectId, datasetZip: await buildTrainingZip(), epochs: 50, imageSize: 640 });
       setTrainingToken(launch.token); setTrainingConfigUrl(launch.config_url);
-      window.open(launch.colab_url, "_blank", "noopener,noreferrer");
-    } catch (error) { setAutoError(error instanceof Error ? error.message : "Training launch failed"); }
+      if (colabWindow && !colabWindow.closed) colabWindow.location.replace(launch.colab_url);
+      else window.location.assign(launch.colab_url);
+    } catch (error) {
+      if (colabWindow && !colabWindow.closed) colabWindow.close();
+      setAutoError(error instanceof Error ? error.message : "Training launch failed");
+    }
     finally { setTraining(false); }
   }
 
