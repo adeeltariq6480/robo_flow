@@ -18,7 +18,7 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
   const [copied, setCopied] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sheetLoading, setSheetLoading] = useState(false);
+  const [sheetLoading, setSheetLoading] = useState<string | null>(null);
   const [sheetMessage, setSheetMessage] = useState<string | null>(null);
 
   async function showIssues() {
@@ -52,17 +52,18 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
     setSheetMessage(null);
   }
 
-  async function addSelectedToSheet() {
-    const chosen = issues.filter((issue) => issue.status === "fake" && selected.has(issueKey(issue)));
-    if (!chosen.length || sheetLoading) return;
-    setSheetLoading(true); setError(null); setSheetMessage(null);
-    const result = await addStockItemsToSheet({ category: "fake", items: chosen.map((issue) => ({
+  async function addItemToSheet(issue: BarcodeIssueRow) {
+    const key = issueKey(issue);
+    if (sheetLoading) return;
+    setSheetLoading(key); setError(null); setSheetMessage(null);
+    const result = await addStockItemsToSheet({ category: "fake", items: [{
       image_id: issue.imageId, outlet_name: issue.outletName, image_url: issue.imageUrl,
       barcode: issue.barcode, ai_barcode: issue.aiBarcode, status: issue.statusLabel,
-    })) });
-    setSheetLoading(false);
+    }] });
+    setSheetLoading(null);
     if (!result.ok) { setError(result.error); return; }
-    setSelected(new Set()); setSheetMessage(`${result.added} image row(s) “${result.tab}” sheet mein add ho gayi.`);
+    setSelected((current) => { const next = new Set(current); next.delete(key); return next; });
+    setSheetMessage(`${result.added} image row(s) “${result.tab}” sheet mein add ho gayi.`);
   }
 
   const query = search.trim().toLowerCase();
@@ -82,6 +83,9 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
           {issue.status === "fake" && <label className="mb-3 flex cursor-pointer items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
             <input type="checkbox" checked={selected.has(issueKey(issue))} onChange={() => toggleSelected(issue)} className="h-4 w-4 accent-rose-600" />Select for Fake Barcode sheet
           </label>}
+          {issue.status === "fake" && selected.has(issueKey(issue)) && <Button type="button" className="mb-3 w-full" loading={sheetLoading === issueKey(issue)} disabled={sheetLoading !== null && sheetLoading !== issueKey(issue)} onClick={() => void addItemToSheet(issue)}>
+            {sheetLoading !== issueKey(issue) && <FileSpreadsheet className="h-4 w-4" />}Add to Sheet
+          </Button>}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={proxySrc(issue.imageUrl)} alt={issue.statusLabel} className="max-h-[55vh] w-full rounded-xl bg-slate-100 object-contain" loading="lazy" />
           <div className="mt-3 space-y-1 text-xs text-slate-600">
@@ -118,9 +122,6 @@ export function StockBarcodeIssuesPanel({ csvFile, disabled }: { csvFile: File |
           <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">Showing: {visibleIssues.length}</span>
           <span className="rounded-full bg-rose-100 px-3 py-1 font-semibold text-rose-900">Fake: {fakeIssues.length}</span>
           <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-900">Mismatch: {mismatchIssues.length}</span>
-          {selected.size > 0 && <Button type="button" loading={sheetLoading} onClick={() => void addSelectedToSheet()}>
-            {!sheetLoading && <FileSpreadsheet className="h-4 w-4" />}Add {selected.size} to Sheet
-          </Button>}
         </div>
         {sheetMessage && <Alert variant="success">{sheetMessage}</Alert>}
 

@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env.local"),
+        env_file=(".env", ".env.local", "../.env.local"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -42,6 +42,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
     )
     google_sheets_service_account_json: str = Field(default="", validation_alias=AliasChoices("GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON"))
+    google_sheets_web_app_url: str = Field(default="", validation_alias=AliasChoices("GOOGLE_SHEETS_WEB_APP_URL"))
+    google_sheets_webhook_secret: str = Field(default="", validation_alias=AliasChoices("GOOGLE_SHEETS_WEBHOOK_SECRET"))
     stock_spreadsheet_id: str = Field(default="1XsLLOsz1zuj52NY1eWp6MduzYoFIaZLLTXL4GaMTqZY", validation_alias=AliasChoices("STOCK_SPREADSHEET_ID"))
 
     # --- Hugging Face Hub (binary file storage) ---

@@ -2,11 +2,29 @@
 from __future__ import annotations
 import json
 import re
+from urllib.request import Request, urlopen
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from app.config import settings
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def _append_via_web_app(category: str, items: list[dict]) -> dict:
+    url = settings.google_sheets_web_app_url.strip()
+    secret = settings.google_sheets_webhook_secret.strip()
+    if not secret:
+        raise RuntimeError("GOOGLE_SHEETS_WEBHOOK_SECRET is not configured on Railway")
+    payload = json.dumps({"secret": secret, "category": category, "items": items}).encode("utf-8")
+    request = Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - configured Apps Script URL
+            result = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Google Sheets Web App request failed: {exc}") from exc
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("error") or "Google Sheets Web App rejected the request"))
+    return {"added": int(result.get("added") or len(items)), "tab": str(result.get("tab") or "")}
 
 
 def _session() -> AuthorizedSession:
@@ -104,6 +122,8 @@ def _fill_blue_separator_rows(
 
 def append_rows(category: str, items: list[dict]) -> dict:
     if category not in {"similar", "fake"}: raise ValueError("category must be similar or fake")
+    if settings.google_sheets_web_app_url.strip():
+        return _append_via_web_app(category, items)
     session = _session(); title, sheet_id = _resolve_tab(session, category)
     if category == "similar":
         # Existing sheet columns: Date, Image ID, Result Image, Similar Image,

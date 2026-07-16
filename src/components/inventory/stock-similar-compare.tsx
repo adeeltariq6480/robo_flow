@@ -36,7 +36,7 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
   const [copiedItem, setCopiedItem] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sheetLoading, setSheetLoading] = useState(false);
+  const [sheetLoading, setSheetLoading] = useState<string | null>(null);
   const [sheetMessage, setSheetMessage] = useState<string | null>(null);
   const runTokenRef = useRef(0);
 
@@ -143,21 +143,21 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
     setSheetMessage(null);
   }
 
-  async function addSelectedToSheet() {
-    const chosen = items.filter((item) => selected.has(`${item.imageId}-${item.resultUrl}`));
-    if (!chosen.length || sheetLoading) return;
-    setSheetLoading(true); setSheetMessage(null); setError(null);
+  async function addItemToSheet(item: SimilarCheckItem) {
+    const key = `${item.imageId}-${item.resultUrl}`;
+    if (sheetLoading) return;
+    setSheetLoading(key); setSheetMessage(null); setError(null);
     const result = await addStockItemsToSheet({
       category: "similar",
-      items: chosen.map((item) => ({
+      items: [{
         image_id: item.imageId, outlet_name: item.outletName,
         result_url: item.resultUrl, similar_url: item.similarUrl,
         csv_score: item.csvScore, visual_score: item.visualScore ?? "",
-      })),
+      }],
     });
-    setSheetLoading(false);
+    setSheetLoading(null);
     if (!result.ok) { setError(result.error); return; }
-    setSelected(new Set());
+    setSelected((current) => { const next = new Set(current); next.delete(key); return next; });
     setSheetMessage(`${result.added} image row(s) “${result.tab}” sheet mein add ho gayi.`);
   }
 
@@ -255,9 +255,6 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
             <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
               Showing: {visibleItems.length}
             </span>
-            {selected.size > 0 && <Button type="button" loading={sheetLoading} onClick={() => void addSelectedToSheet()}>
-              {!sheetLoading && <FileSpreadsheet className="h-4 w-4" />}Add {selected.size} to Sheet
-            </Button>}
           </div>
           {sheetMessage && <Alert variant="success">{sheetMessage}</Alert>}
           {visibleItems.map((item, index) => {
@@ -287,6 +284,9 @@ export function StockSimilarComparePanel({ csvFile, limit, disabled }: Props) {
                     <input type="checkbox" checked={selected.has(itemKey)} onChange={() => toggleSelected(itemKey)} className="h-4 w-4 accent-violet-600" />
                     Select
                   </label>
+                  {selected.has(itemKey) && <Button type="button" loading={sheetLoading === itemKey} disabled={sheetLoading !== null && sheetLoading !== itemKey} onClick={() => void addItemToSheet(item)}>
+                    {sheetLoading !== itemKey && <FileSpreadsheet className="h-4 w-4" />}Add to Sheet
+                  </Button>}
                   <Button
                     type="button"
                     variant="secondary"
