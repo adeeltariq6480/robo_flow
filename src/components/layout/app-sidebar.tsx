@@ -20,6 +20,7 @@ import {
   Sparkles,
   ClipboardList,
   Scissors,
+  ListChecks,
 } from "lucide-react";
 import { readActiveInferenceJob } from "@/lib/inference/active-job";
 
@@ -32,6 +33,7 @@ const projectLinks = [
   { suffix: "/datasets", label: "Datasets", icon: Database },
   { suffix: "/inference", label: "Inference", icon: Zap },
   { suffix: "/inventory", label: "Stock check", icon: ClipboardList },
+  { suffix: "/stock-check-lotte", label: "Stock Check Lotte", icon: ListChecks },
   { suffix: "/label-tool", label: "Label tool", icon: Scissors },
 ];
 
