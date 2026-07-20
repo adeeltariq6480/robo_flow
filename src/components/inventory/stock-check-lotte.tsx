@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { fetchStockColabSession, openStockColabCheck } from "@/lib/actions/inference";
 import type { DirectStockResult } from "@/lib/worker/client";
+import { clearStockWorkbook, loadStockWorkbook, saveStockWorkbook } from "@/lib/stock-lotte-store";
 import { Check, Copy, Download, ExternalLink, FileSpreadsheet, Package, RefreshCw, Search, Upload, X } from "lucide-react";
 
 type ReviewStatus = "pending" | "ok" | "reject";
@@ -28,6 +29,7 @@ function findDefaultImageColumn(headers: unknown[]) {
 }
 
 export function StockCheckLotte({ projectId, modelIds }: { projectId: string; modelIds: string[] }) {
+  const stateKey = `robo-flow:stock-lotte:${projectId}`;
   const [file, setFile] = useState<File | null>(null);
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [sheetName, setSheetName] = useState("");
@@ -41,6 +43,49 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const runRef = useRef(0);
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const storedFile = await loadStockWorkbook();
+        const raw = localStorage.getItem(stateKey);
+        const saved = raw ? JSON.parse(raw) as {
+          sheetName?: string; imageColumn?: number; results?: Record<string, DirectStockResult>;
+          reviews?: Record<number, Review>; configUrl?: string;
+          session?: { token: string; urls: string[]; singleRow?: number } | null;
+        } : null;
+        if (!active) return;
+        if (storedFile) await loadFile(storedFile, false, saved?.sheetName, saved?.imageColumn);
+        if (!active || !saved) return;
+        setResults(saved.results ?? {});
+        setReviews(saved.reviews ?? {});
+        setConfigUrl(saved.configUrl ?? "");
+        if (saved.session?.token) {
+          const runId = ++runRef.current;
+          setRunning(true);
+          setProgress("Previous check session restore ho rahi hai…");
+          void waitForSession(saved.session.token, saved.session.urls, saved.session.singleRow, runId)
+            .catch((cause) => setError(cause instanceof Error ? cause.message : "Session restore failed"))
+            .finally(() => setRunning(false));
+        }
+      } catch {
+        localStorage.removeItem(stateKey);
+      } finally {
+        restoredRef.current = true;
+      }
+    })();
+    return () => { active = false; runRef.current += 1; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey]);
+
+  useEffect(() => {
+    if (!restoredRef.current || !file) return;
+    const previous = (() => { try { return JSON.parse(localStorage.getItem(stateKey) || "{}"); } catch { return {}; } })();
+    localStorage.setItem(stateKey, JSON.stringify({ ...previous, sheetName, imageColumn, results, reviews, configUrl }));
+  }, [stateKey, file, sheetName, imageColumn, results, reviews, configUrl]);
 
   const headers = matrix[0] ?? [];
   const rows = useMemo<SheetRow[]>(() => matrix.slice(1).map((values, offset) => ({
@@ -59,12 +104,12 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
     });
   }, [rows, results, search]);
 
-  async function loadFile(selected: File) {
+  async function loadFile(selected: File, persist = true, preferredSheet?: string, preferredColumn?: number) {
     setError(null);
     setProgress("Excel file read ho rahi hai…");
     try {
       const book = XLSX.read(await selected.arrayBuffer(), { type: "array", cellDates: true });
-      const firstSheet = book.SheetNames[0];
+      const firstSheet = preferredSheet && book.SheetNames.includes(preferredSheet) ? preferredSheet : book.SheetNames[0];
       if (!firstSheet) throw new Error("Workbook mein koi sheet nahi mili.");
       const data = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[firstSheet], { header: 1, defval: "", raw: false });
       if (!data.length) throw new Error("Selected sheet khaali hai.");
@@ -72,10 +117,14 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
       setWorkbook(book);
       setSheetName(firstSheet);
       setMatrix(data);
-      setImageColumn(findDefaultImageColumn(data[0]));
+      setImageColumn(preferredColumn !== undefined ? preferredColumn : findDefaultImageColumn(data[0]));
       setResults({});
       setReviews({});
       setConfigUrl("");
+      if (persist) {
+        await saveStockWorkbook(selected);
+        localStorage.removeItem(stateKey);
+      }
       setProgress(`${data.length - 1} rows read ho gayi hain.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Excel file read nahi ho saki.");
@@ -94,9 +143,11 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
     setConfigUrl("");
   }
 
-  async function waitForSession(token: string, urls: string[], singleRow?: number) {
+  async function waitForSession(token: string, urls: string[], singleRow?: number, runId = runRef.current) {
     for (;;) {
+      if (runId !== runRef.current) return;
       await new Promise((resolve) => window.setTimeout(resolve, 4000));
+      if (runId !== runRef.current) return;
       const session = await fetchStockColabSession(token);
       if ("actionError" in session) throw new Error(session.actionError);
       setProgress(`Checking images… ${session.processed}/${session.total}`);
@@ -109,12 +160,15 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
       if (session.status === "failed") throw new Error(session.error || "Stock check failed.");
     }
     if (singleRow !== undefined) updateReview(singleRow, { checking: false, rechecked: true });
+    const saved = (() => { try { return JSON.parse(localStorage.getItem(stateKey) || "{}"); } catch { return {}; } })();
+    localStorage.setItem(stateKey, JSON.stringify({ ...saved, session: null }));
     setProgress(singleRow === undefined ? `${urls.length} images check ho gayi hain.` : "Selected image dobara check ho gayi.");
   }
 
   async function startCheck(urls: string[], singleRow?: number) {
     if (!urls.length || running || !modelIds.length) return;
     setRunning(true);
+    const runId = ++runRef.current;
     setError(null);
     if (singleRow !== undefined) updateReview(singleRow, { checking: true });
     const popup = window.open("about:blank", "_blank");
@@ -123,11 +177,13 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
       const launch = await openStockColabCheck(projectId, modelIds, urls);
       if ("error" in launch) throw new Error(launch.error);
       setConfigUrl(launch.config_url);
+      const saved = (() => { try { return JSON.parse(localStorage.getItem(stateKey) || "{}"); } catch { return {}; } })();
+      localStorage.setItem(stateKey, JSON.stringify({ ...saved, configUrl: launch.config_url, session: { token: launch.token, urls, singleRow } }));
       if (popup) popup.location.href = launch.colab_url;
       else window.open(launch.colab_url, "_blank", "noopener,noreferrer");
       try { await navigator.clipboard.writeText(launch.config_url); } catch { /* URL remains in session */ }
       setProgress("Colab khul gaya—config URL paste karke cell Run karein. Progress yahan update hogi.");
-      await waitForSession(launch.token, urls, singleRow);
+      await waitForSession(launch.token, urls, singleRow, runId);
     } catch (cause) {
       popup?.close();
       setError(cause instanceof Error ? cause.message : "Stock check start nahi ho saka.");
@@ -135,6 +191,22 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
     } finally {
       setRunning(false);
     }
+  }
+
+  function stopCheck() {
+    runRef.current += 1;
+    setRunning(false);
+    setProgress("Check monitoring stop kar di gayi. Results abhi bhi saved hain.");
+    const saved = (() => { try { return JSON.parse(localStorage.getItem(stateKey) || "{}"); } catch { return {}; } })();
+    localStorage.setItem(stateKey, JSON.stringify({ ...saved, session: null }));
+  }
+
+  async function clearAll() {
+    runRef.current += 1;
+    await clearStockWorkbook();
+    localStorage.removeItem(stateKey);
+    setFile(null); setWorkbook(null); setSheetName(""); setMatrix([]); setImageColumn(-1);
+    setResults({}); setReviews({}); setRunning(false); setProgress(""); setConfigUrl(""); setError(null); setSearch("");
   }
 
   function updateReview(index: number, patch: Partial<Review>) {
@@ -154,18 +226,19 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
     if (!workbook || !file) return;
     const output = XLSX.read(XLSX.write(workbook, { type: "array", bookType: "xlsx" }), { type: "array" });
     const extraHeaders = ["Detected Products", "Detected Total", "Review Status", "Reviewer Note", "Include In Export", "Rechecked"];
-    const extraData = [
-      extraHeaders,
-      ...matrix.slice(1).map((values, offset) => {
+    const exportRows = matrix.slice(1).flatMap((values, offset) => {
         const index = offset + 1;
         const review = reviews[index] ?? { status: "pending", note: "", excluded: false, checking: false, rechecked: false };
+        if (review.status !== "ok" || review.excluded) return [];
         const url = imageColumn >= 0 ? normalize(values[imageColumn]) : "";
         const result = results[url];
         const summary = Object.entries(result?.counts ?? {}).sort((a, b) => b[1] - a[1]).map(([name, count]) => `${name}: ${count}`).join(", ");
-        return [summary, totalCount(result), review.status.toUpperCase(), review.note, review.excluded ? "No" : "Yes", review.rechecked ? "Yes" : "No"];
-      }),
-    ];
-    XLSX.utils.sheet_add_aoa(output.Sheets[sheetName], extraData, { origin: { r: 0, c: headers.length } });
+        return [[...values, summary, totalCount(result), "OK", review.note, "Yes", review.rechecked ? "Yes" : "No"]];
+      });
+    output.Sheets[sheetName] = XLSX.utils.aoa_to_sheet([
+      [...headers, ...extraHeaders],
+      ...exportRows,
+    ]);
     XLSX.writeFile(output, file.name.replace(/\.xlsx?$/i, "") + "_stock-checked.xlsx");
   }
 
@@ -193,7 +266,9 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
             {workbook && workbook.SheetNames.length > 1 && <label className="text-xs font-semibold text-slate-600">Sheet<select value={sheetName} onChange={(event) => switchSheet(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm">{workbook.SheetNames.map((name) => <option key={name}>{name}</option>)}</select></label>}
             <label className="text-xs font-semibold text-slate-600">Image column<select value={imageColumn} onChange={(event) => { setImageColumn(Number(event.target.value)); setResults({}); setReviews({}); }} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm">{headers.map((header, index) => <option value={index} key={`${normalize(header)}-${index}`}>{normalize(header) || `Column ${index + 1}`}</option>)}</select></label>
             <Button type="button" disabled={!rows.length || running || !modelIds.length} loading={running} onClick={() => void startCheck([...new Set(rows.map((row) => row.url))])}>{!running && <Package className="h-4 w-4" />} Check All Images</Button>
-            <Button type="button" variant="secondary" disabled={!matrix.length} onClick={downloadWorkbook}><Download className="h-4 w-4" /> Download Excel</Button>
+            {running && <Button type="button" variant="danger" onClick={stopCheck}><X className="h-4 w-4" /> Stop Check</Button>}
+            <Button type="button" variant="secondary" disabled={!ok} onClick={downloadWorkbook}><Download className="h-4 w-4" /> Download OK Only ({ok})</Button>
+            <Button type="button" variant="ghost" onClick={() => void clearAll()}><X className="h-4 w-4" /> Clear All</Button>
           </div>
           {progress && <p className="mt-3 text-sm text-emerald-800">{progress}</p>}
           {configUrl && (
@@ -221,7 +296,7 @@ export function StockCheckLotte({ projectId, modelIds }: { projectId: string; mo
               {result?.possible_wrong ? <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-800">{result.possible_wrong} low-confidence detection—review zaroor karein.</p> : null}
               <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" onClick={() => updateReview(row.index, { status: "ok" })} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold ${review.status === "ok" ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}><Check className="h-4 w-4" /> OK</button><button type="button" onClick={() => updateReview(row.index, { status: "reject" })} className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold ${review.status === "reject" ? "border-red-600 bg-red-600 text-white" : "border-red-200 text-red-700 hover:bg-red-50"}`}><X className="h-4 w-4" /> Reject</button></div>
               <button type="button" disabled={running || review.checking} onClick={() => void startCheck([row.url], row.index)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${review.checking ? "animate-spin" : ""}`} /> Check Again (only this image)</button>
-              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg bg-slate-50 p-2.5 text-xs text-slate-700"><input type="checkbox" checked={review.excluded} onChange={(event) => updateReview(row.index, { excluded: event.target.checked })} className="mt-0.5 h-4 w-4 accent-slate-700" /><span>Detection aur image mein farq hai—image download ke liye include na karein. Excel audit row mein “No” mark rahega.</span></label>
+              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg bg-slate-50 p-2.5 text-xs text-slate-700"><input type="checkbox" checked={review.excluded} onChange={(event) => updateReview(row.index, { excluded: event.target.checked })} className="mt-0.5 h-4 w-4 accent-slate-700" /><span>Detection aur image mein farq hai—OK hone ke bawajood downloaded Excel mein include na karein.</span></label>
               <textarea value={review.note} onChange={(event) => updateReview(row.index, { note: event.target.value })} rows={3} placeholder="Is image ke against apna note likhein…" className="mt-3 w-full resize-y rounded-xl border border-slate-200 p-3 text-sm outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100" />
               <a href={row.url} target="_blank" rel="noreferrer" className="mt-2 flex items-center gap-1 truncate text-xs text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5 shrink-0" />{row.url}</a>
             </div>
