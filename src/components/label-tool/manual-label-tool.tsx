@@ -441,7 +441,7 @@ export function ManualLabelTool({
   function importClasses(value = bulkClasses) {
     const imported = parseClasses(value);
     if (!imported.length) return;
-    setClasses((current) => Array.from(new Set([...current, ...imported])));
+    setClasses((current) => [...current, ...imported]);
     setBulkClasses("");
   }
 
@@ -1622,7 +1622,7 @@ export function ManualLabelTool({
               <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
                 {filteredClasses.map((name, i) => (
                   <button
-                    key={name}
+                    key={`${name}-${i}`}
                     onClick={() => assignPendingBox(name)}
                     className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-3 text-left transition hover:border-emerald-400 hover:bg-emerald-50"
                   >
